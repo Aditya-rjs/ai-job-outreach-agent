@@ -1,19 +1,14 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import path from 'path';
-import fs from 'fs';
 import * as schema from './schema';
-
-const DB_PATH = path.join(process.cwd(), 'data', 'outreach.db');
+import { getDbPath, ensureDataDirsExist } from '@/lib/config/paths';
 
 function createConnection() {
-  // Ensure data directory exists
-  const dir = path.dirname(DB_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  // Ensure data directory and subdirectories exist
+  ensureDataDirsExist();
 
-  const sqlite = new Database(DB_PATH);
+  const dbPath = getDbPath();
+  const sqlite = new Database(dbPath);
 
   // Enable WAL mode for better concurrent read performance
   sqlite.pragma('journal_mode = WAL');
@@ -35,4 +30,13 @@ export function getDb() {
   return dbInstance;
 }
 
+/**
+ * Resets the active database connection singleton.
+ * Useful for test suites when switching DATA_DIR.
+ */
+export function resetDbConnection(): void {
+  dbInstance = null;
+}
+
+export { getDbPath };
 export type DbClient = ReturnType<typeof getDb>;

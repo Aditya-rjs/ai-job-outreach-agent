@@ -1,10 +1,12 @@
 import fs from 'fs';
+import path from 'path';
 import { getDb } from '@/db';
 import { contacts, batches, resume, globalEmailHistory, outreachQueue } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { getAuthenticatedGmailClient } from './gmail-client';
 import { buildMimeMessage } from './mime-builder';
 import { normalizeEmail, isValidEmail } from '@/lib/utils';
+import { getResumesDir } from '@/lib/config/paths';
 import type { Contact } from '@/types';
 
 export interface SendResult {
@@ -29,11 +31,18 @@ function getActiveResumeAttachment(): {
     throw new Error('Cannot send email because no active resume is available. Please upload a resume in Settings.');
   }
 
-  if (!fs.existsSync(resumeRecord.filePath)) {
-    throw new Error(`Resume file not found on disk at ${resumeRecord.filePath}. Please re-upload your resume.`);
+  let resolvedFilePath = resumeRecord.filePath;
+  if (!fs.existsSync(resolvedFilePath)) {
+    // Fallback: check if the file exists under the current resumesDir (e.g. if DATA_DIR changed or migrated to Railway volume)
+    const fallbackPath = path.join(getResumesDir(), path.basename(resumeRecord.filePath));
+    if (fs.existsSync(fallbackPath)) {
+      resolvedFilePath = fallbackPath;
+    } else {
+      throw new Error(`Resume file not found on disk at ${resumeRecord.filePath} (or ${fallbackPath}). Please re-upload your resume.`);
+    }
   }
 
-  const content = fs.readFileSync(resumeRecord.filePath);
+  const content = fs.readFileSync(resolvedFilePath);
   if (!content || content.length === 0) {
     throw new Error('Active resume file is empty.');
   }

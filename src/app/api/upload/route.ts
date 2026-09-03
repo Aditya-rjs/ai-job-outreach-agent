@@ -4,6 +4,7 @@ import { processBatchFile } from '@/lib/pipeline/batch-processor';
 import type { ApiResponse } from '@/types';
 import fs from 'fs';
 import path from 'path';
+import { getUploadsDir } from '@/lib/config/paths';
 
 let initialized = false;
 function ensureInitialized() {
@@ -59,8 +60,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Save copy safely outside public web root in data/uploads/
-    const uploadsDir = path.join(process.cwd(), 'data', 'uploads');
+    // Save copy safely in DATA_DIR/uploads/
+    const uploadsDir = getUploadsDir();
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }

@@ -7,6 +7,7 @@ import { parseAndStructureResume } from '@/lib/resume/resume-parser';
 import type { ApiResponse, ResumeData, StructuredResumeProfile } from '@/types';
 import fs from 'fs';
 import path from 'path';
+import { getResumesDir } from '@/lib/config/paths';
 
 let initialized = false;
 function ensureInitialized() {
@@ -94,8 +95,8 @@ export async function POST(
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Save copy safely outside public web root in data/resumes/
-    const resumesDir = path.join(process.cwd(), 'data', 'resumes');
+    // Save copy safely in DATA_DIR/resumes/
+    const resumesDir = getResumesDir();
     if (!fs.existsSync(resumesDir)) {
       fs.mkdirSync(resumesDir, { recursive: true });
     }

@@ -36,6 +36,7 @@ export const env = {
   // App & Execution Mode
   appUrl: () => getOptionalEnvVar('NEXT_PUBLIC_APP_URL', 'http://localhost:3000'),
   isDryRun: () => process.env.OUTREACH_DRY_RUN === 'true',
+  dataDir: () => getOptionalEnvVar('DATA_DIR', 'data'),
 
   // Timezone with strict validation
   timezone: () => {

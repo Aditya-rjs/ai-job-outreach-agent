@@ -192,6 +192,10 @@ cp .env.example .env.local
 
 Fill in your configuration:
 ```env
+# ── Persistent Storage (Railway Volume Compatible) ─
+# Defaults to 'data' in project root. On Railway, set to '/data' with a Volume mounted at /data.
+DATA_DIR=data
+
 # ── AI ──────────────────────────────────────────────
 GEMINI_API_KEY=your_gemini_api_key_here
 
@@ -252,12 +256,51 @@ npm run worker
 
 ---
 
+## 🚂 Deploying to Railway (Persistent Storage)
+
+To run the application in production on [Railway](https://railway.app/) with persistent SQLite storage and resume uploads:
+
+### 1. Create a Persistent Volume in Railway
+1. In your Railway project, click **+ New** → **Volume**.
+2. Mount the volume to your service with the mount path:
+   ```
+   /data
+   ```
+
+### 2. Configure Service Environment Variables
+In the Railway service **Variables** tab, set:
+```env
+DATA_DIR=/data
+NODE_ENV=production
+NEXT_PUBLIC_APP_URL=https://your-railway-domain.up.railway.app
+GMAIL_REDIRECT_URI=https://your-railway-domain.up.railway.app/api/gmail/callback
+```
+*(Plus your `GEMINI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ENCRYPTION_KEY`, and `NEXTAUTH_SECRET`).*
+
+### 3. Deploy Web Dashboard & Background Worker
+- **Web Dashboard:** Railway will automatically build using `npm run build` and run `npm start`.
+- **Outreach Worker:** You can deploy a second Railway service connected to the same repository and mounted to the same persistent `/data` volume, with the Start Command:
+  ```bash
+  npm run worker
+  ```
+
+---
+
 ## 🧪 Verification & Testing
 
-The repository includes a comprehensive 62-point automated verification suite testing multi-batch queuing, concurrency, crash recovery, and safety rules without sending real emails.
+The repository includes a comprehensive 80-point automated test suite testing persistent volume resolution, multi-batch queuing, concurrency, crash recovery, and safety rules without sending real emails.
 
-Run the test suites:
+Run all tests:
 ```bash
+# Run full automated test suite (DATA_DIR, Phase 5, Phase 6)
+npm test
+```
+
+Or run individual verification suites:
+```bash
+# Run Railway Persistent Storage (DATA_DIR) tests
+node tests/verify-data-dir.js
+
 # Run Phase 5 tests (Scheduler, Lease Locking, Quotas)
 node tests/verify-phase5.js
 

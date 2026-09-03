@@ -2,7 +2,12 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-const dbPath = path.join(__dirname, '..', 'data', 'outreach.db');
+const dataDir = process.env.DATA_DIR?.trim()
+  ? (path.isAbsolute(process.env.DATA_DIR.trim())
+      ? process.env.DATA_DIR.trim()
+      : path.resolve(__dirname, '..', process.env.DATA_DIR.trim()))
+  : path.join(__dirname, '..', 'data');
+const dbPath = path.join(dataDir, 'outreach.db');
 const db = new Database(dbPath);
 
 console.log('======================================================================');
