@@ -256,9 +256,15 @@ npm run worker
 
 ---
 
-## 🚂 Deploying to Railway (Persistent Storage)
+## 🚂 Deploying to Railway (Single-Service Architecture)
 
-To run the application in production on [Railway](https://railway.app/) with persistent SQLite storage and resume uploads:
+Railway does not support sharing a persistent Volume between multiple services. Because SQLite (`outreach.db`), WAL files, and uploaded resumes reside in `DATA_DIR=/data`, **both the Next.js web application and the background outreach worker run concurrently inside the SAME Railway service/container**.
+
+This is managed by a production process supervisor (`scripts/start-railway.js`) that:
+- Binds Next.js dynamically to Railway's assigned `PORT`
+- Starts the persistent Outreach Worker alongside Next.js
+- Forwards `SIGTERM` / `SIGINT` signals so the worker releases its SQLite lease lock cleanly
+- Automatically terminates the container if either critical process fails, allowing Railway's container orchestrator to restart it cleanly
 
 ### 1. Create a Persistent Volume in Railway
 1. In your Railway project, click **+ New** → **Volume**.
@@ -277,12 +283,14 @@ GMAIL_REDIRECT_URI=https://your-railway-domain.up.railway.app/api/gmail/callback
 ```
 *(Plus your `GEMINI_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ENCRYPTION_KEY`, and `NEXTAUTH_SECRET`).*
 
-### 3. Deploy Web Dashboard & Background Worker
-- **Web Dashboard:** Railway will automatically build using `npm run build` and run `npm start`.
-- **Outreach Worker:** You can deploy a second Railway service connected to the same repository and mounted to the same persistent `/data` volume, with the Start Command:
-  ```bash
-  npm run worker
-  ```
+### 3. Set the Railway Start Command
+In Railway service **Settings** → **Deploy** → **Custom Start Command**, set:
+```bash
+npm run start:railway
+```
+Railway will run `npm run build` during the build phase and then boot both the web server and the queue worker simultaneously using `npm run start:railway`.
+
+> ⚠️ **No Separate Worker Service Needed:** Do not create a separate service for the worker, as Railway persistent volumes cannot be mounted to more than one service. All tasks are managed reliably within this single service.
 
 ---
 

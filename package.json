@@ -6,8 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "start:railway": "node scripts/start-railway.js",
     "lint": "eslint",
-    "test": "node tests/verify-data-dir.js && node tests/verify-phase5.js && node tests/verify-phase6.js",
+    "test": "node tests/verify-data-dir.js && node tests/verify-supervisor.js && node tests/verify-phase5.js && node tests/verify-phase6.js",
     "worker": "tsx src/worker/outreach-worker.ts",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio"
