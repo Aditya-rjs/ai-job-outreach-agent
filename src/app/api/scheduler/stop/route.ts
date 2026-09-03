@@ -1,0 +1,27 @@
+import { NextResponse } from 'next/server';
+import { initializeDatabase } from '@/db/migrate';
+import { stopScheduler, getSchedulerConfig } from '@/lib/db-helpers';
+import type { ApiResponse, SchedulerConfig } from '@/types';
+
+let initialized = false;
+function ensureInitialized() {
+  if (!initialized) {
+    initializeDatabase();
+    initialized = true;
+  }
+}
+
+export async function POST(): Promise<NextResponse<ApiResponse<SchedulerConfig>>> {
+  try {
+    ensureInitialized();
+    stopScheduler();
+    const config = getSchedulerConfig();
+    return NextResponse.json({ success: true, data: config });
+  } catch (error) {
+    console.error('[API Scheduler Stop Error]:', error);
+    return NextResponse.json(
+      { success: false, error: 'Failed to stop scheduler.' },
+      { status: 500 }
+    );
+  }
+}

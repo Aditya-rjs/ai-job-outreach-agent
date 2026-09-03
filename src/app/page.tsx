@@ -1,69 +1,464 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
+import {
+  Building2,
+  CheckCircle2,
+  Send,
+  Clock,
+  AlertCircle,
+  Inbox,
+  ArrowRight,
+  Upload,
+  RefreshCw,
+  Layers,
+  Pause,
+  Play,
+  Square,
+  Zap,
+} from 'lucide-react';
+import { StatCard } from '@/components/ui/stat-card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { formatDateTime } from '@/lib/utils';
+import type { DashboardStats, Batch, SchedulerConfig } from '@/types';
+
+export default function DashboardPage() {
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [scheduler, setScheduler] = useState<SchedulerConfig | null>(null);
+  const [recentBatches, setRecentBatches] = useState<Batch[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    let ignore = false;
+    Promise.all([
+      fetch('/api/dashboard').then((r) => r.json()),
+      fetch('/api/scheduler/status').then((r) => r.json()),
+      fetch('/api/batches').then((r) => r.json()),
+    ])
+      .then(([statsJson, schedulerJson, batchesJson]) => {
+        if (!ignore) {
+          if (statsJson.success) setStats(statsJson.data);
+          if (schedulerJson.success) setScheduler(schedulerJson.data);
+          if (batchesJson.success) setRecentBatches((batchesJson.data || []).slice(0, 5));
+        }
+      })
+      .catch((err: unknown) => {
+        console.error('Error fetching dashboard stats:', err);
+      })
+      .finally(() => {
+        if (!ignore) setLoading(false);
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [refreshKey]);
+
+  const handlePause = async () => {
+    setActionLoading(true);
+    try {
+      const res = await fetch('/api/scheduler/pause', { method: 'POST' });
+      const json = await res.json();
+      if (json.success) {
+        setScheduler(json.data);
+        setStatusMessage('Scheduler paused. In-flight requests will finish, but no new emails will be sent.');
+        setRefreshKey((k) => k + 1);
+      }
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleResume = async () => {
+    setActionLoading(true);
+    try {
+      const res = await fetch('/api/scheduler/resume', { method: 'POST' });
+      const json = await res.json();
+      if (json.success) {
+        setScheduler(json.data);
+        setStatusMessage('Scheduler resumed. Automatic daily sending active.');
+        setRefreshKey((k) => k + 1);
+      }
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleStop = async () => {
+    if (!confirm('Stop outreach campaign? The queue will be preserved, but sending will halt completely until explicitly resumed.')) {
+      return;
+    }
+    setActionLoading(true);
+    try {
+      const res = await fetch('/api/scheduler/stop', { method: 'POST' });
+      const json = await res.json();
+      if (json.success) {
+        setScheduler(json.data);
+        setStatusMessage('Outreach campaign stopped. Progress and queue preserved.');
+        setRefreshKey((k) => k + 1);
+      }
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Check if any batch is completed
+  const completedBatch = recentBatches.find((b) => b.status === 'completed');
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div className="space-y-6">
+      {/* Page Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-foreground">Dashboard</h2>
+          <p className="text-sm text-muted-foreground">
+            Real-time outreach overview, persistent queue, and scheduler state
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setLoading(true);
+              setRefreshKey((k) => k + 1);
+            }}
+            disabled={loading}
           >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+          <Link href="/upload">
+            <Button size="sm">
+              <Upload className="h-4 w-4" />
+              Upload Contacts
+            </Button>
+          </Link>
         </div>
-      </main>
+      </div>
+
+      {statusMessage && (
+        <div className="flex items-center justify-between rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs font-medium text-primary">
+          <span>{statusMessage}</span>
+          <button onClick={() => setStatusMessage(null)} className="text-xs hover:underline ml-2">
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Real-Sending Safety Gate Banner (Requirement 21) */}
+      {stats?.isDryRun ? (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-xs text-amber-950 flex items-start gap-3 shadow-xs">
+          <div className="rounded-lg bg-amber-100 p-2 text-amber-800 shrink-0">
+            <AlertCircle className="h-5 w-5" />
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <Badge variant="warning" className="uppercase tracking-wide font-bold">DRY-RUN MODE ACTIVE</Badge>
+              <span className="font-semibold text-amber-950">Safe Simulation Environment</span>
+            </div>
+            <p className="text-amber-800 mt-1">
+              OUTREACH_DRY_RUN=true is enabled. The persistent scheduler processes jobs, simulates 3-minute intervals, and tracks progress without dispatching real Gmail emails to recruiters.
+            </p>
+          </div>
+        </div>
+      ) : stats?.gmailConnected ? (
+        <div className="rounded-xl border border-emerald-300 bg-emerald-50/70 p-4 text-xs text-emerald-950 flex items-start gap-3 shadow-xs">
+          <div className="rounded-lg bg-emerald-100 p-2 text-emerald-800 shrink-0">
+            <Send className="h-5 w-5" />
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <Badge variant="success" className="uppercase tracking-wide font-bold">LIVE OUTREACH SENDING IS ENABLED</Badge>
+              <span className="font-semibold text-emerald-950">Authorized Account: {stats.gmailEmail}</span>
+            </div>
+            <p className="text-emerald-800 mt-1">
+              When the background worker (<code className="font-mono text-xs">npm run worker</code>) is active, eligible emails will be dispatched to recruiters via your connected Gmail account at 10:00 AM IST (max {stats.dailyLimit}/day, 3-minute minimum gap).
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-border bg-muted/30 p-4 text-xs text-foreground flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="h-5 w-5 text-muted-foreground shrink-0" />
+            <div>
+              <p className="font-semibold text-foreground">Production Mode (Gmail Disconnected)</p>
+              <p className="text-muted-foreground text-[11px]">
+                Live sending is disarmed because Gmail is not connected. Connect your Google account in Settings to enable real outreach.
+              </p>
+            </div>
+          </div>
+          <Link href="/settings">
+            <Button size="sm" variant="outline">Connect Gmail</Button>
+          </Link>
+        </div>
+      )}
+
+      {/* Batch Completion Notice */}
+      {completedBatch && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-xs text-emerald-900 flex items-start gap-3">
+          <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="font-bold text-emerald-950 text-sm">
+              All eligible emails from batch &quot;{completedBatch.filename}&quot; have been sent!
+            </p>
+            <p className="text-emerald-800 mt-1">
+              Sent: {completedBatch.emailsSent} • Skipped/Filtered: {completedBatch.irrelevantCompanies + completedBatch.duplicateContacts} • Failed: {completedBatch.emailsFailed}.
+              Upload another file to schedule additional outreach.
+            </p>
+          </div>
+          <Link href="/upload">
+            <Button size="sm" variant="outline" className="border-emerald-300 text-emerald-950 hover:bg-emerald-100">
+              Upload New File
+            </Button>
+          </Link>
+        </div>
+      )}
+
+      {/* Persistent Scheduler Banner & Controls */}
+      <Card className="border-primary/20 bg-card">
+        <CardContent className="pt-6 space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-border pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-foreground">Scheduler Status:</span>
+                {scheduler?.isStopped ? (
+                  <Badge variant="destructive">Stopped</Badge>
+                ) : scheduler?.isPaused ? (
+                  <Badge variant="warning">Paused</Badge>
+                ) : scheduler?.todaySentCount && scheduler.todaySentCount >= (scheduler?.dailyLimit ?? 30) ? (
+                  <Badge variant="secondary">Daily Quota Reached (30/30)</Badge>
+                ) : stats?.queueSize && stats.queueSize > 0 ? (
+                  <Badge variant="success">Active Worker Ready</Badge>
+                ) : (
+                  <Badge variant="outline">Waiting for Contacts</Badge>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Daily start: 10:00 AM • Timezone: {scheduler?.timezone || 'Asia/Kolkata'} • Interval: {scheduler?.intervalMinutes || 3} min gap • Max: {scheduler?.dailyLimit || 30}/day
+              </p>
+            </div>
+
+            {/* Persistent Control Actions */}
+            <div className="flex items-center gap-2">
+              {scheduler?.isPaused || scheduler?.isStopped ? (
+                <Button size="sm" onClick={handleResume} disabled={actionLoading} className="gap-1.5">
+                  <Play className="h-3.5 w-3.5" />
+                  Resume Outreach
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" onClick={handlePause} disabled={actionLoading} className="gap-1.5">
+                  <Pause className="h-3.5 w-3.5" />
+                  Pause
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={handleStop}
+                disabled={actionLoading || scheduler?.isStopped}
+                className="gap-1.5"
+              >
+                <Square className="h-3.5 w-3.5" />
+                Stop
+              </Button>
+            </div>
+          </div>
+
+          {/* Today's Outreach Meter & Scheduling Details */}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <p className="text-xs text-muted-foreground font-medium">Today&apos;s Outreach Sent</p>
+              <div className="flex items-baseline gap-1 mt-1">
+                <span className="text-2xl font-bold text-foreground">{stats?.todaySentCount ?? 0}</span>
+                <span className="text-sm text-muted-foreground">/ {stats?.dailyLimit ?? 30} max</span>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Remaining today: {stats?.remainingToday ?? 30}
+              </p>
+            </div>
+
+            <div>
+              <p className="text-xs text-muted-foreground font-medium">Outreach Queue</p>
+              <div className="flex items-baseline gap-1 mt-1">
+                <span className="text-2xl font-bold text-primary">{stats?.queueSize ?? 0}</span>
+                <span className="text-sm text-muted-foreground">contacts staged</span>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {stats?.emailsGenerated ?? 0} AI personalized emails ready
+              </p>
+            </div>
+
+            <div>
+              <p className="text-xs text-muted-foreground font-medium">Next Scheduled Send</p>
+              <p className="text-sm font-semibold text-foreground mt-1">
+                {stats?.nextSendAt ? formatDateTime(stats.nextSendAt) : 'Pending 10:00 AM window'}
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {stats?.lastSendAt ? `Last sent: ${formatDateTime(stats.lastSendAt)}` : 'No emails sent today'}
+              </p>
+            </div>
+
+            <div>
+              <p className="text-xs text-muted-foreground font-medium">Worker Lock / Lease</p>
+              <div className="flex items-center gap-1.5 mt-1">
+                <Zap className="h-4 w-4 text-emerald-600" />
+                <span className="text-xs font-mono font-medium text-foreground">
+                  {scheduler?.workerId ? `${scheduler.workerId.slice(0, 16)}...` : 'Run `npm run worker`'}
+                </span>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {scheduler?.workerId ? 'Active background worker' : 'Worker process is offline'}
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Stat Cards Grid */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <StatCard
+          title="Total Companies"
+          value={stats ? stats.totalCompanies : 0}
+          icon={Building2}
+        />
+        <StatCard
+          title="Relevant Tech"
+          value={stats ? stats.relevantCompanies : 0}
+          icon={CheckCircle2}
+        />
+        <StatCard
+          title="Contacts Found"
+          value={stats ? stats.totalContacts : 0}
+          icon={Inbox}
+        />
+        <StatCard
+          title="Eligible Queued"
+          value={stats ? stats.emailsQueued : 0}
+          icon={Clock}
+        />
+        <StatCard
+          title="Emails Generated"
+          value={stats ? stats.emailsGenerated : 0}
+          icon={Send}
+        />
+        <StatCard
+          title="Skipped / Filtered"
+          value={stats ? stats.emailsSkipped : 0}
+          icon={AlertCircle}
+        />
+      </div>
+
+      {/* Two-column layout for recent batches and activity */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* Recent Batches */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-base">Recent Batches</CardTitle>
+            <Link href="/batches" className="text-xs text-primary hover:underline">
+              View All
+            </Link>
+          </CardHeader>
+          <CardContent>
+            {recentBatches.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 text-center">
+                <Layers className="h-8 w-8 text-muted-foreground/40 mb-2" />
+                <p className="text-sm text-muted-foreground">
+                  No batches uploaded yet. Upload a CSV or PDF file to start outreach.
+                </p>
+                <Link href="/upload" className="mt-3">
+                  <Button size="sm" variant="outline">
+                    <Upload className="h-3.5 w-3.5" />
+                    Upload Contacts
+                  </Button>
+                </Link>
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                {recentBatches.map((b) => (
+                  <div key={b.id} className="py-3 flex items-center justify-between">
+                    <div>
+                      <p className="font-semibold text-foreground">{b.filename}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {b.totalRecords} records • {b.emailsPending} pending • {formatDateTime(b.uploadDate)}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={b.status === 'completed' ? 'success' : b.status === 'queued' ? 'default' : 'secondary'}>
+                        {b.status}
+                      </Badge>
+                      <Link href={`/batches/${b.id}`}>
+                        <Button variant="ghost" size="sm">
+                          <ArrowRight className="h-4 w-4" />
+                        </Button>
+                      </Link>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* System Pipeline Status */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">System Pipeline Readiness</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between text-xs pb-3 border-b border-border">
+                <div className="flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                  <span className="font-medium text-foreground">File Ingestion & Normalization</span>
+                </div>
+                <Badge variant="success">Operational</Badge>
+              </div>
+              <div className="flex items-center justify-between text-xs pb-3 border-b border-border">
+                <div className="flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                  <span className="font-medium text-foreground">AI Company Relevance Classifier</span>
+                </div>
+                <Badge variant="success">Operational</Badge>
+              </div>
+              <div className="flex items-center justify-between text-xs pb-3 border-b border-border">
+                <div className="flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                  <span className="font-medium text-foreground">Resume Intelligence & Profiling</span>
+                </div>
+                <Badge variant="success">Operational</Badge>
+              </div>
+              <div className="flex items-center justify-between text-xs pb-3 border-b border-border">
+                <div className="flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                  <span className="font-medium text-foreground">AI Email Personalization (Phase 3)</span>
+                </div>
+                <Badge variant="success">Operational</Badge>
+              </div>
+              <div className="flex items-center justify-between text-xs pb-3 border-b border-border">
+                <div className="flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                  <span className="font-medium text-foreground">Gmail OAuth & Encryption Engine (Phase 4)</span>
+                </div>
+                <Badge variant="success">Operational</Badge>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                  <span className="font-medium text-foreground">Persistent Queue Worker & Scheduler (Phase 5)</span>
+                </div>
+                <Badge variant="success">Operational</Badge>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
