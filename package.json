@@ -8,7 +8,7 @@
     "start": "next start",
     "start:railway": "node scripts/start-railway.js",
     "lint": "eslint",
-    "test": "node tests/verify-data-dir.js && node tests/verify-supervisor.js && node tests/verify-oauth-production.js && node tests/verify-phase4.js && node tests/verify-phase5.js && node tests/verify-phase6.js && node tests/verify-multi-contact-ingestion.js && node tests/verify-company-classification.js && node tests/verify-batch-deletion.js && node tests/verify-dry-run-semantics.js && node tests/verify-scheduler-rules.js",
+    "test": "node tests/verify-data-dir.js && node tests/verify-supervisor.js && node tests/verify-oauth-production.js && node tests/verify-phase4.js && node tests/verify-phase5.js && node tests/verify-phase6.js && node tests/verify-multi-contact-ingestion.js && node tests/verify-company-classification.js && node tests/verify-batch-deletion.js && node tests/verify-dry-run-semantics.js && node tests/verify-scheduler-rules.js && node tests/verify-dashboard-refresh.js",
     "worker": "tsx src/worker/outreach-worker.ts",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio"

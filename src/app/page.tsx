@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import {
   Building2,
@@ -26,50 +26,178 @@ import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/lib/utils';
 import type { DashboardStats, Batch, SchedulerConfig } from '@/types';
 
+const POLL_INTERVAL_MS = 6000; // 6 seconds automatic refresh
+
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [scheduler, setScheduler] = useState<SchedulerConfig | null>(null);
   const [recentBatches, setRecentBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
 
+  // In-flight guard and response sequencing references
+  const inFlightRef = useRef(false);
+  const latestTimestampRef = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  /**
+   * Fetches fresh dashboard, scheduler, and batch statistics.
+   * Enforces:
+   * 1. In-flight concurrency guard (requests cannot overlap).
+   * 2. Cache-busting (cache: 'no-store' + timestamp parameter).
+   * 3. Response sequencing (newest request always wins, older responses discarded).
+   */
+  const fetchDashboardData = useCallback(async (isManual = false) => {
+    // 1. Guard against overlapping background requests
+    if (inFlightRef.current) {
+      if (!isManual) {
+        // Background poll tick: skip if previous fetch is still running
+        return;
+      }
+      // If manual refresh was clicked, abort previous in-flight request so manual refresh wins immediately
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    }
+
+    inFlightRef.current = true;
+    if (isManual) {
+      setIsRefreshing(true);
+    }
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const requestTimestamp = Date.now();
+    latestTimestampRef.current = requestTimestamp;
+
+    try {
+      const [statsRes, schedulerRes, batchesRes] = await Promise.all([
+        fetch(`/api/dashboard?_t=${requestTimestamp}`, {
+          cache: 'no-store',
+          signal: abortController.signal,
+          headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+        }),
+        fetch(`/api/scheduler/status?_t=${requestTimestamp}`, {
+          cache: 'no-store',
+          signal: abortController.signal,
+          headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+        }),
+        fetch(`/api/batches?_t=${requestTimestamp}`, {
+          cache: 'no-store',
+          signal: abortController.signal,
+          headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+        }),
+      ]);
+
+      const [statsJson, schedulerJson, batchesJson] = await Promise.all([
+        statsRes.json(),
+        schedulerRes.json(),
+        batchesRes.json(),
+      ]);
+
+      // Response sequencing check: Ensure an old/delayed response cannot overwrite newer state
+      if (requestTimestamp < latestTimestampRef.current) {
+        return;
+      }
+
+      if (statsJson.success) setStats(statsJson.data);
+      if (schedulerJson.success) setScheduler(schedulerJson.data);
+      if (batchesJson.success) setRecentBatches((batchesJson.data || []).slice(0, 5));
+      setLastSyncTime(new Date());
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        // Intentionally aborted for newer request
+        return;
+      }
+      console.error('Error fetching dashboard stats:', err);
+    } finally {
+      inFlightRef.current = false;
+      setLoading(false);
+      if (isManual) {
+        setIsRefreshing(false);
+      }
+    }
+  }, []);
+
+  // Polling lifecycle with browser tab visibility handling
   useEffect(() => {
-    let ignore = false;
-    Promise.all([
-      fetch('/api/dashboard').then((r) => r.json()),
-      fetch('/api/scheduler/status').then((r) => r.json()),
-      fetch('/api/batches').then((r) => r.json()),
-    ])
-      .then(([statsJson, schedulerJson, batchesJson]) => {
-        if (!ignore) {
-          if (statsJson.success) setStats(statsJson.data);
-          if (schedulerJson.success) setScheduler(schedulerJson.data);
-          if (batchesJson.success) setRecentBatches((batchesJson.data || []).slice(0, 5));
+    let intervalId: NodeJS.Timeout | null = null;
+    let isSubscribed = true;
+
+    // Initial fetch on mount deferred via macro-task to avoid synchronous setState in effect
+    const initialTimer = setTimeout(() => {
+      if (isSubscribed) {
+        fetchDashboardData(false);
+      }
+    }, 0);
+
+    const startPolling = () => {
+      if (intervalId) clearInterval(intervalId);
+      intervalId = setInterval(() => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'visible' && isSubscribed) {
+          fetchDashboardData(false);
         }
-      })
-      .catch((err: unknown) => {
-        console.error('Error fetching dashboard stats:', err);
-      })
-      .finally(() => {
-        if (!ignore) setLoading(false);
-      });
+      }, POLL_INTERVAL_MS);
+    };
+
+    const stopPolling = () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        // Tab foregrounded: immediately fetch fresh data and resume interval
+        fetchDashboardData(false);
+        startPolling();
+      } else {
+        // Tab hidden: pause polling to save resources
+        stopPolling();
+      }
+    };
+
+    const handleFocus = () => {
+      fetchDashboardData(false);
+    };
+
+    startPolling();
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', handleFocus);
+    }
 
     return () => {
-      ignore = true;
+      isSubscribed = false;
+      clearTimeout(initialTimer);
+      stopPolling();
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', handleFocus);
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
     };
-  }, [refreshKey]);
+  }, [fetchDashboardData]);
 
   const handlePause = async () => {
     setActionLoading(true);
     try {
-      const res = await fetch('/api/scheduler/pause', { method: 'POST' });
+      const res = await fetch('/api/scheduler/pause', { method: 'POST', cache: 'no-store' });
       const json = await res.json();
       if (json.success) {
         setScheduler(json.data);
         setStatusMessage('Scheduler paused. In-flight requests will finish, but no new emails will be sent.');
-        setRefreshKey((k) => k + 1);
+        await fetchDashboardData(true);
       }
     } finally {
       setActionLoading(false);
@@ -79,12 +207,12 @@ export default function DashboardPage() {
   const handleResume = async () => {
     setActionLoading(true);
     try {
-      const res = await fetch('/api/scheduler/resume', { method: 'POST' });
+      const res = await fetch('/api/scheduler/resume', { method: 'POST', cache: 'no-store' });
       const json = await res.json();
       if (json.success) {
         setScheduler(json.data);
         setStatusMessage('Scheduler resumed. Automatic daily sending active.');
-        setRefreshKey((k) => k + 1);
+        await fetchDashboardData(true);
       }
     } finally {
       setActionLoading(false);
@@ -97,12 +225,12 @@ export default function DashboardPage() {
     }
     setActionLoading(true);
     try {
-      const res = await fetch('/api/scheduler/stop', { method: 'POST' });
+      const res = await fetch('/api/scheduler/stop', { method: 'POST', cache: 'no-store' });
       const json = await res.json();
       if (json.success) {
         setScheduler(json.data);
         setStatusMessage('Outreach campaign stopped. Progress and queue preserved.');
-        setRefreshKey((k) => k + 1);
+        await fetchDashboardData(true);
       }
     } finally {
       setActionLoading(false);
@@ -122,17 +250,29 @@ export default function DashboardPage() {
             Real-time outreach overview, persistent queue, and scheduler state
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          {/* Live auto-refresh indicator */}
+          <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 border border-border/60 rounded-lg px-2.5 py-1.5">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <span>Live sync active</span>
+            {lastSyncTime && (
+              <span className="text-[11px] text-muted-foreground/80 font-mono">
+                • {lastSyncTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </span>
+            )}
+          </div>
+
           <Button
             variant="outline"
             size="sm"
-            onClick={() => {
-              setLoading(true);
-              setRefreshKey((k) => k + 1);
-            }}
-            disabled={loading}
+            onClick={() => fetchDashboardData(true)}
+            disabled={loading || isRefreshing}
+            title="Immediately fetch fresh data from database"
           >
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-4 w-4 ${isRefreshing || loading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
           <Link href="/upload">
@@ -143,6 +283,7 @@ export default function DashboardPage() {
           </Link>
         </div>
       </div>
+
 
       {statusMessage && (
         <div className="flex items-center justify-between rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs font-medium text-primary">
@@ -340,13 +481,15 @@ export default function DashboardPage() {
             <div>
               <p className="text-xs text-muted-foreground font-medium">Worker Lock / Lease</p>
               <div className="flex items-center gap-1.5 mt-1">
-                <Zap className="h-4 w-4 text-emerald-600" />
+                <Zap className={`h-4 w-4 ${scheduler?.workerId ? 'text-emerald-600' : 'text-muted-foreground'}`} />
                 <span className="text-xs font-mono font-medium text-foreground">
                   {scheduler?.workerId ? `${scheduler.workerId.slice(0, 16)}...` : 'Run `npm run worker`'}
                 </span>
               </div>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                {scheduler?.workerId ? 'Active background worker' : 'Worker process is offline'}
+                {scheduler?.workerId
+                  ? `Active background worker ${scheduler?.lastHeartbeatAt ? `• Heartbeat: ${formatDateTime(scheduler.lastHeartbeatAt)}` : ''}`
+                  : 'Worker process is offline'}
               </p>
             </div>
           </div>
