@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { getDb } from '@/db';
 import { contacts, batches, resume, globalEmailHistory, outreachQueue } from '@/db/schema';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, and } from 'drizzle-orm';
 import { getAuthenticatedGmailClient } from './gmail-client';
 import { buildMimeMessage } from './mime-builder';
 import { normalizeEmail, isValidEmail } from '@/lib/utils';
@@ -263,7 +263,12 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
         emailsPending: sql`MAX(0, ${batches.emailsPending} - 1)`,
         updatedAt: sentTimestamp,
       })
-      .where(eq(batches.id, contact.batchId))
+      .where(
+        and(
+          eq(batches.id, contact.batchId),
+          sql`status NOT IN ('deleted', 'cancelled')`
+        )
+      )
       .run();
 
     console.log(`[Gmail] Successfully sent email to ${contact.email} (Message ID: ${messageId})`);

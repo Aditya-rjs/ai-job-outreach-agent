@@ -13,6 +13,9 @@ function ensureInitialized() {
   }
 }
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -26,14 +29,26 @@ export async function GET(
     if (!record || record.status === 'deleted') {
       return NextResponse.json(
         { success: false, error: `Batch with ID "${id}" was not found.` },
-        { status: 404 }
+        {
+          status: 404,
+          headers: {
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
+          },
+        }
       );
     }
 
-    return NextResponse.json({
-      success: true,
-      data: record as Batch,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        data: record as Batch,
+      },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+        },
+      }
+    );
   } catch (error) {
     console.error('Fetch batch error:', error);
     return NextResponse.json(

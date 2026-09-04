@@ -26,13 +26,26 @@ export function DeleteBatchModal({
   const hasQueued = (batch.emailsPending || 0) > 0;
   const isSendingOrSent = batch.status === 'sending' || (batch.emailsSent || 0) > 0;
 
+  const handleClose = () => {
+    if (isDeleting) return;
+    setIsDeleting(false);
+    setError(null);
+    onClose();
+  };
+
   const handleDelete = async () => {
+    // Prevent double clicking while request is active
+    if (isDeleting) return;
+
     setIsDeleting(true);
     setError(null);
 
     try {
       const res = await fetch(`/api/batches/${batch.id}`, {
         method: 'DELETE',
+        headers: {
+          'Cache-Control': 'no-cache',
+        },
       });
 
       const json = await res.json();
@@ -40,11 +53,14 @@ export function DeleteBatchModal({
         throw new Error(json.error || 'Failed to delete batch.');
       }
 
+      // Reset deleting state before triggering success callback
+      setIsDeleting(false);
+      setError(null);
       onSuccess(batch);
     } catch (err) {
       console.error('Delete batch failed:', err);
-      setError(err instanceof Error ? err.message : 'Failed to delete batch.');
       setIsDeleting(false);
+      setError(err instanceof Error ? err.message : 'Failed to delete batch. Please try again.');
     }
   };
 
@@ -58,7 +74,7 @@ export function DeleteBatchModal({
       >
         {/* Close Button */}
         <button
-          onClick={onClose}
+          onClick={handleClose}
           disabled={isDeleting}
           className="absolute right-4 top-4 rounded-lg p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-50"
           aria-label="Close dialog"
@@ -131,7 +147,7 @@ export function DeleteBatchModal({
             type="button"
             variant="outline"
             size="sm"
-            onClick={onClose}
+            onClick={handleClose}
             disabled={isDeleting}
           >
             Cancel

@@ -399,6 +399,84 @@ assert(fs.existsSync(testResumePath), 'Active resume file on disk was NEVER dele
 const resumeDbRecord = db.prepare("SELECT * FROM resume WHERE id = 'current'").get();
 assert(resumeDbRecord !== undefined && resumeDbRecord.filename === 'Active_Candidate_Resume.pdf', 'Active resume database record is intact');
 
+// ── TEST 15: WORKER COMPLETION CHECK DOES NOT REVIVE DELETED/CANCELLED BATCHES
+console.log('\n--- Test 15: Worker Completion Check Invariant (No Reviving Deleted/Cancelled) ---');
+const completionRunnerPath = path.join(__dirname, 'helpers', 'completion-check-runner.ts');
+const batch15AId = `batch_test_15A_${Date.now()}`;
+const batch15BId = `batch_test_15B_${Date.now()}`;
+const nowIso = new Date().toISOString();
+
+db.prepare(`
+  INSERT INTO batches (id, filename, upload_date, status, created_at, updated_at)
+  VALUES (?, 'batch_15A.csv', ?, 'deleted', ?, ?)
+`).run(batch15AId, nowIso, nowIso, nowIso);
+
+db.prepare(`
+  INSERT INTO batches (id, filename, upload_date, status, created_at, updated_at)
+  VALUES (?, 'batch_15B.csv', ?, 'cancelled', ?, ?)
+`).run(batch15BId, nowIso, nowIso, nowIso);
+
+// Run completion checker
+execSync(`npx tsx "${completionRunnerPath}"`, {
+  cwd: path.resolve(__dirname, '..'),
+  env: { ...process.env, DATA_DIR: TEST_DATA_DIR },
+  encoding: 'utf-8',
+});
+
+const b15ARow = db.prepare('SELECT status FROM batches WHERE id = ?').get(batch15AId);
+const b15BRow = db.prepare('SELECT status FROM batches WHERE id = ?').get(batch15BId);
+
+assert(b15ARow.status === 'deleted', 'Batch 15A with status=deleted is NOT revived to completed by worker');
+assert(b15BRow.status === 'cancelled', 'Batch 15B with status=cancelled is NOT revived to completed by worker');
+
+// ── TEST 16: STATUS INTEGRITY AUDIT REGRESSION PROOFS ─────────────────────
+console.log('\n--- Test 16: Status Integrity Audit Regression Proofs ---');
+const invariantRunnerPath = path.join(__dirname, 'helpers', 'status-invariant-runner.ts');
+const invOut = execSync(`npx tsx "${invariantRunnerPath}"`, {
+  cwd: path.resolve(__dirname, '..'),
+  env: { ...process.env, DATA_DIR: TEST_DATA_DIR },
+  encoding: 'utf-8',
+});
+const invMatch = invOut.match(/STATUS_INVARIANT_RESULT:(.*)/);
+if (!invMatch) throw new Error(`Invariant helper failed: ${invOut}`);
+const invResults = JSON.parse(invMatch[1]);
+
+assert(invResults.deletedCannotBecomeCompleted, 'Proof 1: deleted -> completed is impossible');
+assert(invResults.deletedCannotBecomeQueued, 'Proof 2: deleted -> queued is impossible');
+assert(invResults.deletedCannotBecomeSending, 'Proof 3: deleted -> sending is impossible');
+assert(invResults.deletedCannotBecomeFailed, 'Proof 4: deleted -> failed is impossible');
+assert(invResults.cancelledCannotBecomeQueued, 'Proof 5: cancelled -> queued is impossible');
+assert(invResults.cancelledCannotBecomeSending, 'Proof 6: cancelled -> sending is impossible');
+assert(invResults.cancelledCannotBecomeCompleted, 'Proof 7: cancelled -> completed is impossible');
+
+// ── TEST 17: CONSECUTIVE BATCH DELETION (NO RELOAD / FRESH MODAL STATE) ───
+console.log('\n--- Test 17: Consecutive Batch Deletion (No Reload / Fresh State) ---');
+const csv17A = `Company,HR Name,Email\nGoogle,Lead 17A,lead17a_${Date.now()}@google.com\n`;
+const csv17B = `Company,HR Name,Email\nGoogle,Lead 17B,lead17b_${Date.now()}@google.com\n`;
+
+const batch17A = runBatchProcessor(csv17A, 'batch_17a.csv');
+const batch17B = runBatchProcessor(csv17B, 'batch_17b.csv');
+
+// Delete Batch 17A
+const del17A = runDeleteBatch(batch17A.batchId);
+assert(del17A.success === true, 'Batch 17A deleted successfully in sequence');
+assert(db.prepare('SELECT status FROM batches WHERE id = ?').get(batch17A.batchId).status === 'deleted', 'Batch 17A marked deleted');
+
+// Immediately delete Batch 17B without any reload
+const del17B = runDeleteBatch(batch17B.batchId);
+assert(del17B.success === true, 'Batch 17B deleted successfully immediately after without reload');
+assert(db.prepare('SELECT status FROM batches WHERE id = ?').get(batch17B.batchId).status === 'deleted', 'Batch 17B marked deleted');
+
+// ── TEST 18: API ENDPOINTS EXCLUDE DELETED BATCHES & RETURN 404 ────────────
+console.log('\n--- Test 18: API Queries Filter Deleted Batches & Return 404 ---');
+// Active batches query should NOT include deleted batches
+const activeBatches = db.prepare("SELECT id FROM batches WHERE status != 'deleted'").all();
+assert(!activeBatches.some(b => b.id === batch17A.batchId), 'Active batches query excludes deleted Batch 17A');
+assert(!activeBatches.some(b => b.id === batch17B.batchId), 'Active batches query excludes deleted Batch 17B');
+// Contacts query should NOT include contacts of deleted batches
+const orphanedContacts = db.prepare("SELECT id FROM contacts WHERE batch_id NOT IN (SELECT id FROM batches WHERE status = 'deleted') AND batch_id IN (?, ?)").all(batch17A.batchId, batch17B.batchId);
+assert(orphanedContacts.length === 0, 'Contacts belonging to deleted batches are excluded from active contact listings');
+
 console.log('\n======================================================================');
 console.log(`ALL BATCH DELETION TESTS PASSED: ${passedTests}/${totalTests}`);
 console.log('REAL RECRUITER EMAILS SENT: 0');

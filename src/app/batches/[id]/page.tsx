@@ -59,8 +59,8 @@ export default function BatchDetailPage({
     if (searchTerm) queryParams.append('search', searchTerm);
 
     Promise.all([
-      fetch(`/api/batches/${batchId}`).then((r) => r.json()),
-      fetch(`/api/batches/${batchId}/contacts?${queryParams.toString()}`).then((r) => r.json()),
+      fetch(`/api/batches/${batchId}`, { cache: 'no-store' }).then((r) => r.json()),
+      fetch(`/api/batches/${batchId}/contacts?${queryParams.toString()}`, { cache: 'no-store' }).then((r) => r.json()),
     ])
       .then(([batchJson, contactsJson]) => {
         if (!ignore) {
@@ -560,15 +560,18 @@ export default function BatchDetailPage({
       )}
 
       {/* Delete Confirmation Modal */}
-      <DeleteBatchModal
-        batch={batch}
-        isOpen={isDeleteModalOpen}
-        onClose={() => setIsDeleteModalOpen(false)}
-        onSuccess={() => {
-          setIsDeleteModalOpen(false);
-          router.push('/batches');
-        }}
-      />
+      {batch && isDeleteModalOpen && (
+        <DeleteBatchModal
+          key={batch.id}
+          batch={batch}
+          isOpen={true}
+          onClose={() => setIsDeleteModalOpen(false)}
+          onSuccess={() => {
+            setIsDeleteModalOpen(false);
+            router.push('/batches');
+          }}
+        />
+      )}
     </div>
   );
 }

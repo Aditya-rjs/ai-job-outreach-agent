@@ -248,10 +248,19 @@ export function acquireNextEligibleJob(workerId: string): NextEligibleJob | null
  */
 export function checkBatchCompletions(): BatchCompletionSummary[] {
   const db = getDb();
-  const allBatches = db.select().from(batches).all();
+  // Strictly ignore batches that are already completed, deleted, or cancelled
+  const allBatches = db
+    .select()
+    .from(batches)
+    .where(sql`status NOT IN ('completed', 'deleted', 'cancelled')`)
+    .all();
   const completedSummaries: BatchCompletionSummary[] = [];
 
   for (const batch of allBatches) {
+    if (batch.status === 'deleted' || batch.status === 'cancelled' || batch.status === 'completed') {
+      continue;
+    }
+
     // Check if there are any remaining pending, generating, queued, or processing contacts
     const remaining = db
       .select({ count: sql<number>`count(*)` })
@@ -264,7 +273,7 @@ export function checkBatchCompletions(): BatchCompletionSummary[] {
       )
       .get()?.count ?? 0;
 
-    if (remaining === 0 && batch.status !== 'completed') {
+    if (remaining === 0) {
       const stats = db
         .select({
           totalRecords: sql<number>`count(*)`,
@@ -280,13 +289,18 @@ export function checkBatchCompletions(): BatchCompletionSummary[] {
 
       const nowIso = new Date().toISOString();
 
-      // Mark batch as completed
+      // Mark batch as completed - enforcing status integrity guard
       db.update(batches)
         .set({
           status: 'completed',
           updatedAt: nowIso,
         })
-        .where(eq(batches.id, batch.id))
+        .where(
+          and(
+            eq(batches.id, batch.id),
+            sql`status NOT IN ('completed', 'deleted', 'cancelled')`
+          )
+        )
         .run();
 
       // Check if completion notification has already been recorded

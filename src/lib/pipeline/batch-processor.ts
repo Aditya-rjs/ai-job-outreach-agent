@@ -1,6 +1,6 @@
 import { getDb } from '@/db';
 import { batches, contacts, globalEmailHistory, outreachQueue } from '@/db/schema';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, and, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { parseCSV } from '@/lib/parsers/csv-parser';
 import { getFieldMapping, applyFieldMapping, type NormalizedContactRecord } from '@/lib/parsers/field-mapper';
@@ -329,7 +329,7 @@ export async function processBatchFile(
         }
       }
 
-      // D. Update final batch metrics
+      // D. Update final batch metrics (guarding against revival of deleted/cancelled batch)
       tx.update(batches)
         .set({
           totalRecords,
@@ -342,7 +342,12 @@ export async function processBatchFile(
           status: emailsPending > 0 ? 'queued' : 'completed',
           updatedAt: new Date().toISOString(),
         })
-        .where(eq(batches.id, batchId))
+        .where(
+          and(
+            eq(batches.id, batchId),
+            sql`status NOT IN ('deleted', 'cancelled')`
+          )
+        )
         .run();
     });
 
@@ -361,13 +366,18 @@ export async function processBatchFile(
   } catch (error) {
     console.error(`Batch processing failed for ${filename}:`, error);
 
-    // Mark batch as failed
+    // Mark batch as failed (only if not already deleted or cancelled)
     db.update(batches)
       .set({
         status: 'failed',
         updatedAt: new Date().toISOString(),
       })
-      .where(eq(batches.id, batchId))
+      .where(
+        and(
+          eq(batches.id, batchId),
+          sql`status NOT IN ('deleted', 'cancelled')`
+        )
+      )
       .run();
 
     throw error;

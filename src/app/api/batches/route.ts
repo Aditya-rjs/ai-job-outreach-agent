@@ -13,6 +13,9 @@ function ensureInitialized() {
   }
 }
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET(): Promise<NextResponse<ApiResponse<Batch[]>>> {
   try {
     ensureInitialized();
@@ -24,10 +27,19 @@ export async function GET(): Promise<NextResponse<ApiResponse<Batch[]>>> {
       .orderBy(desc(batches.uploadDate))
       .all();
 
-    return NextResponse.json({
-      success: true,
-      data: records as Batch[],
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        data: records as Batch[],
+      },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+          Pragma: 'no-cache',
+          Expires: '0',
+        },
+      }
+    );
   } catch (error) {
     console.error('Fetch batches error:', error);
     return NextResponse.json(

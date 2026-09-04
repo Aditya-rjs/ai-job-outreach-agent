@@ -21,7 +21,7 @@ export default function BatchesPage() {
 
   useEffect(() => {
     let ignore = false;
-    fetch('/api/batches')
+    fetch('/api/batches', { cache: 'no-store' })
       .then((res) => res.json())
       .then((json) => {
         if (!ignore && json.success) {
@@ -210,17 +210,21 @@ export default function BatchesPage() {
       )}
 
       {/* Delete Confirmation Modal */}
-      <DeleteBatchModal
-        batch={batchToDelete}
-        isOpen={!!batchToDelete}
-        onClose={() => setBatchToDelete(null)}
-        onSuccess={(deleted) => {
-          setBatchToDelete(null);
-          setSuccessMessage(`Batch "${deleted.filename}" deleted successfully.`);
-          setRefreshKey((k) => k + 1);
-          setTimeout(() => setSuccessMessage(null), 5000);
-        }}
-      />
+      {batchToDelete && (
+        <DeleteBatchModal
+          key={batchToDelete.id}
+          batch={batchToDelete}
+          isOpen={true}
+          onClose={() => setBatchToDelete(null)}
+          onSuccess={(deleted) => {
+            setBatchesList((prev) => prev.filter((b) => b.id !== deleted.id));
+            setBatchToDelete(null);
+            setSuccessMessage(`Batch "${deleted.filename}" deleted successfully.`);
+            setRefreshKey((k) => k + 1);
+            setTimeout(() => setSuccessMessage(null), 5000);
+          }}
+        />
+      )}
     </div>
   );
 }
