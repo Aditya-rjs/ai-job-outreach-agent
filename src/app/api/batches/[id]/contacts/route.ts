@@ -42,6 +42,10 @@ export async function GET(
       conditions.push(sql`${contacts.emailValid} = 0`);
     } else if (filter === 'queued') {
       conditions.push(eq(contacts.status, 'queued'));
+    } else if (filter === 'simulated') {
+      conditions.push(eq(contacts.status, 'simulated'));
+    } else if (filter === 'sent') {
+      conditions.push(eq(contacts.status, 'sent'));
     } else if (filter === 'failed') {
       conditions.push(eq(contacts.status, 'failed'));
     }

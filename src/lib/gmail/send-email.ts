@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { getDb } from '@/db';
 import { contacts, batches, resume, globalEmailHistory, outreachQueue } from '@/db/schema';
-import { eq, sql, and } from 'drizzle-orm';
+import { eq, sql, and, ne } from 'drizzle-orm';
 import { getAuthenticatedGmailClient } from './gmail-client';
 import { buildMimeMessage } from './mime-builder';
 import { normalizeEmail, isValidEmail } from '@/lib/utils';
@@ -148,15 +148,27 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
   }
 
   // 9. Gmail authentication
-  let gmailClient;
-  try {
-    gmailClient = await getAuthenticatedGmailClient();
-  } catch (authErr) {
-    return {
-      success: false,
-      error: authErr instanceof Error ? authErr.message : 'Gmail is not connected or authorization expired.',
-      errorCategory: 'auth',
+  const isDryRun = process.env.OUTREACH_DRY_RUN === 'true';
+  const isTestMockSend = process.env.TEST_MOCK_GMAIL_SEND === 'true';
+  type GmailAuthResult = NonNullable<Awaited<ReturnType<typeof getAuthenticatedGmailClient>>>;
+  let gmailClient: GmailAuthResult | null = null;
+
+  if (isDryRun || isTestMockSend) {
+    gmailClient = {
+      email: 'authorized_test_user@gmail.com',
+      gmail: null as unknown as GmailAuthResult['gmail'],
+      oauth2Client: null as unknown as GmailAuthResult['oauth2Client'],
     };
+  } else {
+    try {
+      gmailClient = await getAuthenticatedGmailClient();
+    } catch (authErr) {
+      return {
+        success: false,
+        error: authErr instanceof Error ? authErr.message : 'Gmail is not connected or authorization expired.',
+        errorCategory: 'auth',
+      };
+    }
   }
 
   // 10. Pre-send State Transition (contact -> sending, queue -> processing)
@@ -195,15 +207,16 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
     },
   });
 
-  // 12. Send via Gmail API (or dry-run simulation)
-  const isDryRun = process.env.OUTREACH_DRY_RUN === 'true';
-
+  // 12. Send via Gmail API (or dry-run / mock simulation)
   try {
     let messageId: string | undefined;
 
     if (isDryRun) {
       console.log(`[DRY-RUN] Simulating outreach email dispatch to ${contact.email} (no Gmail API call)`);
       messageId = `dryrun_${Date.now()}_${contact.id.slice(0, 8)}`;
+    } else if (isTestMockSend) {
+      console.log(`[TEST-MOCK] Simulating real Gmail send to ${contact.email} without network dispatch`);
+      messageId = `mock_real_msg_${Date.now()}_${contact.id.slice(0, 8)}`;
     } else {
       const sendResponse = await gmailClient.gmail.users.messages.send({
         userId: 'me',
@@ -216,63 +229,116 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
 
     const sentTimestamp = new Date().toISOString();
 
-    // 13. Post-Send Transactional State Transitions
-    db.update(contacts)
-      .set({
-        status: 'sent',
-        sentAt: sentTimestamp,
-        gmailMessageId: messageId || null,
-        errorMessage: null,
-        updatedAt: sentTimestamp,
-      })
-      .where(eq(contacts.id, contact.id))
-      .run();
+    if (isDryRun) {
+      // 13a. Post-Simulation State Transitions (Dry-Run Mode)
+      // Contact is marked as simulated (NEVER as sent)
+      db.update(contacts)
+        .set({
+          status: 'simulated',
+          sentAt: null,
+          gmailMessageId: messageId || null,
+          errorMessage: null,
+          updatedAt: sentTimestamp,
+        })
+        .where(eq(contacts.id, contact.id))
+        .run();
 
-    db.update(outreachQueue)
-      .set({
-        status: 'completed',
-        lastAttemptAt: sentTimestamp,
-        updatedAt: sentTimestamp,
-      })
-      .where(eq(outreachQueue.contactId, contact.id))
-      .run();
+      db.update(outreachQueue)
+        .set({
+          status: 'completed',
+          lastAttemptAt: sentTimestamp,
+          updatedAt: sentTimestamp,
+        })
+        .where(eq(outreachQueue.contactId, contact.id))
+        .run();
 
-    // Record in global email history (permanent lock on this email)
-    db.insert(globalEmailHistory)
-      .values({
-        email: normalizedTo,
-        firstContactId: contact.id,
-        firstBatchId: contact.batchId,
-        firstSeenAt: contact.createdAt,
-        sentAt: sentTimestamp,
-        status: 'sent',
-      })
-      .onConflictDoUpdate({
-        target: globalEmailHistory.email,
-        set: {
+      // A dry-run simulation must NOT be recorded as a permanent successful Gmail contact.
+      // Clean up the temporary queued entry so the email remains fully eligible for its first real outreach.
+      db.delete(globalEmailHistory)
+        .where(
+          and(
+            eq(globalEmailHistory.email, normalizedTo),
+            ne(globalEmailHistory.status, 'sent')
+          )
+        )
+        .run();
+
+      // Update batch counter: emailsSent remains 0 in dry-run; emailsSimulated increments
+      db.update(batches)
+        .set({
+          emailsSimulated: sql`${batches.emailsSimulated} + 1`,
+          emailsPending: sql`MAX(0, ${batches.emailsPending} - 1)`,
+          updatedAt: sentTimestamp,
+        })
+        .where(
+          and(
+            eq(batches.id, contact.batchId),
+            sql`status NOT IN ('deleted', 'cancelled')`
+          )
+        )
+        .run();
+
+      console.log(`[DRY-RUN] Outreach simulation complete for ${contact.email} (Simulated ID: ${messageId})`);
+      return { success: true, messageId };
+    } else {
+      // 13b. Post-Send State Transitions (Real Send Mode)
+      db.update(contacts)
+        .set({
+          status: 'sent',
+          sentAt: sentTimestamp,
+          gmailMessageId: messageId || null,
+          errorMessage: null,
+          updatedAt: sentTimestamp,
+        })
+        .where(eq(contacts.id, contact.id))
+        .run();
+
+      db.update(outreachQueue)
+        .set({
+          status: 'completed',
+          lastAttemptAt: sentTimestamp,
+          updatedAt: sentTimestamp,
+        })
+        .where(eq(outreachQueue.contactId, contact.id))
+        .run();
+
+      // Record permanent successful Gmail contact in global email history
+      db.insert(globalEmailHistory)
+        .values({
+          email: normalizedTo,
+          firstContactId: contact.id,
+          firstBatchId: contact.batchId,
+          firstSeenAt: contact.createdAt,
           sentAt: sentTimestamp,
           status: 'sent',
-        },
-      })
-      .run();
+        })
+        .onConflictDoUpdate({
+          target: globalEmailHistory.email,
+          set: {
+            sentAt: sentTimestamp,
+            status: 'sent',
+          },
+        })
+        .run();
 
-    // Update batch counter
-    db.update(batches)
-      .set({
-        emailsSent: sql`${batches.emailsSent} + 1`,
-        emailsPending: sql`MAX(0, ${batches.emailsPending} - 1)`,
-        updatedAt: sentTimestamp,
-      })
-      .where(
-        and(
-          eq(batches.id, contact.batchId),
-          sql`status NOT IN ('deleted', 'cancelled')`
+      // Update batch counter: increment real emailsSent
+      db.update(batches)
+        .set({
+          emailsSent: sql`${batches.emailsSent} + 1`,
+          emailsPending: sql`MAX(0, ${batches.emailsPending} - 1)`,
+          updatedAt: sentTimestamp,
+        })
+        .where(
+          and(
+            eq(batches.id, contact.batchId),
+            sql`status NOT IN ('deleted', 'cancelled')`
+          )
         )
-      )
-      .run();
+        .run();
 
-    console.log(`[Gmail] Successfully sent email to ${contact.email} (Message ID: ${messageId})`);
-    return { success: true, messageId };
+      console.log(`[Gmail] Successfully sent email to ${contact.email} (Message ID: ${messageId})`);
+      return { success: true, messageId };
+    }
   } catch (apiErr) {
     console.error(`[Gmail] API send error for contact ${contact.id}:`, apiErr);
 

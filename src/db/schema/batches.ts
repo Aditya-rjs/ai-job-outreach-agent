@@ -12,6 +12,7 @@ export const batches = sqliteTable('batches', {
   duplicateContacts: integer('duplicate_contacts').default(0).notNull(),
   invalidEmails: integer('invalid_emails').default(0).notNull(),
   emailsSent: integer('emails_sent').default(0).notNull(),
+  emailsSimulated: integer('emails_simulated').default(0).notNull(),
   emailsFailed: integer('emails_failed').default(0).notNull(),
   emailsPending: integer('emails_pending').default(0).notNull(),
   status: text('status', { enum: ['processing', 'queued', 'sending', 'paused', 'completed', 'failed', 'cancelled', 'deleted'] }).default('processing').notNull(),

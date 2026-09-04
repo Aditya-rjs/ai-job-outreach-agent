@@ -18,6 +18,7 @@ export function initializeDatabase() {
       duplicate_contacts INTEGER NOT NULL DEFAULT 0,
       invalid_emails INTEGER NOT NULL DEFAULT 0,
       emails_sent INTEGER NOT NULL DEFAULT 0,
+      emails_simulated INTEGER NOT NULL DEFAULT 0,
       emails_failed INTEGER NOT NULL DEFAULT 0,
       emails_pending INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'processing',
@@ -36,6 +37,11 @@ export function initializeDatabase() {
   }
   try {
     db.run(sql`ALTER TABLE batches ADD COLUMN deleted_at TEXT`);
+  } catch {
+    // Column may already exist
+  }
+  try {
+    db.run(sql`ALTER TABLE batches ADD COLUMN emails_simulated INTEGER NOT NULL DEFAULT 0`);
   } catch {
     // Column may already exist
   }

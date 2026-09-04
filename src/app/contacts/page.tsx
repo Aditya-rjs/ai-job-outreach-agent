@@ -49,6 +49,7 @@ export default function ContactsPage() {
     { key: 'discovered', label: 'Discovered' },
     { key: 'skipped', label: 'Skipped / Duplicates' },
     { key: 'sent', label: 'Sent' },
+    { key: 'simulated', label: 'Simulated' },
     { key: 'failed', label: 'Failed' },
   ];
 
@@ -163,6 +164,11 @@ export default function ContactsPage() {
                         {c.status === 'discovered' && <Badge variant="outline">Discovered</Badge>}
                         {c.status === 'skipped' && <Badge variant="secondary">Skipped</Badge>}
                         {c.status === 'sent' && <Badge variant="success">Sent</Badge>}
+                        {c.status === 'simulated' && (
+                          <Badge variant="warning" className="bg-amber-100 text-amber-900 border-amber-300">
+                            Simulated
+                          </Badge>
+                        )}
                         {c.status === 'failed' && <Badge variant="destructive">Failed</Badge>}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground truncate max-w-xs">

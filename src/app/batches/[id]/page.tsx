@@ -153,6 +153,8 @@ export default function BatchDetailPage({
     { key: 'all', label: 'All Contacts' },
     { key: 'generated', label: 'Generated Emails' },
     { key: 'queued', label: 'Queued (Pending Gen)' },
+    { key: 'simulated', label: 'Simulated' },
+    { key: 'sent', label: 'Sent' },
     { key: 'relevant', label: 'Relevant Companies' },
     { key: 'irrelevant', label: 'Filtered Non-Tech' },
     { key: 'unverified', label: 'Needs Review' },
@@ -385,6 +387,14 @@ export default function BatchDetailPage({
                         )}
                         {contact.status === 'generating' && (
                           <Badge variant="warning">Generating</Badge>
+                        )}
+                        {contact.status === 'simulated' && (
+                          <Badge variant="warning" className="bg-amber-100 text-amber-900 border-amber-300">
+                            Simulated
+                          </Badge>
+                        )}
+                        {contact.status === 'sent' && (
+                          <Badge variant="success">Sent</Badge>
                         )}
                         {contact.status === 'skipped' && (
                           <Badge variant="secondary">Skipped</Badge>

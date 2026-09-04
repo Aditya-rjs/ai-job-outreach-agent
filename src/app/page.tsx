@@ -17,6 +17,7 @@ import {
   Play,
   Square,
   Zap,
+  Sparkles,
 } from 'lucide-react';
 import { StatCard } from '@/components/ui/stat-card';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -160,11 +161,13 @@ export default function DashboardPage() {
           </div>
           <div className="flex-1">
             <div className="flex items-center gap-2">
-              <Badge variant="warning" className="uppercase tracking-wide font-bold">DRY-RUN MODE ACTIVE</Badge>
-              <span className="font-semibold text-amber-950">Safe Simulation Environment</span>
+              <Badge variant="warning" className="uppercase tracking-wide font-bold bg-amber-200 text-amber-900 border-amber-400">
+                DRY-RUN MODE ACTIVE
+              </Badge>
+              <span className="font-semibold text-amber-950">No real Gmail emails are being dispatched.</span>
             </div>
-            <p className="text-amber-800 mt-1">
-              OUTREACH_DRY_RUN=true is enabled. The persistent scheduler processes jobs, simulates 3-minute intervals, and tracks progress without dispatching real Gmail emails to recruiters.
+            <p className="text-amber-850 mt-1 font-medium">
+              Simulation environment active. The persistent scheduler processes jobs, simulates 3-minute intervals, and tracks progress without dispatching real Gmail emails to recruiters.
             </p>
           </div>
         </div>
@@ -206,11 +209,15 @@ export default function DashboardPage() {
           <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
           <div className="flex-1">
             <p className="font-bold text-emerald-950 text-sm">
-              All eligible emails from batch &quot;{completedBatch.filename}&quot; have been sent!
+              {stats?.isDryRun
+                ? `All eligible simulated outreach from batch "${completedBatch.filename}" has finished!`
+                : `All eligible emails from batch "${completedBatch.filename}" have been sent!`}
             </p>
             <p className="text-emerald-800 mt-1">
-              Sent: {completedBatch.emailsSent} • Skipped/Filtered: {completedBatch.irrelevantCompanies + completedBatch.duplicateContacts} • Failed: {completedBatch.emailsFailed}.
-              Upload another file to schedule additional outreach.
+              {stats?.isDryRun
+                ? `Simulated: ${completedBatch.emailsSimulated ?? completedBatch.emailsSent} • Skipped/Filtered: ${completedBatch.irrelevantCompanies + completedBatch.duplicateContacts} • Failed: ${completedBatch.emailsFailed} (Dry-Run: 0 real Gmail emails dispatched).`
+                : `Sent: ${completedBatch.emailsSent} • Skipped/Filtered: ${completedBatch.irrelevantCompanies + completedBatch.duplicateContacts} • Failed: ${completedBatch.emailsFailed}.`}
+              {' '}Upload another file to schedule additional outreach.
             </p>
           </div>
           <Link href="/upload">
@@ -274,13 +281,18 @@ export default function DashboardPage() {
           {/* Today's Outreach Meter & Scheduling Details */}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
-              <p className="text-xs text-muted-foreground font-medium">Today&apos;s Outreach Sent</p>
+              <p className="text-xs text-muted-foreground font-medium">
+                {stats?.isDryRun ? "Today's Simulated Outreach" : "Today's Outreach Sent"}
+              </p>
               <div className="flex items-baseline gap-1 mt-1">
                 <span className="text-2xl font-bold text-foreground">{stats?.todaySentCount ?? 0}</span>
-                <span className="text-sm text-muted-foreground">/ {stats?.dailyLimit ?? 30} max</span>
+                <span className="text-sm text-muted-foreground">
+                  / {stats?.dailyLimit ?? 30} {stats?.isDryRun ? 'simulated' : 'max'}
+                </span>
               </div>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                Remaining today: {stats?.remainingToday ?? 30}
+                {stats?.isDryRun ? 'Simulated remaining today: ' : 'Remaining today: '}
+                {stats?.remainingToday ?? 30}
               </p>
             </div>
 
@@ -322,7 +334,7 @@ export default function DashboardPage() {
       </Card>
 
       {/* Stat Cards Grid */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7">
         <StatCard
           title="Total Companies"
           value={stats ? stats.totalCompanies : 0}
@@ -346,6 +358,12 @@ export default function DashboardPage() {
         <StatCard
           title="Emails Generated"
           value={stats ? stats.emailsGenerated : 0}
+          icon={Sparkles}
+        />
+        <StatCard
+          title={stats?.isDryRun ? "Simulated Sends" : "Emails Sent"}
+          value={stats ? (stats.isDryRun ? stats.emailsSimulated : stats.emailsSent) : 0}
+          subtitle={stats?.isDryRun ? "0 real Gmail sends" : undefined}
           icon={Send}
         />
         <StatCard

@@ -215,9 +215,13 @@ async function runWorkerLoop() {
       const sendResult = await sendOutreachEmail(contact.id);
 
       if (sendResult.success) {
-        console.log(`[Outreach Worker] Confirmed success for ${contact.email}! Message ID: ${sendResult.messageId}`);
+        if (isDryRun) {
+          console.log(`[Outreach Worker] SIMULATED SEND — no Gmail message dispatched for ${contact.email} (Simulated ID: ${sendResult.messageId})`);
+        } else {
+          console.log(`[Outreach Worker] Gmail send successful for ${contact.email}! Message ID: ${sendResult.messageId}`);
+        }
 
-        // Increment today's successful count
+        // Increment today's count (for schedule pacing)
         db.update(schedulerState)
           .set({
             todaySentCount: sql`${schedulerState.todaySentCount} + 1`,

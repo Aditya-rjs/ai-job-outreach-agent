@@ -3,6 +3,7 @@ export interface DashboardStats {
   relevantCompanies: number;
   totalContacts: number;
   emailsSent: number;
+  emailsSimulated: number;
   emailsFailed: number;
   emailsQueued: number;
   emailsGenerated: number;
@@ -34,6 +35,7 @@ export interface Batch {
   duplicateContacts: number;
   invalidEmails: number;
   emailsSent: number;
+  emailsSimulated?: number;
   emailsFailed: number;
   emailsPending: number;
   status: BatchStatus;
@@ -82,6 +84,7 @@ export type ContactStatus =
   | 'processing'
   | 'sending'
   | 'sent'
+  | 'simulated'
   | 'failed'
   | 'skipped'
   | 'uncertain';

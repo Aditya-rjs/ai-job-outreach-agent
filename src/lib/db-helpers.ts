@@ -22,6 +22,7 @@ export function getDashboardStats(): DashboardStats {
     .select({
       totalContacts: count(),
       emailsSent: sql<number>`SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END)`,
+      emailsSimulated: sql<number>`SUM(CASE WHEN status = 'simulated' THEN 1 ELSE 0 END)`,
       emailsFailed: sql<number>`SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)`,
       emailsSkipped: sql<number>`SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END)`,
       emailsGenerated: sql<number>`SUM(CASE WHEN status = 'generated' THEN 1 ELSE 0 END)`,
@@ -34,6 +35,7 @@ export function getDashboardStats(): DashboardStats {
     .get() ?? {
     totalContacts: 0,
     emailsSent: 0,
+    emailsSimulated: 0,
     emailsFailed: 0,
     emailsSkipped: 0,
     emailsGenerated: 0,
@@ -81,7 +83,7 @@ export function getDashboardStats(): DashboardStats {
     outreachStatus = 'sending';
   } else if (queueSize > 0) {
     outreachStatus = 'running';
-  } else if ((contactStats.emailsSent ?? 0) > 0 && queueSize === 0) {
+  } else if (((contactStats.emailsSent ?? 0) > 0 || (contactStats.emailsSimulated ?? 0) > 0) && queueSize === 0) {
     outreachStatus = 'completed';
   }
 
@@ -101,6 +103,7 @@ export function getDashboardStats(): DashboardStats {
     relevantCompanies: contactStats.relevantCompanies ?? 0,
     totalContacts: contactStats.totalContacts ?? 0,
     emailsSent: contactStats.emailsSent ?? 0,
+    emailsSimulated: contactStats.emailsSimulated ?? 0,
     emailsFailed: contactStats.emailsFailed ?? 0,
     emailsQueued,
     emailsGenerated: contactStats.emailsGenerated ?? 0,

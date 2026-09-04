@@ -15,7 +15,7 @@ export const contacts = sqliteTable('contacts', {
   relevanceReason: text('relevance_reason'),
   isDuplicate: integer('is_duplicate', { mode: 'boolean' }).default(false).notNull(),
   emailValid: integer('email_valid', { mode: 'boolean' }).default(true).notNull(),
-  status: text('status', { enum: ['discovered', 'queued', 'generating', 'generated', 'processing', 'sending', 'sent', 'failed', 'skipped', 'uncertain'] }).default('discovered').notNull(),
+  status: text('status', { enum: ['discovered', 'queued', 'generating', 'generated', 'processing', 'sending', 'sent', 'simulated', 'failed', 'skipped', 'uncertain'] }).default('discovered').notNull(),
   emailSubject: text('email_subject'),
   emailBody: text('email_body'),
   emailStrategy: text('email_strategy'),

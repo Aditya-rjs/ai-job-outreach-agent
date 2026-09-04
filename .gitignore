@@ -55,3 +55,6 @@ data/
 
 # OCR models
 *.traineddata
+
+# Test scratch directories
+tests/fixtures/test_data_*/

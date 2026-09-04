@@ -50,6 +50,7 @@ export function getStatusColor(status: string): string {
     discovered: 'text-slate-600 bg-slate-50',
     generated: 'text-violet-600 bg-violet-50',
     sent: 'text-emerald-600 bg-emerald-50',
+    simulated: 'text-amber-700 bg-amber-50',
     skipped: 'text-gray-600 bg-gray-50',
     pending: 'text-amber-600 bg-amber-50',
     cancelled: 'text-gray-600 bg-gray-50',

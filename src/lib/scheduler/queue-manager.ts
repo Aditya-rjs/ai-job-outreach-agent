@@ -18,6 +18,7 @@ export interface BatchCompletionSummary {
   totalRecords: number;
   relevantCompanies: number;
   emailsSent: number;
+  emailsSimulated?: number;
   emailsFailed: number;
   emailsSkipped: number;
   emailsUncertain: number;
@@ -94,8 +95,8 @@ export function recoverStaleProcessingItems(): number {
       continue;
     }
 
-    // Check if definitely sent
-    if (contact.status === 'sent' || contact.sentAt) {
+    // Check if definitely sent or simulated in dry-run
+    if (contact.status === 'sent' || contact.status === 'simulated' || contact.sentAt) {
       db.update(outreachQueue)
         .set({ status: 'completed', leaseExpiresAt: null, workerId: null, updatedAt: nowIso })
         .where(eq(outreachQueue.id, item.id))
@@ -279,6 +280,7 @@ export function checkBatchCompletions(): BatchCompletionSummary[] {
           totalRecords: sql<number>`count(*)`,
           relevantCompanies: sql<number>`SUM(CASE WHEN is_relevant = 1 THEN 1 ELSE 0 END)`,
           emailsSent: sql<number>`SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END)`,
+          emailsSimulated: sql<number>`SUM(CASE WHEN status = 'simulated' THEN 1 ELSE 0 END)`,
           emailsFailed: sql<number>`SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)`,
           emailsSkipped: sql<number>`SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END)`,
           emailsUncertain: sql<number>`SUM(CASE WHEN status = 'uncertain' THEN 1 ELSE 0 END)`,
@@ -288,6 +290,7 @@ export function checkBatchCompletions(): BatchCompletionSummary[] {
         .get();
 
       const nowIso = new Date().toISOString();
+      const isDryRun = process.env.OUTREACH_DRY_RUN === 'true';
 
       // Mark batch as completed - enforcing status integrity guard
       db.update(batches)
@@ -313,11 +316,14 @@ export function checkBatchCompletions(): BatchCompletionSummary[] {
         totalRecords: stats?.totalRecords ?? batch.totalRecords,
         relevantCompanies: stats?.relevantCompanies ?? batch.relevantCompanies,
         emailsSent: stats?.emailsSent ?? batch.emailsSent,
+        emailsSimulated: stats?.emailsSimulated ?? 0,
         emailsFailed: stats?.emailsFailed ?? batch.emailsFailed,
         emailsSkipped: stats?.emailsSkipped ?? (batch.irrelevantCompanies + batch.duplicateContacts),
         emailsUncertain: stats?.emailsUncertain ?? 0,
         completedAt: nowIso,
-        message: 'All eligible emails from this file have been sent. Upload another file.',
+        message: isDryRun
+          ? 'All eligible outreach simulations for this file have finished. (Dry-run: 0 real emails sent)'
+          : 'All eligible emails from this file have been sent. Upload another file.',
       };
 
       if (!existingNotice) {
