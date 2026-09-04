@@ -34,6 +34,8 @@ export async function GET(
       conditions.push(sql`${contacts.isRelevant} = 1 AND ${contacts.isDuplicate} = 0 AND ${contacts.emailValid} = 1`);
     } else if (filter === 'irrelevant') {
       conditions.push(sql`${contacts.isRelevant} = 0`);
+    } else if (filter === 'unverified') {
+      conditions.push(sql`${contacts.isRelevant} IS NULL AND ${contacts.isDuplicate} = 0 AND ${contacts.emailValid} = 1`);
     } else if (filter === 'duplicate') {
       conditions.push(sql`${contacts.isDuplicate} = 1`);
     } else if (filter === 'invalid') {

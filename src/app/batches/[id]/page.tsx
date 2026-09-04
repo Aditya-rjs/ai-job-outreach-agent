@@ -148,6 +148,7 @@ export default function BatchDetailPage({
     { key: 'queued', label: 'Queued (Pending Gen)' },
     { key: 'relevant', label: 'Relevant Companies' },
     { key: 'irrelevant', label: 'Filtered Non-Tech' },
+    { key: 'unverified', label: 'Needs Review' },
     { key: 'duplicate', label: 'Duplicates' },
     { key: 'failed', label: 'Failed' },
   ];
@@ -354,7 +355,7 @@ export default function BatchDetailPage({
                         ) : contact.isRelevant === false ? (
                           <Badge variant="secondary">Filtered</Badge>
                         ) : (
-                          <span className="text-muted-foreground">—</span>
+                          <Badge variant="warning">Needs Review</Badge>
                         )}
                       </td>
                       <td className="px-4 py-3 text-center">

@@ -155,7 +155,7 @@ export default function ContactsPage() {
                         ) : c.isRelevant === false ? (
                           <Badge variant="secondary">Filtered</Badge>
                         ) : (
-                          <span className="text-muted-foreground">—</span>
+                          <Badge variant="warning">Needs Review</Badge>
                         )}
                       </td>
                       <td className="px-4 py-3 text-center">

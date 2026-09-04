@@ -214,6 +214,7 @@ export async function processBatchFile(
     let irrelevantCompaniesCount = 0;
     const classifiedRelevantSet = new Set<string>();
     const classifiedIrrelevantSet = new Set<string>();
+    const classifiedUnverifiedSet = new Set<string>();
 
     for (const c of candidates) {
       if (!c.emailValid || c.isDuplicate) continue;
@@ -224,20 +225,25 @@ export async function processBatchFile(
         c.relevanceConfidence = classification.confidence;
         c.relevanceReason = classification.reason;
 
-        if (classification.relevant) {
+        if (classification.status === 'RELEVANT' || classification.relevant === true) {
           c.status = 'queued';
           classifiedRelevantSet.add(c.normalizedCompany);
-        } else {
+        } else if (classification.status === 'IRRELEVANT' || classification.relevant === false) {
           c.status = 'skipped';
           classifiedIrrelevantSet.add(c.normalizedCompany);
+        } else {
+          // UNVERIFIED / NEEDS_REVIEW: keep isRelevant = null and do not queue
+          c.isRelevant = null;
+          c.status = 'skipped';
+          classifiedUnverifiedSet.add(c.normalizedCompany);
         }
       } else {
         // Safe fallback if company couldn't be classified
-        c.isRelevant = false;
-        c.relevanceConfidence = 0.5;
-        c.relevanceReason = c.companyDiagnostic || 'Unverified company relevance.';
+        c.isRelevant = null;
+        c.relevanceConfidence = 0.0;
+        c.relevanceReason = c.companyDiagnostic || 'Unable to verify CS/IT relevance: no classification available.';
         c.status = 'skipped';
-        classifiedIrrelevantSet.add(c.normalizedCompany);
+        classifiedUnverifiedSet.add(c.normalizedCompany);
       }
     }
 
