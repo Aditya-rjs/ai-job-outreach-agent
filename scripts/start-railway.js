@@ -20,6 +20,13 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 
 function startSupervisor(options = {}) {
+  // Production Live Outreach Mode: switch OUTREACH_DRY_RUN from true to false
+  if (options.dryRun !== undefined) {
+    process.env.OUTREACH_DRY_RUN = String(options.dryRun);
+  } else {
+    process.env.OUTREACH_DRY_RUN = 'false';
+  }
+
   const port = options.port || process.env.PORT || '3000';
   const dataDir = options.dataDir || process.env.DATA_DIR || path.join(process.cwd(), 'data');
   const isDryRun = process.env.OUTREACH_DRY_RUN === 'true';
@@ -115,6 +122,7 @@ function startSupervisor(options = {}) {
     ...process.env,
     PORT: String(port),
     DATA_DIR: dataDir,
+    OUTREACH_DRY_RUN: process.env.OUTREACH_DRY_RUN,
   };
 
   webChild = spawn(process.execPath, [nextBin, 'start', '-p', String(port)], {
@@ -141,6 +149,7 @@ function startSupervisor(options = {}) {
   const workerEnv = {
     ...process.env,
     DATA_DIR: dataDir,
+    OUTREACH_DRY_RUN: process.env.OUTREACH_DRY_RUN,
   };
 
   workerChild = spawn(process.execPath, [tsxCli, workerScript], {
