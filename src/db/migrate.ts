@@ -152,15 +152,83 @@ export function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS company_classifications (
       normalized_name TEXT PRIMARY KEY,
       company_name TEXT NOT NULL,
-      is_relevant INTEGER NOT NULL,
-      confidence REAL NOT NULL,
+      is_relevant INTEGER,
+      confidence REAL,
       reason TEXT NOT NULL,
+      classification_source TEXT NOT NULL DEFAULT 'gemini',
+      gemini_model TEXT NOT NULL DEFAULT 'gemini-3.8-flash',
+      classification_result TEXT NOT NULL DEFAULT 'PENDING',
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      last_error_category TEXT,
+      next_retry_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
   `);
 
   // Safe ALTER TABLE statements for existing databases
+  try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN classification_source TEXT NOT NULL DEFAULT 'gemini'`); } catch {}
+  try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN gemini_model TEXT NOT NULL DEFAULT 'gemini-3.8-flash'`); } catch {}
+  try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN classification_result TEXT NOT NULL DEFAULT 'PENDING'`); } catch {}
+  try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0`); } catch {}
+  try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN last_error_category TEXT`); } catch {}
+  try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN next_retry_at TEXT`); } catch {}
+
+  // Ensure is_relevant and confidence columns allow NULL for PENDING and NEEDS_REVIEW states
+  try {
+    const tableInfo = db.all(sql`PRAGMA table_info(company_classifications)`) as Array<{ name: string; notnull: number }>;
+    const isRelCol = tableInfo.find((c) => c.name === 'is_relevant');
+    if (isRelCol && isRelCol.notnull === 1) {
+      db.run(sql`
+        CREATE TABLE IF NOT EXISTS company_classifications_v2 (
+          normalized_name TEXT PRIMARY KEY,
+          company_name TEXT NOT NULL,
+          is_relevant INTEGER,
+          confidence REAL,
+          reason TEXT NOT NULL,
+          classification_source TEXT NOT NULL DEFAULT 'gemini',
+          gemini_model TEXT NOT NULL DEFAULT 'gemini-3.8-flash',
+          classification_result TEXT NOT NULL DEFAULT 'PENDING',
+          retry_count INTEGER NOT NULL DEFAULT 0,
+          last_error_category TEXT,
+          next_retry_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      `);
+      db.run(sql`
+        INSERT OR IGNORE INTO company_classifications_v2 (
+          normalized_name, company_name, is_relevant, confidence, reason,
+          classification_source, gemini_model, classification_result,
+          retry_count, last_error_category, next_retry_at, created_at, updated_at
+        )
+        SELECT
+          normalized_name, company_name, is_relevant, confidence, reason,
+          COALESCE(classification_source, 'gemini'),
+          COALESCE(gemini_model, 'gemini-3.8-flash'),
+          COALESCE(classification_result, 'PENDING'),
+          COALESCE(retry_count, 0),
+          last_error_category, next_retry_at, created_at, updated_at
+        FROM company_classifications
+      `);
+      db.run(sql`DROP TABLE company_classifications`);
+      db.run(sql`ALTER TABLE company_classifications_v2 RENAME TO company_classifications`);
+    }
+  } catch (migErr) {
+    console.warn('[Migrate] Notice during company_classifications nullability migration:', migErr);
+  }
+
+  // Invariant: Gemini is the sole authority for relevance.
+  // Invalidate legacy heuristic classifications so Gemini re-evaluates all companies authoritatively.
+  try {
+    db.run(sql`
+      DELETE FROM company_classifications
+      WHERE classification_source != 'gemini'
+         OR reason LIKE '%heuristic%'
+         OR reason LIKE '%Unable to verify%'
+    `);
+  } catch {}
+
   try { db.run(sql`ALTER TABLE contacts ADD COLUMN resume_version TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE contacts ADD COLUMN personalization_points TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE contacts ADD COLUMN generated_at TEXT`); } catch {}

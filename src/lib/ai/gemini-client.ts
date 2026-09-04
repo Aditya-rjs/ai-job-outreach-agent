@@ -13,8 +13,223 @@ export function getGeminiClient(): GoogleGenAI | null {
   return clientInstance;
 }
 
+export function resetGeminiClient(): void {
+  clientInstance = null;
+}
+
+export interface CategorizedGeminiError {
+  code:
+    | 'API_KEY_MISSING'
+    | 'AUTH_REJECTED'
+    | 'PERMISSION_DENIED'
+    | 'MODEL_NOT_FOUND'
+    | 'BAD_REQUEST'
+    | 'RATE_LIMIT_EXCEEDED'
+    | 'INTERNAL_ERROR'
+    | 'BAD_GATEWAY'
+    | 'SERVICE_UNAVAILABLE'
+    | 'GATEWAY_TIMEOUT'
+    | 'TIMEOUT'
+    | 'NETWORK_FAILURE'
+    | 'INVALID_OUTPUT'
+    | 'SERVICE_ERROR';
+  isTransient: boolean;
+  safeDetail: string;
+  explanation: string;
+}
+
 /**
- * Calls Gemini with automatic retries and exponential backoff.
+ * Sanitizes error strings to prevent leaking API keys, OAuth tokens, secrets, or sensitive credentials.
+ */
+export function sanitizeSecretText(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/AIza[0-9A-Za-z-_]+/g, '[REDACTED_API_KEY]')
+    .replace(/ya29\.[0-9A-Za-z-_]+/g, '[REDACTED_ACCESS_TOKEN]')
+    .replace(/1\/\/[0-9A-Za-z-_]+/g, '[REDACTED_REFRESH_TOKEN]')
+    .replace(/(?:key|secret|token|password|auth|authorization)=[^&\s]+/gi, '$1=[REDACTED]')
+    .replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, 'Bearer [REDACTED]')
+    .slice(0, 300);
+}
+
+/**
+ * Categorizes errors returned by the Gemini API or network layer.
+ * Strictly separates permanent configuration errors from transient retryable failures.
+ */
+export function categorizeGeminiError(err: unknown): CategorizedGeminiError {
+  const errStr = err instanceof Error ? err.message : String(err || '');
+  const sanitized = sanitizeSecretText(errStr);
+
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey && (!errStr || /api.*key.*missing/i.test(errStr) || /not configured in the environment/i.test(errStr))) {
+    return {
+      code: 'API_KEY_MISSING',
+      isTransient: false,
+      explanation: 'GEMINI_API_KEY is not configured in the environment.',
+      safeDetail: 'GEMINI_API_KEY environment variable is missing or empty.',
+    };
+  }
+
+  // 1. Authentication / Invalid API Key (Permanent)
+  if (
+    /API_KEY_INVALID/i.test(errStr) ||
+    /api key not valid/i.test(errStr) ||
+    /\b401\b/.test(errStr) ||
+    /invalid api key/i.test(errStr) ||
+    /unauthorized/i.test(errStr)
+  ) {
+    return {
+      code: 'AUTH_REJECTED',
+      isTransient: false,
+      explanation: 'Gemini API key was rejected or is invalid.',
+      safeDetail: sanitized,
+    };
+  }
+
+  // 2. Permission Denied / Project Issue (Permanent)
+  if (/PERMISSION_DENIED/i.test(errStr) || /\b403\b/.test(errStr)) {
+    return {
+      code: 'PERMISSION_DENIED',
+      isTransient: false,
+      explanation: 'Permission denied for Gemini API. Check Google Cloud project permissions.',
+      safeDetail: sanitized,
+    };
+  }
+
+  // 3. Model Not Found / Invalid Model (Permanent)
+  if (
+    /\b404\b/.test(errStr) ||
+    /NOT_FOUND/i.test(errStr) ||
+    /is not found for API version/i.test(errStr) ||
+    /model.*not found/i.test(errStr)
+  ) {
+    return {
+      code: 'MODEL_NOT_FOUND',
+      isTransient: false,
+      explanation: 'Specified Gemini model identifier is not recognized or not available.',
+      safeDetail: sanitized,
+    };
+  }
+
+  // 4. Bad Request / Invalid Arguments (Permanent)
+  if (/\b400\b/.test(errStr) || /INVALID_ARGUMENT/i.test(errStr)) {
+    return {
+      code: 'BAD_REQUEST',
+      isTransient: false,
+      explanation: 'Malformed Gemini request or incompatible model arguments.',
+      safeDetail: sanitized,
+    };
+  }
+
+  // 5. Rate Limit / Quota Exceeded (Transient)
+  if (
+    /\b429\b/.test(errStr) ||
+    /RESOURCE_EXHAUSTED/i.test(errStr) ||
+    /quota exceeded/i.test(errStr) ||
+    /rate limit/i.test(errStr)
+  ) {
+    return {
+      code: 'RATE_LIMIT_EXCEEDED',
+      isTransient: true,
+      explanation: 'Gemini API rate limit or quota exceeded.',
+      safeDetail: sanitized,
+    };
+  }
+
+  // 6. Server Unavailable / Gateway Errors (Transient)
+  if (/\b503\b/.test(errStr) || /UNAVAILABLE/i.test(errStr)) {
+    return {
+      code: 'SERVICE_UNAVAILABLE',
+      isTransient: true,
+      explanation: 'Gemini service is temporarily unavailable (503).',
+      safeDetail: sanitized,
+    };
+  }
+
+  if (/\b502\b/.test(errStr) || /BAD_GATEWAY/i.test(errStr)) {
+    return {
+      code: 'BAD_GATEWAY',
+      isTransient: true,
+      explanation: 'Gemini service bad gateway (502).',
+      safeDetail: sanitized,
+    };
+  }
+
+  if (/\b504\b/.test(errStr) || /GATEWAY_TIMEOUT/i.test(errStr)) {
+    return {
+      code: 'GATEWAY_TIMEOUT',
+      isTransient: true,
+      explanation: 'Gemini gateway timeout (504).',
+      safeDetail: sanitized,
+    };
+  }
+
+  if (/\b500\b/.test(errStr) || /INTERNAL/i.test(errStr)) {
+    return {
+      code: 'INTERNAL_ERROR',
+      isTransient: true,
+      explanation: 'Gemini internal server error (500).',
+      safeDetail: sanitized,
+    };
+  }
+
+  // 7. Timeout (Transient)
+  if (
+    /timed out/i.test(errStr) ||
+    /AbortError/i.test(errStr) ||
+    /ETIMEDOUT/i.test(errStr) ||
+    /ESOCKETTIMEDOUT/i.test(errStr)
+  ) {
+    return {
+      code: 'TIMEOUT',
+      isTransient: true,
+      explanation: 'Gemini request timed out.',
+      safeDetail: sanitized,
+    };
+  }
+
+  // 8. Network Failure (Transient)
+  if (
+    /fetch failed/i.test(errStr) ||
+    /ECONNREFUSED/i.test(errStr) ||
+    /ENOTFOUND/i.test(errStr) ||
+    /ECONNRESET/i.test(errStr)
+  ) {
+    return {
+      code: 'NETWORK_FAILURE',
+      isTransient: true,
+      explanation: 'Network connectivity failure connecting to Gemini.',
+      safeDetail: sanitized,
+    };
+  }
+
+  // 9. Invalid Output (Transient / Parse)
+  if (
+    /Empty response from Gemini/i.test(errStr) ||
+    /Unexpected token/i.test(errStr) ||
+    /JSON at position/i.test(errStr) ||
+    /SyntaxError/i.test(errStr)
+  ) {
+    return {
+      code: 'INVALID_OUTPUT',
+      isTransient: true,
+      explanation: 'Gemini returned an empty or unparseable response.',
+      safeDetail: sanitized,
+    };
+  }
+
+  // Default: Generic Transient Service Error
+  return {
+    code: 'SERVICE_ERROR',
+    isTransient: true,
+    explanation: 'Gemini request encountered an unexpected service error.',
+    safeDetail: sanitized,
+  };
+}
+
+/**
+ * Calls Gemini with automatic retries for transient errors.
+ * Uses gemini-3.8-flash as the sole stable default model.
  */
 export async function callGemini(
   prompt: string,
@@ -30,7 +245,8 @@ export async function callGemini(
     throw new Error('GEMINI_API_KEY is not configured in the environment.');
   }
 
-  const model = options.model || 'gemini-2.5-flash';
+  const configuredModel = process.env.GEMINI_MODEL?.trim();
+  const model = options.model || configuredModel || 'gemini-3.8-flash';
   const maxRetries = options.maxRetries ?? 3;
   const timeoutMs = options.timeoutMs ?? 15000;
 
@@ -46,7 +262,7 @@ export async function callGemini(
           model,
           contents: prompt,
           config: {
-            temperature: options.temperature ?? 0.2,
+            temperature: options.temperature ?? 0.1,
           },
         }),
         new Promise<never>((_, reject) =>
@@ -64,10 +280,15 @@ export async function callGemini(
       return text.trim();
     } catch (err: unknown) {
       lastError = err;
-      const isRateLimit = String(err).includes('429') || String(err).includes('RESOURCE_EXHAUSTED');
-      const isTimeout = String(err).includes('timed out');
+      const diag = categorizeGeminiError(err);
 
-      if (attempt < maxRetries && (isRateLimit || isTimeout || String(err).includes('fetch failed'))) {
+      // Do NOT retry permanent errors (auth, model not found, bad request, missing key)
+      if (!diag.isTransient) {
+        break;
+      }
+
+      // Retry transient errors with backoff
+      if (attempt < maxRetries) {
         const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
         await new Promise((res) => setTimeout(res, delay));
         continue;

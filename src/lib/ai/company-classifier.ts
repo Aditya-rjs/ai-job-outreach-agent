@@ -1,381 +1,67 @@
 import { getDb } from '@/db';
 import { companyClassifications } from '@/db/schema';
-import { inArray } from 'drizzle-orm';
-import { callGemini, getGeminiClient } from './gemini-client';
+import { inArray, eq } from 'drizzle-orm';
+import { callGemini, getGeminiClient, categorizeGeminiError, sanitizeSecretText, type CategorizedGeminiError } from './gemini-client';
 import { normalizeCompanyName, formatCompanyDisplayName } from '@/lib/utils/company';
 
-export type ClassificationStatus = 'RELEVANT' | 'IRRELEVANT' | 'UNVERIFIED';
-export type ClassificationSource = 'gemini' | 'heuristic' | 'unverified';
+export type ClassificationStatus = 'RELEVANT' | 'IRRELEVANT' | 'NEEDS_REVIEW' | 'PENDING' | 'FAILED';
+export type ClassificationSource = 'gemini';
+
+export interface CompanyEvaluationInput {
+  companyName: string;
+  normalizedName: string;
+  website?: string;
+  location?: string;
+  designationContext?: string;
+}
 
 export interface CompanyClassificationResult {
   companyName: string;
   normalizedName: string;
-  relevant: boolean | null; // true = RELEVANT, false = IRRELEVANT, null = UNVERIFIED
-  confidence: number;
+  relevant: boolean | null; // true = RELEVANT, false = IRRELEVANT, null = NEEDS_REVIEW / PENDING
+  confidence: number | null;
   reason: string;
   status: ClassificationStatus;
   source: ClassificationSource;
+  geminiModel: string;
+  retryCount: number;
+  lastErrorCategory?: string | null;
+  nextRetryAt?: string | null;
 }
 
-export type GeminiFailureCode =
-  | 'API_KEY_MISSING'
-  | 'AUTH_REJECTED'
-  | 'RATE_LIMIT_EXCEEDED'
-  | 'TIMEOUT'
-  | 'NETWORK_FAILURE'
-  | 'SERVICE_ERROR'
-  | 'INVALID_OUTPUT';
-
-export interface GeminiFailureDiagnostic {
-  code: GeminiFailureCode;
-  explanation: string;
-  safeDetail: string;
-}
-
-// In-memory cache for ultra-fast lookup within the current process/batch
+// In-memory cache for fast lookup within the current process/batch
 const memoryCache = new Map<string, CompanyClassificationResult>();
 
-/**
- * Resets the in-memory cache. Useful for test suites and isolation.
- */
 export function resetClassificationMemoryCache(): void {
   memoryCache.clear();
 }
 
 /**
- * Sanitizes error strings to prevent leaking API keys, OAuth tokens, secrets, or sensitive data.
+ * Computes exponential backoff retry time:
+ * Failure 1: 2 minutes
+ * Failure 2: 4 minutes
+ * Failure 3: 8 minutes
+ * Failure 4: 15 minutes
+ * Failure 5+: 15 minutes
  */
-export function sanitizeDiagnostic(str: string): string {
-  if (!str) return '';
-  return str
-    .replace(/AIza[0-9A-Za-z-_]+/g, '[REDACTED_API_KEY]')
-    .replace(/ya29\.[0-9A-Za-z-_]+/g, '[REDACTED_ACCESS_TOKEN]')
-    .replace(/1\/\/[0-9A-Za-z-_]+/g, '[REDACTED_REFRESH_TOKEN]')
-    .replace(/(?:key|secret|token|password|auth|authorization)=[^&\s]+/gi, '$1=[REDACTED]')
-    .replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, 'Bearer [REDACTED]')
-    .slice(0, 300);
-}
-
-/**
- * Diagnoses Gemini failures into distinct categories without falsely claiming the API key is missing.
- */
-export function diagnoseGeminiFailure(err: unknown): GeminiFailureDiagnostic {
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
-  if (!apiKey) {
-    return {
-      code: 'API_KEY_MISSING',
-      explanation: 'Gemini classification unavailable: GEMINI_API_KEY is not configured.',
-      safeDetail: 'GEMINI_API_KEY environment variable is empty or missing.',
-    };
+export function computeNextRetryTime(retryCount: number, fromDate: Date = new Date()): string {
+  let delayMinutes: number;
+  if (retryCount <= 1) {
+    delayMinutes = 2;
+  } else if (retryCount === 2) {
+    delayMinutes = 4;
+  } else if (retryCount === 3) {
+    delayMinutes = 8;
+  } else {
+    delayMinutes = 15;
   }
-
-  const errStr = err instanceof Error ? err.message : String(err || '');
-  const sanitized = sanitizeDiagnostic(errStr);
-
-  // 1. Authentication / Invalid API Key
-  if (
-    /API_KEY_INVALID/i.test(errStr) ||
-    /api key not valid/i.test(errStr) ||
-    /PERMISSION_DENIED/i.test(errStr) ||
-    /\b401\b/.test(errStr) ||
-    /\b403\b/.test(errStr) ||
-    /invalid api key/i.test(errStr) ||
-    /unauthorized/i.test(errStr)
-  ) {
-    return {
-      code: 'AUTH_REJECTED',
-      explanation: 'Gemini classification unavailable: API key rejected or unauthorized.',
-      safeDetail: sanitized,
-    };
-  }
-
-  // 2. Rate Limit / Quota Exceeded
-  if (
-    /RESOURCE_EXHAUSTED/i.test(errStr) ||
-    /\b429\b/.test(errStr) ||
-    /quota exceeded/i.test(errStr) ||
-    /rate limit/i.test(errStr)
-  ) {
-    return {
-      code: 'RATE_LIMIT_EXCEEDED',
-      explanation: 'Gemini classification unavailable: Rate limit or quota exceeded.',
-      safeDetail: sanitized,
-    };
-  }
-
-  // 3. Timeout
-  if (
-    /timed out/i.test(errStr) ||
-    /AbortError/i.test(errStr) ||
-    /ETIMEDOUT/i.test(errStr) ||
-    /ESOCKETTIMEDOUT/i.test(errStr)
-  ) {
-    return {
-      code: 'TIMEOUT',
-      explanation: 'Gemini classification unavailable: Network connection timed out.',
-      safeDetail: sanitized,
-    };
-  }
-
-  // 4. Network / Connectivity Error
-  if (
-    /fetch failed/i.test(errStr) ||
-    /ECONNREFUSED/i.test(errStr) ||
-    /ENOTFOUND/i.test(errStr) ||
-    /ECONNRESET/i.test(errStr)
-  ) {
-    return {
-      code: 'NETWORK_FAILURE',
-      explanation: 'Gemini classification unavailable: Network connection error.',
-      safeDetail: sanitized,
-    };
-  }
-
-  // 5. Invalid / Unusable Model Response
-  if (
-    /Gemini response is not an array/i.test(errStr) ||
-    /Empty response from Gemini/i.test(errStr) ||
-    /Unexpected token/i.test(errStr) ||
-    /JSON at position/i.test(errStr) ||
-    /SyntaxError/i.test(errStr)
-  ) {
-    return {
-      code: 'INVALID_OUTPUT',
-      explanation: 'Gemini classification unavailable: Invalid response format received from model.',
-      safeDetail: sanitized,
-    };
-  }
-
-  // 6. Generic Service Error
-  return {
-    code: 'SERVICE_ERROR',
-    explanation: 'Gemini classification unavailable: Gemini service temporarily unavailable.',
-    safeDetail: sanitized,
-  };
-}
-
-// Known technology and enterprise engineering organizations
-const KNOWN_TECH_COMPANIES = new Set([
-  // Global Big Tech & Cloud
-  'google', 'microsoft', 'amazon', 'apple', 'meta', 'facebook', 'netflix', 'adobe',
-  'salesforce', 'oracle', 'ibm', 'intel', 'cisco', 'nvidia', 'uber', 'airbnb', 'spotify',
-  'stripe', 'palantir', 'datadog', 'snowflake', 'atlassian', 'autodesk', 'servicenow',
-  'vmware', 'amd', 'qualcomm', 'broadcom', 'dell', 'hp', 'lenovo', 'sap', 'workday',
-  'twilio', 'cloudflare', 'crowdstrike', 'okta', 'zoom', 'dropbox', 'box', 'mongodb',
-  'confluent', 'elastic', 'dynatrace', 'splunk', 'databricks', 'openai', 'anthropic',
-
-  // Major IT Services & Consultancies
-  'tcs', 'tata consultancy', 'tata consultancy services', 'infosys', 'wipro', 'hcl',
-  'hcltech', 'hcl technologies', 'cognizant', 'accenture', 'capgemini', 'deloitte',
-  'tech mahindra', 'lti', 'ltimindtree', 'mindtree', 'mphasis', 'persistent',
-  'persistent systems', 'kpit', 'hexaware', 'cyient', 'sonata software', 'birlasoft',
-  'l&t technology services', 'ltts', 'tata elxsi', 'zensar',
-
-  // Travel Technology, Enterprise Products & GCCs
-  'sabre', 'sabre corporation', 'sabre global capability center', 'sabre gcc',
-  'sabre travel technologies', 'amadeus', 'travelport',
-  'zoho', 'freshworks', 'browserstack', 'postman', 'chargebee', 'hasura', 'druva',
-
-  // FinTech & Digital Products
-  'jpmorgan', 'jpmorgan chase', 'goldman sachs', 'morgan stanley', 'barclays', 'hsbc',
-  'wells fargo', 'bny mellon', 'fidelity', 'visa', 'mastercard', 'paypal', 'razorpay',
-  'phonepe', 'paytm', 'cred', 'swiggy', 'zomato', 'flipkart', 'meesho', 'zepto',
-  'blinkit', 'ola'
-]);
-
-// Patterns that strongly indicate Global Capability Centers (GCCs), Technical Captives, or Engineering Centers
-const GCC_AND_CENTER_PATTERNS = [
-  /\bglobal capability center\b/i,
-  /\bcapability center\b/i,
-  /\bgcc\b/i,
-  /\btechnology center\b/i,
-  /\btech center\b/i,
-  /\bsoftware center\b/i,
-  /\bengineering center\b/i,
-  /\bdigital center\b/i,
-  /\bdigital lab(?:s)?\b/i,
-  /\bsoftware lab(?:s)?\b/i,
-  /\br&d center\b/i,
-  /\bresearch (?:&|and) development\b/i,
-  /\btechnology solutions\b/i,
-  /\bsoftware solutions\b/i,
-  /\bcloud solutions\b/i,
-  /\bit services\b/i,
-  /\bsoftware services\b/i,
-  /\bdigital solutions\b/i,
-  /\bengineering solutions\b/i,
-];
-
-// Strong, unambiguous tech keyword patterns (with word boundaries to avoid false positives)
-const STRONG_TECH_PATTERNS = [
-  /\btech\b/i,
-  /\btechnology\b/i,
-  /\btechnologies\b/i,
-  /\bsoftware\b/i,
-  /\bsystems\b/i,
-  /\bcloud\b/i,
-  /\bdevops\b/i,
-  /\bcybersecurity\b/i,
-  /\bcyber\b/i,
-  /\binfosec\b/i,
-  /\bdata analytics\b/i,
-  /\bdata engineering\b/i,
-  /\bdata science\b/i,
-  /\bartificial intelligence\b/i,
-  /\bmachine learning\b/i,
-  /\bcomputing\b/i,
-  /\binformatics\b/i,
-  /\bdeveloper\b/i,
-  /\bdevelopment\b/i,
-  /\bsaas\b/i,
-  /\binformation technology\b/i,
-  /\binfrastructure\b/i,
-  /\btelecom(?:munications)?\b/i,
-  /\binteractive\b/i,
-  /\bdigital\b/i,
-  /\bai\b/i,
-  /\bit\b/i,
-];
-
-// Known non-technology industries
-const NON_TECH_PATTERNS = [
-  /\bconstruction\b/i,
-  /\bcement\b/i,
-  /\bplumbing\b/i,
-  /\breal estate\b/i,
-  /\brealty\b/i,
-  /\bbuilders\b/i,
-  /\bfurniture\b/i,
-  /\btextiles\b/i,
-  /\bbakery\b/i,
-  /\brestaurant\b/i,
-  /\bcafe\b/i,
-  /\blaundry\b/i,
-  /\bsalon\b/i,
-  /\bspa\b/i,
-  /\bmining\b/i,
-  /\bdrilling\b/i,
-  /\bcarpentry\b/i,
-  /\bfarming\b/i,
-  /\bpoultry\b/i,
-  /\bdairy\b/i,
-];
-
-/**
- * Robust heuristic classifier used as a controlled fallback when Gemini is unavailable.
- * Distinguishes RELEVANT, IRRELEVANT, and UNVERIFIED/NEEDS_REVIEW without falsely claiming
- * that unverified companies are irrelevant or misdiagnosing the Gemini failure cause.
- */
-export function heuristicClassify(
-  companyName: string,
-  normalizedName: string,
-  geminiFailure?: GeminiFailureDiagnostic
-): CompanyClassificationResult {
-  const cleanNorm = normalizeCompanyName(companyName) || normalizedName;
-
-  // 1. Check known technology companies database (exact, cleanNorm, and word boundaries)
-  if (KNOWN_TECH_COMPANIES.has(normalizedName) || KNOWN_TECH_COMPANIES.has(cleanNorm)) {
-    return {
-      companyName,
-      normalizedName,
-      relevant: true,
-      confidence: 0.95,
-      status: 'RELEVANT',
-      source: 'heuristic',
-      reason: 'Heuristic match: recognized technology/engineering company.',
-    };
-  }
-
-  // Check if any recognized technology giant appears as a distinct word in the company name
-  for (const techName of KNOWN_TECH_COMPANIES) {
-    if (techName.length >= 3) {
-      const regex = new RegExp(`\\b${techName}\\b`, 'i');
-      if (regex.test(normalizedName) || regex.test(companyName)) {
-        return {
-          companyName,
-          normalizedName,
-          relevant: true,
-          confidence: 0.95,
-          status: 'RELEVANT',
-          source: 'heuristic',
-          reason: 'Heuristic match: recognized technology/engineering company.',
-        };
-      }
-    }
-  }
-
-  // 2. Check GCC and Engineering Center patterns
-  for (const pat of GCC_AND_CENTER_PATTERNS) {
-    if (pat.test(normalizedName) || pat.test(companyName)) {
-      return {
-        companyName,
-        normalizedName,
-        relevant: true,
-        confidence: 0.90,
-        status: 'RELEVANT',
-        source: 'heuristic',
-        reason: 'Heuristic match: recognized technology/engineering company (capability center or technical operations).',
-      };
-    }
-  }
-
-  // 3. Check strong technology keywords with word boundaries
-  for (const pat of STRONG_TECH_PATTERNS) {
-    if (pat.test(normalizedName) || pat.test(companyName)) {
-      return {
-        companyName,
-        normalizedName,
-        relevant: true,
-        confidence: 0.85,
-        status: 'RELEVANT',
-        source: 'heuristic',
-        reason: 'Heuristic match: recognized technology/engineering company.',
-      };
-    }
-  }
-
-  // 4. Check known non-technology industries
-  for (const pat of NON_TECH_PATTERNS) {
-    if (pat.test(normalizedName) || pat.test(companyName)) {
-      return {
-        companyName,
-        normalizedName,
-        relevant: false,
-        confidence: 0.90,
-        status: 'IRRELEVANT',
-        source: 'heuristic',
-        reason: 'Heuristic match: recognized non-technology industry.',
-      };
-    }
-  }
-
-  // 5. Unknown / Ambiguous Company
-  // If Gemini is unavailable and no confident heuristic match exists, mark as UNVERIFIED.
-  // Never falsely mark an unverified company as IRRELEVANT.
-  let unverifiedReason = 'Unable to verify CS/IT relevance: Gemini classification unavailable and no confident heuristic match.';
-
-  if (geminiFailure) {
-    if (geminiFailure.code === 'API_KEY_MISSING') {
-      unverifiedReason = 'Gemini classification unavailable: GEMINI_API_KEY is not configured.';
-    } else {
-      unverifiedReason = `Unable to verify CS/IT relevance: ${geminiFailure.explanation.replace('Gemini classification unavailable: ', '')} and no confident heuristic match.`;
-    }
-  }
-
-  return {
-    companyName,
-    normalizedName,
-    relevant: null,
-    confidence: 0.0,
-    status: 'UNVERIFIED',
-    source: 'unverified',
-    reason: unverifiedReason,
-  };
+  return new Date(fromDate.getTime() + delayMinutes * 60 * 1000).toISOString();
 }
 
 /**
  * Loads cached classifications from SQLite database.
- * Only returns confident classifications; ignores stale or unverified entries so they can be re-evaluated.
+ * Only returns confident final classifications (RELEVANT, IRRELEVANT, NEEDS_REVIEW) that came from Gemini.
+ * Ignores old heuristic entries and pending entries so they can be processed appropriately.
  */
 function getCachedFromDb(normalizedNames: string[]): Map<string, CompanyClassificationResult> {
   const db = getDb();
@@ -391,26 +77,27 @@ function getCachedFromDb(normalizedNames: string[]): Map<string, CompanyClassifi
       .all();
 
     for (const r of records) {
-      // Ignore stale unverified fallback records from previous runs
+      // Only reuse authoritative, completed Gemini evaluations
       if (
-        r.reason.includes('Unable to verify') ||
-        r.reason.includes('without Gemini API key') ||
-        r.confidence <= 0.5
+        r.classificationResult !== 'RELEVANT' &&
+        r.classificationResult !== 'IRRELEVANT' &&
+        r.classificationResult !== 'NEEDS_REVIEW'
       ) {
         continue;
       }
 
-      const status: ClassificationStatus = r.isRelevant ? 'RELEVANT' : 'IRRELEVANT';
-      const source: ClassificationSource = r.reason.startsWith('AI classification') ? 'gemini' : 'heuristic';
-
       const item: CompanyClassificationResult = {
         companyName: r.companyName,
         normalizedName: r.normalizedName,
-        relevant: Boolean(r.isRelevant),
+        relevant: r.isRelevant,
         confidence: r.confidence,
         reason: r.reason,
-        status,
-        source,
+        status: r.classificationResult as ClassificationStatus,
+        source: 'gemini',
+        geminiModel: r.geminiModel,
+        retryCount: r.retryCount,
+        lastErrorCategory: r.lastErrorCategory,
+        nextRetryAt: r.nextRetryAt,
       };
       cachedMap.set(r.normalizedName, item);
       memoryCache.set(r.normalizedName, item);
@@ -423,29 +110,28 @@ function getCachedFromDb(normalizedNames: string[]): Map<string, CompanyClassifi
 }
 
 /**
- * Saves newly classified companies to the SQLite database.
- * Only saves confident determinations (RELEVANT or IRRELEVANT).
- * Unverified companies are omitted from persistent DB cache to prevent locking transient failures permanently.
+ * Saves or updates company classifications in SQLite.
  */
-function saveClassificationsToDb(results: CompanyClassificationResult[]): void {
+export function saveClassificationsToDb(results: CompanyClassificationResult[]): void {
   const db = getDb();
   if (results.length === 0) return;
 
   const now = new Date().toISOString();
   for (const res of results) {
-    // Only persist confident, resolved classifications
-    if (res.status !== 'RELEVANT' && res.status !== 'IRRELEVANT') {
-      continue;
-    }
-
     try {
       db.insert(companyClassifications)
         .values({
           normalizedName: res.normalizedName,
           companyName: res.companyName,
-          isRelevant: Boolean(res.relevant),
+          isRelevant: res.relevant,
           confidence: res.confidence,
           reason: res.reason,
+          classificationSource: 'gemini',
+          geminiModel: res.geminiModel,
+          classificationResult: res.status,
+          retryCount: res.retryCount,
+          lastErrorCategory: res.lastErrorCategory || null,
+          nextRetryAt: res.nextRetryAt || null,
           createdAt: now,
           updatedAt: now,
         })
@@ -453,9 +139,15 @@ function saveClassificationsToDb(results: CompanyClassificationResult[]): void {
           target: companyClassifications.normalizedName,
           set: {
             companyName: res.companyName,
-            isRelevant: Boolean(res.relevant),
+            isRelevant: res.relevant,
             confidence: res.confidence,
             reason: res.reason,
+            classificationSource: 'gemini',
+            geminiModel: res.geminiModel,
+            classificationResult: res.status,
+            retryCount: res.retryCount,
+            lastErrorCategory: res.lastErrorCategory || null,
+            nextRetryAt: res.nextRetryAt || null,
             updatedAt: now,
           },
         })
@@ -467,45 +159,63 @@ function saveClassificationsToDb(results: CompanyClassificationResult[]): void {
 }
 
 /**
- * Calls Gemini to classify a batch of companies for CS/IT/Software relevance.
+ * Constructs the rigorous, authoritative classification prompt for Gemini.
  */
-async function classifyWithGeminiBatch(
-  companies: { companyName: string; normalizedName: string }[],
-  geminiCaller?: (prompt: string) => Promise<string>
-): Promise<CompanyClassificationResult[]> {
-  const prompt = `You are an expert technical recruiter evaluating companies for Computer Science, Information Technology, and Software Engineering outreach.
+function buildClassificationPrompt(companies: CompanyEvaluationInput[]): string {
+  const descriptions = companies
+    .map((c, i) => {
+      const parts = [`${i + 1}. Company: "${c.companyName}"`];
+      if (c.website) parts.push(`Website: ${c.website}`);
+      if (c.location) parts.push(`Location: ${c.location}`);
+      if (c.designationContext) parts.push(`Contact/Role Context: ${c.designationContext}`);
+      return parts.join(' | ');
+    })
+    .join('\n');
 
-Target Domains (RELEVANT):
-- Computer Science / Software Engineering / IT Services
-- Web & Mobile Development
-- Cloud, DevOps, Infrastructure
-- Data Engineering, AI/ML, Data Science
-- Cybersecurity, Information Security
-- SaaS & B2B/B2C Technology Products
-- Global Capability Centers (GCCs), Technical Captive Centers, and Engineering R&D Centers
-- FinTech & Digital Banking with substantial in-house software teams
-- Modern enterprises with significant in-house software engineering operations
+  return `You are an expert technical recruitment evaluator assessing companies to determine if they are relevant employment targets for a Computer Science, Information Technology, and Software Engineering graduate candidate.
 
-Irrelevant:
-- Purely non-technical companies with no meaningful in-house software engineering roles (e.g. local retail store, residential real estate brokerage, construction firm, local bakery, plumbing service).
+=== CRITICAL EVALUATION RULES ===
+1. SOLE OBJECTIVE: Determine whether each company offers meaningful Computer Science, Information Technology, or Software Engineering employment opportunities.
+2. What is RELEVANT (relevant = true):
+   - Companies whose primary business is software development, cloud computing, IT services, cybersecurity, AI/ML, data platforms, SaaS, fintech, or digital products.
+   - Major enterprise organizations with substantial in-house software engineering divisions, Global Capability Centers (GCCs), or technical captive units (e.g., major financial institutions, telecom software divisions, e-commerce tech, automotive software labs).
+3. What is IRRELEVANT (relevant = false):
+   - Companies that merely *use* software or off-the-shelf IT internally as an end user (e.g., civil construction, residential real estate brokerages, local retail stores, bakeries, dental clinics, traditional manufacturing without digital engineering). Using computers, email, or buying SaaS does NOT make a company a CS/IT employer.
+4. What is NEEDS REVIEW (relevant = null):
+   - Set relevant = null ONLY when public factual information about the company is genuinely too ambiguous or insufficient to determine whether it employs software/IT professionals.
+   - If the company is a known brand or tech organization (e.g. HCL, TCS, Infosys, LoanTap, InfoEdge, TutorBin, Microsoft, Google), evaluate based on your authoritative industry knowledge.
 
-Companies to evaluate:
-${JSON.stringify(companies.map((c) => c.companyName), null, 2)}
+=== COMPANIES TO EVALUATE ===
+${descriptions}
 
-Respond ONLY with a JSON array of objects matching this schema:
+=== OUTPUT FORMAT ===
+Respond ONLY with a valid JSON array of objects matching this exact schema:
 [
   {
     "company": "Exact input company name",
-    "relevant": true or false,
+    "relevant": true | false | null,
     "confidence": number between 0.0 and 1.0,
-    "reason": "Concise 1-sentence factual justification"
+    "reason": "1-sentence factual justification"
   }
 ]
-Do not include markdown code fences or any other text.`;
+Do not include markdown code fences or any explanatory text outside the JSON array.`;
+}
+
+/**
+ * Calls Gemini to classify a batch of companies for CS/IT/Software relevance.
+ * Gemini is the sole authority for this evaluation.
+ */
+export async function classifyWithGeminiBatch(
+  companies: CompanyEvaluationInput[],
+  geminiCaller?: (prompt: string) => Promise<string>
+): Promise<CompanyClassificationResult[]> {
+  const configuredModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
+  const prompt = buildClassificationPrompt(companies);
 
   const responseText = typeof geminiCaller === 'function'
     ? await geminiCaller(prompt)
-    : await callGemini(prompt, { temperature: 0.1 });
+    : await callGemini(prompt, { model: configuredModel, temperature: 0.1 });
+
   const cleaned = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
   const parsed = JSON.parse(cleaned);
 
@@ -513,40 +223,80 @@ Do not include markdown code fences or any other text.`;
     throw new Error('Gemini response is not an array');
   }
 
-  const resultMap = new Map<string, { relevant: boolean; confidence: number; reason: string }>();
+  const resultMap = new Map<string, { relevant: boolean | null; confidence: number; reason: string }>();
   for (const item of parsed) {
-    if (item && typeof item.company === 'string' && typeof item.relevant === 'boolean') {
+    if (item && typeof item.company === 'string') {
       const norm = normalizeCompanyName(item.company);
-      const category = item.relevant ? 'Technology/engineering company.' : 'Non-technology company.';
-      const detail = typeof item.reason === 'string' && item.reason.trim() ? item.reason.trim() : '';
-      const formattedReason = detail
-        ? `AI classification: ${category} ${detail}`
-        : `AI classification: ${category}`;
+      const isRel = typeof item.relevant === 'boolean' ? item.relevant : null;
+      const conf = typeof item.confidence === 'number' ? Math.min(Math.max(item.confidence, 0), 1) : 0.9;
+      const cleanReason = typeof item.reason === 'string' && item.reason.trim() ? item.reason.trim() : '';
 
       resultMap.set(norm, {
-        relevant: item.relevant,
-        confidence: typeof item.confidence === 'number' ? Math.min(Math.max(item.confidence, 0), 1) : 0.9,
-        reason: formattedReason,
+        relevant: isRel,
+        confidence: conf,
+        reason: cleanReason,
       });
     }
   }
 
   const results: CompanyClassificationResult[] = [];
   for (const c of companies) {
-    const aiResult = resultMap.get(c.normalizedName) || resultMap.get(normalizeCompanyName(c.companyName));
-    if (aiResult) {
+    const ai = resultMap.get(c.normalizedName) || resultMap.get(normalizeCompanyName(c.companyName));
+
+    if (ai) {
+      if (ai.relevant === true) {
+        results.push({
+          companyName: c.companyName,
+          normalizedName: c.normalizedName,
+          relevant: true,
+          confidence: ai.confidence,
+          status: 'RELEVANT',
+          source: 'gemini',
+          geminiModel: configuredModel,
+          retryCount: 0,
+          reason: ai.reason ? `Relevant — Gemini: ${ai.reason}` : 'Relevant — Gemini',
+        });
+      } else if (ai.relevant === false) {
+        results.push({
+          companyName: c.companyName,
+          normalizedName: c.normalizedName,
+          relevant: false,
+          confidence: ai.confidence,
+          status: 'IRRELEVANT',
+          source: 'gemini',
+          geminiModel: configuredModel,
+          retryCount: 0,
+          reason: ai.reason ? `Not Relevant — Gemini: ${ai.reason}` : 'Not Relevant — Gemini',
+        });
+      } else {
+        // Genuine ambiguity from Gemini
+        results.push({
+          companyName: c.companyName,
+          normalizedName: c.normalizedName,
+          relevant: null,
+          confidence: ai.confidence,
+          status: 'NEEDS_REVIEW',
+          source: 'gemini',
+          geminiModel: configuredModel,
+          retryCount: 0,
+          reason: ai.reason
+            ? `Needs Review — Gemini could not confidently determine relevance: ${ai.reason}`
+            : 'Needs Review — Gemini could not confidently determine relevance.',
+        });
+      }
+    } else {
+      // Model omitted this company from the array -> mark NEEDS_REVIEW
       results.push({
         companyName: c.companyName,
         normalizedName: c.normalizedName,
-        relevant: aiResult.relevant,
-        confidence: aiResult.confidence,
-        status: aiResult.relevant ? 'RELEVANT' : 'IRRELEVANT',
+        relevant: null,
+        confidence: 0.5,
+        status: 'NEEDS_REVIEW',
         source: 'gemini',
-        reason: aiResult.reason,
+        geminiModel: configuredModel,
+        retryCount: 0,
+        reason: 'Needs Review — Gemini could not confidently determine relevance.',
       });
-    } else {
-      // Fallback heuristic if a specific company was omitted from model array
-      results.push(heuristicClassify(c.companyName, c.normalizedName));
     }
   }
 
@@ -555,26 +305,37 @@ Do not include markdown code fences or any other text.`;
 
 /**
  * Main company classification entry point.
- * Prioritizes Gemini AI when available, using robust heuristic classification as a controlled fallback.
- * Guarantees company-level classification shared by all contacts of that normalized company.
+ * Gemini is the sole authority for all company relevance decisions.
+ *
+ * If Gemini fails temporarily (rate limits, timeouts, service errors), records are marked
+ * PENDING with an exponential retry schedule starting at 2 minutes.
+ *
+ * If Gemini fails permanently (invalid key, bad request, model not found), records are marked
+ * FAILED with the exact configuration diagnostic.
  */
 export async function classifyCompanies(
-  companies: { rawName: string }[],
-  geminiClientOverride?: typeof callGemini | null
+  companies: CompanyEvaluationInput[],
+  geminiClientOverride?: ((prompt: string) => Promise<string>) | null
 ): Promise<Map<string, CompanyClassificationResult>> {
   const finalMap = new Map<string, CompanyClassificationResult>();
-  const toLookupInDb: { companyName: string; normalizedName: string }[] = [];
+  const toLookupInDb: CompanyEvaluationInput[] = [];
 
   // 1. Check in-memory cache
   for (const c of companies) {
-    const normalized = normalizeCompanyName(c.rawName);
+    const normalized = c.normalizedName ? c.normalizedName.toLowerCase().trim() : normalizeCompanyName(c.companyName);
     if (!normalized) continue;
 
-    const display = formatCompanyDisplayName(c.rawName);
+    const display = formatCompanyDisplayName(c.companyName);
+    const item: CompanyEvaluationInput = {
+      ...c,
+      companyName: display,
+      normalizedName: normalized,
+    };
+
     if (memoryCache.has(normalized)) {
       finalMap.set(normalized, memoryCache.get(normalized)!);
     } else {
-      toLookupInDb.push({ companyName: display, normalizedName: normalized });
+      toLookupInDb.push(item);
     }
   }
 
@@ -582,9 +343,9 @@ export async function classifyCompanies(
     return finalMap;
   }
 
-  // 2. Check SQLite database cache
+  // 2. Check SQLite database cache for authoritative Gemini evaluations
   const dbCached = getCachedFromDb(toLookupInDb.map((c) => c.normalizedName));
-  const toClassify: { companyName: string; normalizedName: string }[] = [];
+  const toClassify: CompanyEvaluationInput[] = [];
   const newlyClassified: CompanyClassificationResult[] = [];
 
   for (const c of toLookupInDb) {
@@ -601,14 +362,15 @@ export async function classifyCompanies(
     return finalMap;
   }
 
-  // 3. Classify uncached companies
+  // 3. Classify uncached companies via Gemini in controlled batches
+  const configuredModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
   const hasGemini = Boolean(geminiClientOverride !== null && (geminiClientOverride !== undefined || getGeminiClient()));
 
-  // Batch process in chunks of 10
+  // Controlled batch size of 10 to respect Gemini rate limits
   const BATCH_SIZE = 10;
+
   for (let i = 0; i < toClassify.length; i += BATCH_SIZE) {
     const chunk = toClassify.slice(i, i + BATCH_SIZE);
-    let geminiFailureDiag: GeminiFailureDiagnostic | undefined;
 
     if (hasGemini) {
       try {
@@ -618,25 +380,83 @@ export async function classifyCompanies(
           memoryCache.set(res.normalizedName, res);
           newlyClassified.push(res);
         }
+        // Small pacing delay between batches to protect against burst rate limits
+        if (i + BATCH_SIZE < toClassify.length) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
         continue;
       } catch (err: unknown) {
-        geminiFailureDiag = diagnoseGeminiFailure(err);
-        console.warn(`[CompanyClassifier] Gemini batch classification failed: ${geminiFailureDiag.safeDetail}`);
+        const diag = categorizeGeminiError(err);
+        console.warn(`[CompanyClassifier] Gemini batch classification failed (${diag.code}): ${diag.safeDetail}`);
+
+        // Handle failure for every company in this chunk
+        for (const item of chunk) {
+          if (diag.isTransient) {
+            // Transient failure -> PENDING with 2-minute initial retry
+            const retryCount = 1;
+            const nextRetryAt = computeNextRetryTime(retryCount);
+            const pendingResult: CompanyClassificationResult = {
+              companyName: item.companyName,
+              normalizedName: item.normalizedName,
+              relevant: null,
+              confidence: null,
+              status: 'PENDING',
+              source: 'gemini',
+              geminiModel: configuredModel,
+              retryCount,
+              lastErrorCategory: diag.code,
+              nextRetryAt,
+              reason: 'Classification Pending — Gemini temporarily unavailable. Will retry automatically.',
+            };
+            finalMap.set(item.normalizedName, pendingResult);
+            memoryCache.set(item.normalizedName, pendingResult);
+            newlyClassified.push(pendingResult);
+          } else {
+            // Permanent configuration/auth/model error -> FAILED
+            const failedResult: CompanyClassificationResult = {
+              companyName: item.companyName,
+              normalizedName: item.normalizedName,
+              relevant: null,
+              confidence: null,
+              status: 'FAILED',
+              source: 'gemini',
+              geminiModel: configuredModel,
+              retryCount: 0,
+              lastErrorCategory: diag.code,
+              nextRetryAt: null,
+              reason: `Gemini configuration error: ${diag.explanation}`,
+            };
+            finalMap.set(item.normalizedName, failedResult);
+            memoryCache.set(item.normalizedName, failedResult);
+            newlyClassified.push(failedResult);
+          }
+        }
       }
     } else {
-      geminiFailureDiag = diagnoseGeminiFailure(new Error('GEMINI_API_KEY is not configured in the environment.'));
-    }
-
-    // Controlled heuristic fallback if Gemini is absent or failed
-    for (const item of chunk) {
-      const fallback = heuristicClassify(item.companyName, item.normalizedName, geminiFailureDiag);
-      finalMap.set(item.normalizedName, fallback);
-      memoryCache.set(item.normalizedName, fallback);
-      newlyClassified.push(fallback);
+      // GEMINI_API_KEY is not configured
+      const diag = categorizeGeminiError(new Error('GEMINI_API_KEY is not configured in the environment.'));
+      for (const item of chunk) {
+        const missingKeyResult: CompanyClassificationResult = {
+          companyName: item.companyName,
+          normalizedName: item.normalizedName,
+          relevant: null,
+          confidence: null,
+          status: 'FAILED',
+          source: 'gemini',
+          geminiModel: configuredModel,
+          retryCount: 0,
+          lastErrorCategory: diag.code,
+          nextRetryAt: null,
+          reason: `Gemini configuration error: ${diag.explanation}`,
+        };
+        finalMap.set(item.normalizedName, missingKeyResult);
+        memoryCache.set(item.normalizedName, missingKeyResult);
+        newlyClassified.push(missingKeyResult);
+      }
     }
   }
 
-  // 4. Save newly classified confident companies to database
+  // 4. Persist all newly evaluated and pending records in SQLite
   if (newlyClassified.length > 0) {
     saveClassificationsToDb(newlyClassified);
   }

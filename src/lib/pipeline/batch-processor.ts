@@ -94,7 +94,7 @@ export async function processBatchFile(
       relevanceConfidence: number | null;
       relevanceReason: string | null;
       companyDiagnostic?: string;
-      status: 'queued' | 'skipped' | 'discovered';
+      status: 'queued' | 'skipped' | 'discovered' | 'uncertain';
     }
 
     const candidates: ProcessedCandidate[] = [];
@@ -217,20 +217,30 @@ export async function processBatchFile(
       }
     }
 
-    // 5. Group companies and classify
-    const uniqueCompanies = new Map<string, string>();
+    // 5. Group companies and collect context for Gemini
+    const uniqueCompanies = new Map<string, {
+      companyName: string;
+      normalizedName: string;
+      website?: string;
+      location?: string;
+      designationContext?: string;
+    }>();
+
     for (const c of candidates) {
       if (c.emailValid && !c.isDuplicate && c.normalizedCompany) {
         if (!uniqueCompanies.has(c.normalizedCompany)) {
-          uniqueCompanies.set(c.normalizedCompany, c.companyName);
+          uniqueCompanies.set(c.normalizedCompany, {
+            companyName: c.companyName,
+            normalizedName: c.normalizedCompany,
+            website: c.companyWebsite,
+            location: c.companyLocation,
+            designationContext: c.designation,
+          });
         }
       }
     }
 
-    const companiesToClassify = Array.from(uniqueCompanies.entries()).map(([, rawName]) => ({
-      rawName,
-    }));
-
+    const companiesToClassify = Array.from(uniqueCompanies.values());
     const classificationMap = await classifyCompanies(companiesToClassify);
 
     // 6. Assign classification and determine final status
@@ -238,7 +248,6 @@ export async function processBatchFile(
     let irrelevantCompaniesCount = 0;
     const classifiedRelevantSet = new Set<string>();
     const classifiedIrrelevantSet = new Set<string>();
-    const classifiedUnverifiedSet = new Set<string>();
 
     for (const c of candidates) {
       if (!c.emailValid || c.isDuplicate) continue;
@@ -249,25 +258,25 @@ export async function processBatchFile(
         c.relevanceConfidence = classification.confidence;
         c.relevanceReason = classification.reason;
 
-        if (classification.status === 'RELEVANT' || classification.relevant === true) {
+        if (classification.status === 'RELEVANT') {
           c.status = 'queued';
           classifiedRelevantSet.add(c.normalizedCompany);
-        } else if (classification.status === 'IRRELEVANT' || classification.relevant === false) {
+        } else if (classification.status === 'IRRELEVANT') {
           c.status = 'skipped';
           classifiedIrrelevantSet.add(c.normalizedCompany);
-        } else {
-          // UNVERIFIED / NEEDS_REVIEW: keep isRelevant = null and do not queue
+        } else if (classification.status === 'PENDING') {
+          c.status = 'uncertain';
           c.isRelevant = null;
-          c.status = 'skipped';
-          classifiedUnverifiedSet.add(c.normalizedCompany);
+        } else {
+          // NEEDS_REVIEW or FAILED
+          c.status = 'uncertain';
+          c.isRelevant = null;
         }
       } else {
-        // Safe fallback if company couldn't be classified
         c.isRelevant = null;
-        c.relevanceConfidence = 0.0;
-        c.relevanceReason = c.companyDiagnostic || 'Unable to verify CS/IT relevance: no classification available.';
-        c.status = 'skipped';
-        classifiedUnverifiedSet.add(c.normalizedCompany);
+        c.relevanceConfidence = null;
+        c.relevanceReason = 'Needs Review — Gemini could not confidently determine relevance.';
+        c.status = 'uncertain';
       }
     }
 

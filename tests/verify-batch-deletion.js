@@ -57,6 +57,20 @@ db.prepare(`
   VALUES ('current', 'Active_Candidate_Resume.pdf', ?, 'application/pdf', 'Candidate Skills: TypeScript, React', ?)
 `).run(testResumePath, new Date().toISOString());
 
+// Seed authoritative Gemini company classifications for test companies
+db.prepare(`
+  INSERT OR REPLACE INTO company_classifications (
+    normalized_name, company_name, is_relevant, confidence, reason,
+    classification_source, gemini_model, classification_result, created_at, updated_at
+  ) VALUES
+    ('infosys', 'Infosys', 1, 0.99, 'Relevant — Gemini: Leading digital IT consulting services provider.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now')),
+    ('microsoft', 'Microsoft', 1, 1.0, 'Relevant — Gemini: Global cloud and enterprise software developer.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now')),
+    ('google', 'Google', 1, 1.0, 'Relevant — Gemini: AI, cloud, and distributed software systems leader.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now')),
+    ('oracle', 'Oracle', 1, 0.99, 'Relevant — Gemini: Database and cloud infrastructure enterprise.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now')),
+    ('wipro', 'Wipro', 1, 0.99, 'Relevant — Gemini: Global information technology services.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now')),
+    ('sabre global capability center', 'Sabre Global Capability Center', 1, 0.98, 'Relevant — Gemini: Travel technology engineering capability center.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now'))
+`).run();
+
 let passedTests = 0;
 let totalTests = 0;
 

@@ -22,6 +22,7 @@ import {
 } from '@/lib/scheduler/time-utils';
 import { getGmailConnectionStatus } from '@/lib/gmail/gmail-client';
 import { sendOutreachEmail } from '@/lib/gmail/send-email';
+import { reconcilePendingClassifications } from '@/lib/pipeline/classification-reconciler';
 
 const WORKER_ID = `worker_${process.pid}_${Math.random().toString(36).substring(2, 8)}`;
 let isShuttingDown = false;
@@ -51,6 +52,8 @@ function handleShutdown(signal: string) {
 process.on('SIGINT', () => handleShutdown('SIGINT'));
 process.on('SIGTERM', () => handleShutdown('SIGTERM'));
 
+let lastClassificationReconcileAt = 0;
+
 /**
  * Main persistent worker loop.
  */
@@ -64,7 +67,6 @@ async function runWorkerLoop() {
         await sleep(15000);
         continue;
       }
-
       // Renew lease heartbeat
       renewWorkerLease(WORKER_ID);
 
@@ -72,6 +74,14 @@ async function runWorkerLoop() {
       const recovered = recoverStaleProcessingItems();
       if (recovered > 0) {
         console.log(`[Outreach Worker] Recovered ${recovered} stale queue items after crash.`);
+      }
+
+      // Reconcile any pending company classifications due for retry
+      if (Date.now() - lastClassificationReconcileAt >= 30000) {
+        lastClassificationReconcileAt = Date.now();
+        await reconcilePendingClassifications().catch((err) =>
+          console.warn('[Outreach Worker] Error reconciling pending classifications:', err)
+        );
       }
 
       // 3. Check scheduler pause / stop controls

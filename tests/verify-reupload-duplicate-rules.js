@@ -43,6 +43,21 @@ const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+// Seed authoritative Gemini company classifications for test companies
+db.prepare(`
+  INSERT OR REPLACE INTO company_classifications (
+    normalized_name, company_name, is_relevant, confidence, reason,
+    classification_source, gemini_model, classification_result, created_at, updated_at
+  ) VALUES
+    ('infosys', 'Infosys', 1, 0.99, 'Relevant — Gemini: Leading digital IT consulting services provider.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now')),
+    ('microsoft', 'Microsoft', 1, 1.0, 'Relevant — Gemini: Global cloud and enterprise software developer.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now')),
+    ('google', 'Google', 1, 1.0, 'Relevant — Gemini: AI, cloud, and distributed software systems leader.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now')),
+    ('wipro', 'Wipro', 1, 0.99, 'Relevant — Gemini: Global information technology services.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now')),
+    ('amazon', 'Amazon', 1, 1.0, 'Relevant — Gemini: Global cloud computing (AWS) and software engineering.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now')),
+    ('oracle', 'Oracle', 1, 0.99, 'Relevant — Gemini: Enterprise cloud database solutions.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now')),
+    ('oracle cloud', 'Oracle Cloud Systems', 1, 0.99, 'Relevant — Gemini: Enterprise cloud database solutions.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now'))
+`).run();
+
 const { processBatchFile } = require('../src/lib/pipeline/batch-processor.ts');
 const { deleteBatch } = require('../src/lib/pipeline/batch-manager.ts');
 

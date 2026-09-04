@@ -18,6 +18,7 @@ import { sanitizeEnvValue, getPublicAppUrl, getOAuthRedirectUri } from './url';
 export const env = {
   // AI
   geminiApiKey: () => sanitizeEnvValue(process.env.GEMINI_API_KEY),
+  geminiModel: () => sanitizeEnvValue(process.env.GEMINI_MODEL) || 'gemini-3.8-flash',
 
   // Gmail OAuth with sanitization (strips accidental quotes and whitespace)
   googleClientId: () => sanitizeEnvValue(process.env.GOOGLE_CLIENT_ID),

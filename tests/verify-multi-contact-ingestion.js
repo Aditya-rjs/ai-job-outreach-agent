@@ -75,6 +75,16 @@ for (const em of testEmails) {
 }
 db.prepare("DELETE FROM global_email_history WHERE email LIKE 'already_sent_%'").run();
 
+// Seed authoritative Gemini test classifications for test isolation
+db.prepare(`
+  INSERT OR REPLACE INTO company_classifications (
+    normalized_name, company_name, is_relevant, confidence, reason,
+    classification_source, gemini_model, classification_result, created_at, updated_at
+  ) VALUES
+    ('acme construction', 'Acme Construction Ltd', 0, 0.99, 'Not Relevant — Gemini: Commercial construction and building civil works contractor.', 'gemini', 'gemini-3.8-flash', 'IRRELEVANT', datetime('now'), datetime('now')),
+    ('wipro', 'Wipro Technologies', 1, 0.99, 'Relevant — Gemini: Global information technology, consulting and business process services.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now'))
+`).run();
+
 // ── TEST 1: RELEVANT COMPANY WITH 5 CONTACTS & BLANK CONTINUATION ROWS ──
 console.log('\n--- Test 1: Relevant Company With 5 Contacts & Blank Continuation Rows (Infosys) ---');
 const infosysFixturePath = path.join(__dirname, 'fixtures', 'infosys_multi_contact.csv');

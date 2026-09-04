@@ -53,6 +53,15 @@ db.prepare(`
   VALUES ('current', 'Active_Resume.pdf', ?, 'application/pdf', 'Candidate Skills: TypeScript, React', ?)
 `).run(testResumePath, new Date().toISOString());
 
+// Seed authoritative Gemini company classification for Google
+db.prepare(`
+  INSERT OR REPLACE INTO company_classifications (
+    normalized_name, company_name, is_relevant, confidence, reason,
+    classification_source, gemini_model, classification_result, created_at, updated_at
+  ) VALUES
+    ('google', 'Google', 1, 1.0, 'Relevant — Gemini: AI, cloud, and distributed software systems leader.', 'gemini', 'gemini-3.8-flash', 'RELEVANT', datetime('now'), datetime('now'))
+`).run();
+
 let passedTests = 0;
 let totalTests = 0;
 

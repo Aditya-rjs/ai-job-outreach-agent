@@ -371,11 +371,15 @@ export default function BatchDetailPage({
                       </td>
                       <td className="px-4 py-3 text-center">
                         {contact.isRelevant === true ? (
-                          <Badge variant="success">Relevant</Badge>
+                          <Badge variant="success">Relevant — Gemini</Badge>
                         ) : contact.isRelevant === false ? (
-                          <Badge variant="secondary">Filtered</Badge>
+                          <Badge variant="secondary">Not Relevant — Gemini</Badge>
+                        ) : contact.relevanceReason?.includes('Pending') ? (
+                          <Badge variant="default" className="bg-blue-50 text-blue-700 border-blue-200">
+                            Classification Pending — Retrying automatically
+                          </Badge>
                         ) : (
-                          <Badge variant="warning">Needs Review</Badge>
+                          <Badge variant="warning">Needs Review — Gemini</Badge>
                         )}
                       </td>
                       <td className="px-4 py-3 text-center">
