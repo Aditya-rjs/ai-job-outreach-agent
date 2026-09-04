@@ -94,7 +94,7 @@ function extractContactsWithRegex(text: string): NormalizedContactRecord[] {
     }
 
     records.push({
-      companyName: companyName || 'Unknown Company',
+      companyName: companyName || '',
       contactName,
       email,
     });
@@ -146,7 +146,7 @@ Do not include markdown fences, extra notes, or explanations.`;
     return parsed
       .filter((item) => item && typeof item.email === 'string' && item.email.trim().length > 0)
       .map((item) => ({
-        companyName: typeof item.companyName === 'string' ? item.companyName.trim() : 'Unknown Company',
+        companyName: typeof item.companyName === 'string' ? item.companyName.trim() : '',
         contactName: typeof item.contactName === 'string' ? item.contactName.trim() : '',
         email: item.email.trim(),
         designation: typeof item.designation === 'string' ? item.designation.trim() : undefined,

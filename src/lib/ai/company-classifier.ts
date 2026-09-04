@@ -261,23 +261,27 @@ export async function classifyCompanies(
   // 2. Check SQLite database cache
   const dbCached = getCachedFromDb(toLookupInDb.map((c) => c.normalizedName));
   const toClassifyWithAI: { companyName: string; normalizedName: string }[] = [];
+  const newlyClassified: CompanyClassificationResult[] = [];
 
   for (const c of toLookupInDb) {
     if (dbCached.has(c.normalizedName)) {
       const cached = dbCached.get(c.normalizedName)!;
-      finalMap.set(c.normalizedName, cached);
-      memoryCache.set(c.normalizedName, cached);
+      // If cached entry was a weak unverified fallback (confidence <= 0.5) but is now recognized by known tech heuristics, upgrade it!
+      if (cached.confidence <= 0.5 && KNOWN_TECH_COMPANIES.has(c.normalizedName)) {
+        const upgraded = heuristicClassify(c.companyName, c.normalizedName);
+        finalMap.set(c.normalizedName, upgraded);
+        memoryCache.set(c.normalizedName, upgraded);
+        newlyClassified.push(upgraded);
+      } else {
+        finalMap.set(c.normalizedName, cached);
+        memoryCache.set(c.normalizedName, cached);
+      }
     } else {
       toClassifyWithAI.push(c);
     }
   }
 
-  if (toClassifyWithAI.length === 0) {
-    return finalMap;
-  }
-
   // 3. Classify uncached companies
-  const newlyClassified: CompanyClassificationResult[] = [];
   const hasGemini = Boolean(getGeminiClient());
 
   // Batch process in chunks of 10 to avoid token limits and respect Gemini rate limits

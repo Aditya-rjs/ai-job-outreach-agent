@@ -6,8 +6,7 @@ import { parseCSV } from '@/lib/parsers/csv-parser';
 import { getFieldMapping, applyFieldMapping, type NormalizedContactRecord } from '@/lib/parsers/field-mapper';
 import { parsePdf } from '@/lib/parsers/pdf-parser';
 import { classifyCompanies } from '@/lib/ai/company-classifier';
-import { normalizeEmail, isValidEmail } from '@/lib/utils';
-import { normalizeCompanyName, formatCompanyDisplayName } from '@/lib/utils/company';
+import { reconstructCanonicalContacts } from '@/lib/pipeline/canonical-ingestion';
 
 export interface BatchProcessingResult {
   batchId: string;
@@ -71,7 +70,10 @@ export async function processBatchFile(
       throw new Error(`Unsupported file extension: ${extension}`);
     }
 
-    const totalRecords = rawRecords.length;
+    // Reconstruct tabular contact records: forward-fill company context, isolate transitions,
+    // and normalize contact identities across all file types
+    const canonicalContacts = reconstructCanonicalContacts(rawRecords);
+    const totalRecords = canonicalContacts.length;
 
     // 3. Normalize & validate records
     interface ProcessedCandidate {
@@ -89,6 +91,7 @@ export async function processBatchFile(
       isRelevant: boolean | null;
       relevanceConfidence: number | null;
       relevanceReason: string | null;
+      companyDiagnostic?: string;
       status: 'queued' | 'skipped' | 'discovered';
     }
 
@@ -98,29 +101,27 @@ export async function processBatchFile(
 
     let invalidEmailsCount = 0;
 
-    for (const r of rawRecords) {
+    for (const c of canonicalContacts) {
       const candidateId = `cont_${ulid()}`;
-      const rawEmail = (r.email || '').trim();
-      const normalizedEmailStr = normalizeEmail(rawEmail);
-      const emailValid = Boolean(rawEmail && isValidEmail(normalizedEmailStr));
 
-      if (!emailValid) {
+      if (!c.emailValid) {
         invalidEmailsCount++;
         candidates.push({
           id: candidateId,
-          companyName: formatCompanyDisplayName(r.companyName),
-          normalizedCompany: normalizeCompanyName(r.companyName),
-          contactName: (r.contactName || '').trim(),
-          rawEmail,
-          email: normalizedEmailStr || 'invalid-email',
+          companyName: c.companyName,
+          normalizedCompany: c.normalizedCompany,
+          contactName: c.contactName,
+          rawEmail: c.rawEmail,
+          email: c.email || 'invalid-email',
           emailValid: false,
-          designation: r.designation?.trim(),
-          companyWebsite: r.companyWebsite?.trim(),
-          companyLocation: r.companyLocation?.trim(),
+          designation: c.designation,
+          companyWebsite: c.companyWebsite,
+          companyLocation: c.companyLocation,
           isDuplicate: false,
           isRelevant: null,
           relevanceConfidence: null,
           relevanceReason: 'Invalid email address syntax.',
+          companyDiagnostic: c.companyDiagnostic,
           status: 'skipped',
         });
         continue;
@@ -128,28 +129,29 @@ export async function processBatchFile(
 
       // Check duplicate within the same uploaded file
       let isDupInFile = false;
-      if (seenEmailsInFile.has(normalizedEmailStr)) {
+      if (seenEmailsInFile.has(c.email)) {
         isDupInFile = true;
       } else {
-        seenEmailsInFile.add(normalizedEmailStr);
-        validEmailsList.push(normalizedEmailStr);
+        seenEmailsInFile.add(c.email);
+        validEmailsList.push(c.email);
       }
 
       candidates.push({
         id: candidateId,
-        companyName: formatCompanyDisplayName(r.companyName),
-        normalizedCompany: normalizeCompanyName(r.companyName),
-        contactName: (r.contactName || '').trim(),
-        rawEmail,
-        email: normalizedEmailStr,
+        companyName: c.companyName,
+        normalizedCompany: c.normalizedCompany,
+        contactName: c.contactName,
+        rawEmail: c.rawEmail,
+        email: c.email,
         emailValid: true,
-        designation: r.designation?.trim(),
-        companyWebsite: r.companyWebsite?.trim(),
-        companyLocation: r.companyLocation?.trim(),
+        designation: c.designation,
+        companyWebsite: c.companyWebsite,
+        companyLocation: c.companyLocation,
         isDuplicate: isDupInFile,
         isRelevant: null,
         relevanceConfidence: null,
-        relevanceReason: null,
+        relevanceReason: isDupInFile ? 'Duplicate: email already appears in this file.' : null,
+        companyDiagnostic: c.companyDiagnostic,
         status: isDupInFile ? 'skipped' : 'discovered',
       });
     }
@@ -233,7 +235,7 @@ export async function processBatchFile(
         // Safe fallback if company couldn't be classified
         c.isRelevant = false;
         c.relevanceConfidence = 0.5;
-        c.relevanceReason = 'Unverified company relevance.';
+        c.relevanceReason = c.companyDiagnostic || 'Unverified company relevance.';
         c.status = 'skipped';
         classifiedIrrelevantSet.add(c.normalizedCompany);
       }
