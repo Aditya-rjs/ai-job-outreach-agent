@@ -60,6 +60,7 @@ export function getDashboardStats(): DashboardStats {
   const scheduler = db.select().from(schedulerState).where(eq(schedulerState.id, 'singleton')).get();
 
   const todaySentCount = quota.todaySentCount;
+  const todaySimulatedCount = quota.todaySimulatedCount;
   const dailyLimit = quota.dailyLimit;
   const isPaused = scheduler?.isPaused ?? false;
   const isStopped = scheduler?.isStopped ?? false;
@@ -69,13 +70,14 @@ export function getDashboardStats(): DashboardStats {
 
   const lease = isLeaseActive();
   const isWithinWindow = isWithinDailyWindow(new Date(), timezone, startHour, startMinute);
+  const isDryRun = process.env.OUTREACH_DRY_RUN === 'true';
 
   let outreachStatus: DashboardStats['outreachStatus'] = 'idle';
   if (isStopped) {
     outreachStatus = 'stopped';
   } else if (isPaused) {
     outreachStatus = 'paused';
-  } else if (todaySentCount >= dailyLimit) {
+  } else if (!isDryRun && todaySentCount >= dailyLimit) {
     outreachStatus = 'quota_reached';
   } else if (queueSize > 0 && !isWithinWindow) {
     outreachStatus = 'waiting';
@@ -96,7 +98,6 @@ export function getDashboardStats(): DashboardStats {
 
   const gmailConnected = db.select().from(settings).where(eq(settings.key, 'gmail_connected')).get();
   const gmailEmail = db.select().from(settings).where(eq(settings.key, 'gmail_email')).get();
-  const isDryRun = process.env.OUTREACH_DRY_RUN === 'true';
 
   return {
     totalCompanies: contactStats.totalCompanies ?? 0,
@@ -110,6 +111,7 @@ export function getDashboardStats(): DashboardStats {
     emailsSkipped: contactStats.emailsSkipped ?? 0,
     emailsUncertain: contactStats.emailsUncertain ?? 0,
     todaySentCount,
+    todaySimulatedCount,
     dailyLimit,
     remainingToday: Math.max(0, dailyLimit - todaySentCount),
     nextSendAt: scheduler?.nextSendAt ?? null,
@@ -151,6 +153,7 @@ export function getSchedulerConfig(): SchedulerConfig {
     isPaused: state?.isPaused ?? false,
     isStopped: state?.isStopped ?? false,
     todaySentCount: quota.todaySentCount,
+    todaySimulatedCount: quota.todaySimulatedCount,
     todayDate: quota.todayDate,
     lastSendAt: state?.lastSendAt ?? null,
     lastSendAttemptAt: state?.lastSendAttemptAt ?? null,

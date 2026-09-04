@@ -114,6 +114,7 @@ export function initializeDatabase() {
       id TEXT PRIMARY KEY DEFAULT 'singleton',
       is_paused INTEGER NOT NULL DEFAULT 0,
       today_sent_count INTEGER NOT NULL DEFAULT 0,
+      today_simulated_count INTEGER NOT NULL DEFAULT 0,
       today_date TEXT,
       last_send_at TEXT,
       next_send_at TEXT,
@@ -168,6 +169,7 @@ export function initializeDatabase() {
   try { db.run(sql`ALTER TABLE scheduler_state ADD COLUMN last_heartbeat_at TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE scheduler_state ADD COLUMN last_send_attempt_at TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE scheduler_state ADD COLUMN is_stopped INTEGER NOT NULL DEFAULT 0`); } catch {}
+  try { db.run(sql`ALTER TABLE scheduler_state ADD COLUMN today_simulated_count INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.run(sql`ALTER TABLE outreach_queue ADD COLUMN lease_expires_at TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE outreach_queue ADD COLUMN worker_id TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE outreach_queue ADD COLUMN last_attempt_at TEXT`); } catch {}

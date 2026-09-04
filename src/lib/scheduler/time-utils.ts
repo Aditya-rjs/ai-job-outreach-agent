@@ -101,7 +101,9 @@ export function getNextDailyWindowDate(
     secondsUntilTarget = secondsInDay - currentSeconds + targetSeconds;
   }
 
-  return new Date(now.getTime() + secondsUntilTarget * 1000);
+  const result = new Date(now.getTime() + secondsUntilTarget * 1000);
+  result.setMilliseconds(0);
+  return result;
 }
 
 /**

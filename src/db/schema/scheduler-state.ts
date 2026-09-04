@@ -5,6 +5,7 @@ export const schedulerState = sqliteTable('scheduler_state', {
   isPaused: integer('is_paused', { mode: 'boolean' }).default(false).notNull(),
   isStopped: integer('is_stopped', { mode: 'boolean' }).default(false).notNull(),
   todaySentCount: integer('today_sent_count').default(0).notNull(),
+  todaySimulatedCount: integer('today_simulated_count').default(0).notNull(),
   todayDate: text('today_date'),
   lastSendAt: text('last_send_at'),
   lastSendAttemptAt: text('last_send_attempt_at'),

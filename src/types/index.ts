@@ -10,6 +10,7 @@ export interface DashboardStats {
   emailsSkipped: number;
   emailsUncertain: number;
   todaySentCount: number;
+  todaySimulatedCount: number;
   dailyLimit: number;
   remainingToday: number;
   nextSendAt: string | null;
@@ -120,6 +121,7 @@ export interface SchedulerConfig {
   isPaused: boolean;
   isStopped: boolean;
   todaySentCount: number;
+  todaySimulatedCount: number;
   todayDate: string | null;
   lastSendAt: string | null;
   lastSendAttemptAt: string | null;

@@ -239,8 +239,8 @@ export default function DashboardPage() {
                   <Badge variant="destructive">Stopped</Badge>
                 ) : scheduler?.isPaused ? (
                   <Badge variant="warning">Paused</Badge>
-                ) : scheduler?.todaySentCount && scheduler.todaySentCount >= (scheduler?.dailyLimit ?? 30) ? (
-                  <Badge variant="secondary">Daily Quota Reached (30/30)</Badge>
+                ) : !stats?.isDryRun && scheduler?.todaySentCount && scheduler.todaySentCount >= (scheduler?.dailyLimit ?? 30) ? (
+                  <Badge variant="secondary">Daily Limit Reached (30/30)</Badge>
                 ) : stats?.queueSize && stats.queueSize > 0 ? (
                   <Badge variant="success">Active Worker Ready</Badge>
                 ) : (
@@ -248,7 +248,7 @@ export default function DashboardPage() {
                 )}
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Daily start: 10:00 AM • Timezone: {scheduler?.timezone || 'Asia/Kolkata'} • Interval: {scheduler?.intervalMinutes || 3} min gap • Max: {scheduler?.dailyLimit || 30}/day
+                Sending Window Opens: 10:00 AM • 30 successful real emails/day • {scheduler?.intervalMinutes || 3}-min gap • Timezone: {scheduler?.timezone || 'Asia/Kolkata'}
               </p>
             </div>
 
@@ -278,6 +278,13 @@ export default function DashboardPage() {
             </div>
           </div>
 
+          {/* Daily Limit Reached Notice Banner */}
+          {!stats?.isDryRun && (stats?.todaySentCount ?? 0) >= (stats?.dailyLimit ?? 30) && (
+            <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-4 py-2.5 text-xs text-amber-800 font-medium">
+              Daily limit reached — remaining contacts will resume tomorrow at 10:00 AM.
+            </div>
+          )}
+
           {/* Today's Outreach Meter & Scheduling Details */}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
@@ -285,14 +292,19 @@ export default function DashboardPage() {
                 {stats?.isDryRun ? "Today's Simulated Outreach" : "Today's Outreach Sent"}
               </p>
               <div className="flex items-baseline gap-1 mt-1">
-                <span className="text-2xl font-bold text-foreground">{stats?.todaySentCount ?? 0}</span>
+                <span className="text-2xl font-bold text-foreground">
+                  {stats?.isDryRun ? (stats?.todaySimulatedCount ?? 0) : (stats?.todaySentCount ?? 0)}
+                </span>
                 <span className="text-sm text-muted-foreground">
-                  / {stats?.dailyLimit ?? 30} {stats?.isDryRun ? 'simulated' : 'max'}
+                  {stats?.isDryRun ? 'simulated' : `/ ${stats?.dailyLimit ?? 30} real emails`}
                 </span>
               </div>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                {stats?.isDryRun ? 'Simulated remaining today: ' : 'Remaining today: '}
-                {stats?.remainingToday ?? 30}
+                {stats?.isDryRun
+                  ? 'Simulated — no real emails sent.'
+                  : (stats?.todaySentCount ?? 0) >= (stats?.dailyLimit ?? 30)
+                    ? 'Daily limit reached — remaining contacts will resume tomorrow at 10:00 AM.'
+                    : `Remaining today: ${stats?.remainingToday ?? 30}`}
               </p>
             </div>
 
@@ -310,10 +322,18 @@ export default function DashboardPage() {
             <div>
               <p className="text-xs text-muted-foreground font-medium">Next Scheduled Send</p>
               <p className="text-sm font-semibold text-foreground mt-1">
-                {stats?.nextSendAt ? formatDateTime(stats.nextSendAt) : 'Pending 10:00 AM window'}
+                {!stats?.isDryRun && (stats?.todaySentCount ?? 0) >= (stats?.dailyLimit ?? 30)
+                  ? 'Tomorrow at 10:00 AM'
+                  : stats?.nextSendAt
+                    ? formatDateTime(stats.nextSendAt)
+                    : 'Sending Window Opens: 10:00 AM'}
               </p>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                {stats?.lastSendAt ? `Last sent: ${formatDateTime(stats.lastSendAt)}` : 'No emails sent today'}
+                {!stats?.isDryRun && (stats?.todaySentCount ?? 0) >= (stats?.dailyLimit ?? 30)
+                  ? 'Daily limit reached — remaining contacts will resume tomorrow at 10:00 AM.'
+                  : stats?.lastSendAt
+                    ? `Last sent: ${formatDateTime(stats.lastSendAt)}`
+                    : 'No real emails sent today'}
               </p>
             </div>
 
@@ -363,7 +383,7 @@ export default function DashboardPage() {
         <StatCard
           title={stats?.isDryRun ? "Simulated Sends" : "Emails Sent"}
           value={stats ? (stats.isDryRun ? stats.emailsSimulated : stats.emailsSent) : 0}
-          subtitle={stats?.isDryRun ? "0 real Gmail sends" : undefined}
+          subtitle={stats?.isDryRun ? "Simulated — no real emails sent." : "30 successful real emails/day"}
           icon={Send}
         />
         <StatCard

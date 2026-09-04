@@ -27,22 +27,30 @@ export interface BatchCompletionSummary {
 }
 
 /**
- * Reconciles the daily sent counter at midnight in the configured timezone.
+ * Reconciles the daily sent counter at midnight in the configured timezone (Asia/Kolkata).
+ * ONLY successful real Gmail sends count toward the hard 30-email limit.
  */
-export function reconcileDailyQuota(): { todayDate: string; todaySentCount: number; dailyLimit: number; isQuotaReached: boolean } {
+export function reconcileDailyQuota(date: Date = new Date()): {
+  todayDate: string;
+  todaySentCount: number;
+  todaySimulatedCount: number;
+  dailyLimit: number;
+  isQuotaReached: boolean;
+} {
   const db = getDb();
   const tz = getConfiguredTimezone();
-  const currentLocalDate = getLocalDateString(new Date(), tz);
+  const currentLocalDate = getLocalDateString(date, tz);
 
   const state = db.select().from(schedulerState).where(eq(schedulerState.id, 'singleton')).get();
   const dailyLimit = state?.dailyLimit ?? 30;
 
   if (!state || state.todayDate !== currentLocalDate) {
-    // Midnight rolled over in configured timezone: reset daily counter
+    // Midnight rolled over in Asia/Kolkata timezone: reset daily counters
     db.update(schedulerState)
       .set({
         todayDate: currentLocalDate,
         todaySentCount: 0,
+        todaySimulatedCount: 0,
       })
       .where(eq(schedulerState.id, 'singleton'))
       .run();
@@ -50,16 +58,40 @@ export function reconcileDailyQuota(): { todayDate: string; todaySentCount: numb
     return {
       todayDate: currentLocalDate,
       todaySentCount: 0,
+      todaySimulatedCount: 0,
       dailyLimit,
       isQuotaReached: false,
     };
   }
 
+  // Audit check: Verify real sends in database for current calendar date in Asia/Kolkata
+  const sentRows = db
+    .select({ sentAt: contacts.sentAt })
+    .from(contacts)
+    .where(and(eq(contacts.status, 'sent'), sql`sent_at IS NOT NULL`))
+    .all();
+
+  let verifiedRealCount = 0;
+  for (const row of sentRows) {
+    if (row.sentAt && getLocalDateString(new Date(row.sentAt), tz) === currentLocalDate) {
+      verifiedRealCount++;
+    }
+  }
+
+  const effectiveSentCount = Math.max(state.todaySentCount, verifiedRealCount);
+  if (effectiveSentCount !== state.todaySentCount) {
+    db.update(schedulerState)
+      .set({ todaySentCount: effectiveSentCount })
+      .where(eq(schedulerState.id, 'singleton'))
+      .run();
+  }
+
   return {
     todayDate: currentLocalDate,
-    todaySentCount: state.todaySentCount,
+    todaySentCount: effectiveSentCount,
+    todaySimulatedCount: state.todaySimulatedCount ?? 0,
     dailyLimit,
-    isQuotaReached: state.todaySentCount >= dailyLimit,
+    isQuotaReached: effectiveSentCount >= dailyLimit,
   };
 }
 
@@ -160,6 +192,15 @@ export function recoverStaleProcessingItems(): number {
  * Fetches the next eligible queue item and acquires an atomic lease for processing.
  */
 export function acquireNextEligibleJob(workerId: string): NextEligibleJob | null {
+  const isDryRun = process.env.OUTREACH_DRY_RUN === 'true';
+  // Defense-in-depth: In live send mode, never lease any job if the daily limit has been reached!
+  if (!isDryRun) {
+    const quota = reconcileDailyQuota();
+    if (quota.isQuotaReached) {
+      return null;
+    }
+  }
+
   const db = getDb();
   const now = new Date();
   const nowIso = now.toISOString();

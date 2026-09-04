@@ -113,7 +113,7 @@ async function runWorkerLoop() {
       const startMinute = state.startMinute ?? 0;
       const intervalMinutes = state.intervalMinutes ?? 3;
 
-      if (quota.isQuotaReached) {
+      if (!isDryRun && quota.isQuotaReached) {
         const tomorrowWindow = getNextDailyWindowDate(new Date(), timezone, startHour, startMinute);
         const nextIso = tomorrowWindow.toISOString();
 
@@ -122,7 +122,7 @@ async function runWorkerLoop() {
           .where(eq(schedulerState.id, 'singleton'))
           .run();
 
-        console.log(`[Outreach Worker] Daily quota reached (${quota.todaySentCount}/${quota.dailyLimit}). Next window at ${nextIso} (${timezone}).`);
+        console.log(`[Outreach Worker] Daily limit reached (${quota.todaySentCount}/${quota.dailyLimit} real emails). Remaining contacts will resume tomorrow at 10:00 AM (${nextIso}).`);
         await sleep(30000);
         continue;
       }
@@ -217,20 +217,29 @@ async function runWorkerLoop() {
       if (sendResult.success) {
         if (isDryRun) {
           console.log(`[Outreach Worker] SIMULATED SEND — no Gmail message dispatched for ${contact.email} (Simulated ID: ${sendResult.messageId})`);
+          // Dry-run simulation: increment todaySimulatedCount; do NOT consume real todaySentCount!
+          db.update(schedulerState)
+            .set({
+              todaySimulatedCount: sql`${schedulerState.todaySimulatedCount} + 1`,
+              lastSendAt: attemptTimestamp,
+              lastSendAttemptAt: attemptTimestamp,
+              nextSendAt: new Date(Date.now() + intervalMinutes * 60 * 1000).toISOString(),
+            })
+            .where(eq(schedulerState.id, 'singleton'))
+            .run();
         } else {
           console.log(`[Outreach Worker] Gmail send successful for ${contact.email}! Message ID: ${sendResult.messageId}`);
+          // Real send: increment todaySentCount toward the hard 30-email daily limit!
+          db.update(schedulerState)
+            .set({
+              todaySentCount: sql`${schedulerState.todaySentCount} + 1`,
+              lastSendAt: attemptTimestamp,
+              lastSendAttemptAt: attemptTimestamp,
+              nextSendAt: new Date(Date.now() + intervalMinutes * 60 * 1000).toISOString(),
+            })
+            .where(eq(schedulerState.id, 'singleton'))
+            .run();
         }
-
-        // Increment today's count (for schedule pacing)
-        db.update(schedulerState)
-          .set({
-            todaySentCount: sql`${schedulerState.todaySentCount} + 1`,
-            lastSendAt: attemptTimestamp,
-            lastSendAttemptAt: attemptTimestamp,
-            nextSendAt: new Date(Date.now() + intervalMinutes * 60 * 1000).toISOString(),
-          })
-          .where(eq(schedulerState.id, 'singleton'))
-          .run();
       } else {
         console.warn(`[Outreach Worker] Send failed for ${contact.email}: ${sendResult.error} (${sendResult.errorCategory})`);
         // Failed attempt still respects 3-minute interval before next attempt
