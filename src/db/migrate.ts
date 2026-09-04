@@ -1,6 +1,7 @@
 import { getDb } from './index';
 import { seedDatabase } from './seed';
 import { sql } from 'drizzle-orm';
+import { ulid } from 'ulid';
 
 export function initializeDatabase() {
   const db = getDb();
@@ -196,6 +197,7 @@ export function initializeDatabase() {
   }
 
   // Invariant 2: Remove non-sent ('queued', 'discovered', 'sending') global_email_history records
+  // Invariant 2: Remove non-sent ('queued', 'discovered', 'sending') global_email_history records
   // if their contacts only belong to deleted or cancelled batches.
   try {
     db.run(sql`
@@ -211,6 +213,86 @@ export function initializeDatabase() {
     `);
   } catch (err) {
     console.error('[Migration] Failed to reconcile global_email_history queued entries:', err);
+  }
+
+  // Invariant 3: Reconcile contacts in active batches that were falsely marked as duplicate
+  // of previous outreach ("Duplicate: email already queued or contacted in previous outreach.")
+  // when that previous outreach was only dry-run simulated or deleted, and no real send exists.
+  try {
+    const falseDuplicateContacts = db.all<{ id: string; batch_id: string; email: string }>(sql`
+      SELECT c.id, c.batch_id, c.email
+      FROM contacts c
+      JOIN batches b ON c.batch_id = b.id
+      WHERE b.status NOT IN ('deleted', 'cancelled')
+        AND c.status = 'skipped'
+        AND c.is_duplicate = 1
+        AND c.is_relevant = 1
+        AND c.email_valid = 1
+        AND c.relevance_reason LIKE 'Duplicate: email already queued or contacted in previous outreach%'
+        AND LOWER(TRIM(c.email)) NOT IN (
+          SELECT DISTINCT LOWER(TRIM(email))
+          FROM contacts
+          WHERE status = 'sent'
+            AND sent_at IS NOT NULL
+            AND (gmail_message_id IS NULL OR gmail_message_id NOT LIKE 'dryrun_%')
+        )
+    `);
+
+    if (falseDuplicateContacts.length > 0) {
+      const now = new Date().toISOString();
+      const affectedBatchIds = new Set<string>();
+
+      for (const c of falseDuplicateContacts) {
+        affectedBatchIds.add(c.batch_id);
+
+        db.run(sql`
+          UPDATE contacts
+          SET status = 'queued',
+              is_duplicate = 0,
+              relevance_reason = 'Restored: previous outreach was simulated or deleted',
+              updated_at = ${now}
+          WHERE id = ${c.id}
+        `);
+
+        const existingQueue = db.get<{ id: string }>(sql`
+          SELECT id FROM outreach_queue WHERE contact_id = ${c.id}
+        `);
+
+        if (!existingQueue) {
+          const queueId = `queue_${ulid()}`;
+          db.run(sql`
+            INSERT INTO outreach_queue (id, contact_id, priority, status, attempts, created_at, updated_at)
+            VALUES (${queueId}, ${c.id}, 0, 'pending', 0, ${now}, ${now})
+          `);
+        } else {
+          db.run(sql`
+            UPDATE outreach_queue
+            SET status = 'pending',
+                updated_at = ${now}
+            WHERE contact_id = ${c.id} AND status != 'completed'
+          `);
+        }
+
+        db.run(sql`
+          INSERT INTO global_email_history (email, first_contact_id, first_batch_id, first_seen_at, status)
+          VALUES (${c.email.toLowerCase().trim()}, ${c.id}, ${c.batch_id}, ${now}, 'queued')
+          ON CONFLICT(email) DO UPDATE SET status = 'queued', first_contact_id = ${c.id}, first_batch_id = ${c.batch_id}
+          WHERE global_email_history.status != 'sent'
+        `);
+      }
+
+      for (const bId of affectedBatchIds) {
+        db.run(sql`
+          UPDATE batches
+          SET duplicate_contacts = (SELECT COUNT(*) FROM contacts WHERE batch_id = ${bId} AND is_duplicate = 1),
+              emails_pending = (SELECT COUNT(*) FROM contacts WHERE batch_id = ${bId} AND status IN ('queued', 'generating', 'generated', 'processing')),
+              updated_at = ${now}
+          WHERE id = ${bId}
+        `);
+      }
+    }
+  } catch (err) {
+    console.error('[Migration] Failed to reconcile falsely marked contacts:', err);
   }
 
   // Seed default data

@@ -260,6 +260,51 @@ async function runTests() {
     const orphaned = db.prepare('SELECT * FROM global_email_history WHERE email = ?').get('orphaned.queued@example.com');
     assert.strictEqual(orphaned, undefined, 'Orphaned queued record must be purged by self-healing migration');
     pass('Self-healing startup migration purges phantom and orphaned global_email_history records');
+
+    // Test 8: Reconciles contacts falsely marked duplicate of previous outreach in active batches
+    const testBatchId = 'batch_reconcile_test';
+    db.prepare(`
+      INSERT INTO batches (id, filename, upload_date, total_records, valid_records, relevant_companies, duplicate_contacts, emails_pending, status, created_at, updated_at)
+      VALUES (?, 'test_reconcile.csv', datetime('now'), 2, 2, 2, 2, 0, 'queued', datetime('now'), datetime('now'))
+    `).run(testBatchId);
+
+    // Contact 1: falsely marked duplicate of previous outreach (Category D phantom)
+    const cPhantomId = 'contact_phantom_1';
+    db.prepare(`
+      INSERT INTO contacts (id, batch_id, email, company_name, is_relevant, email_valid, is_duplicate, status, relevance_reason, created_at, updated_at)
+      VALUES (?, ?, 'reconciled.candidate@example.com', 'Tech Corp', 1, 1, 1, 'skipped', 'Duplicate: email already queued or contacted in previous outreach.', datetime('now'), datetime('now'))
+    `).run(cPhantomId, testBatchId);
+
+    // Contact 2: legitimate in-file duplicate (Category E)
+    const cInfileId = 'contact_infile_2';
+    db.prepare(`
+      INSERT INTO contacts (id, batch_id, email, company_name, is_relevant, email_valid, is_duplicate, status, relevance_reason, created_at, updated_at)
+      VALUES (?, ?, 'infile.dup@example.com', 'Tech Corp', 1, 1, 1, 'skipped', 'Duplicate: email already appears in this file.', datetime('now'), datetime('now'))
+    `).run(cInfileId, testBatchId);
+
+    // Run migration
+    initializeDatabase();
+
+    // Verify Contact 1 was reconciled to queued and duplicate = 0
+    const recContact = db.prepare('SELECT * FROM contacts WHERE id = ?').get(cPhantomId);
+    assert.strictEqual(recContact.status, 'queued', 'Falsely marked contact must be restored to queued');
+    assert.strictEqual(recContact.is_duplicate, 0, 'Falsely marked contact must have is_duplicate = 0');
+
+    // Verify pending queue item created
+    const queueItem = db.prepare('SELECT * FROM outreach_queue WHERE contact_id = ?').get(cPhantomId);
+    assert(queueItem, 'Queue item must be created for reconciled contact');
+    assert.strictEqual(queueItem.status, 'pending', 'Reconciled queue item must be in pending status');
+
+    // Verify Contact 2 (in-file duplicate) was NOT touched
+    const infileContact = db.prepare('SELECT * FROM contacts WHERE id = ?').get(cInfileId);
+    assert.strictEqual(infileContact.status, 'skipped', 'Legitimate in-file duplicate must remain skipped');
+    assert.strictEqual(infileContact.is_duplicate, 1, 'Legitimate in-file duplicate must remain is_duplicate = 1');
+
+    // Verify batch counts updated
+    const updatedBatch = db.prepare('SELECT * FROM batches WHERE id = ?').get(testBatchId);
+    assert.strictEqual(updatedBatch.duplicate_contacts, 1, 'Batch duplicate_contacts must now only count the 1 in-file duplicate');
+    assert.strictEqual(updatedBatch.emails_pending, 1, 'Batch emails_pending must now be 1');
+    pass('Self-healing migration successfully reconciles falsely marked contacts and creates pending queue items');
   }
 
   console.log('\n======================================================================');
