@@ -1,5 +1,4 @@
 import { deleteBatch } from '../../src/lib/pipeline/batch-manager';
-import { initializeDatabase } from '../../src/db/migrate';
 
 async function run() {
   const batchId = process.argv[2];
@@ -8,7 +7,6 @@ async function run() {
     process.exit(1);
   }
 
-  initializeDatabase();
   const result = deleteBatch(batchId);
   console.log('DELETE_RESULT:' + JSON.stringify(result));
 }

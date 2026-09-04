@@ -238,6 +238,16 @@ assert(invalidContacts[0].status === 'queued' && invalidContacts[2].status === '
 // ── TEST 9: PRE-CONTACTED EMAIL UNDER RELEVANT COMPANY ──────────────────
 console.log('\n--- Test 9: Pre-Contacted Email Under Relevant Company ---');
 const alreadySentEmail = `already_sent_${Date.now()}@infosys.com`;
+const mockSentBatchId = `batch_mock_sent_${Date.now()}`;
+const mockSentContactId = `contact_mock_sent_${Date.now()}`;
+db.prepare(`
+  INSERT INTO batches (id, filename, upload_date, created_at, updated_at, status)
+  VALUES (?, 'mock_sent.csv', datetime('now'), datetime('now'), datetime('now'), 'completed')
+`).run(mockSentBatchId);
+db.prepare(`
+  INSERT INTO contacts (id, batch_id, email, company_name, is_relevant, email_valid, status, sent_at, gmail_message_id, created_at, updated_at)
+  VALUES (?, ?, ?, 'Infosys', 1, 1, 'sent', datetime('now'), 'gmail_msg_precontacted', datetime('now'), datetime('now'))
+`).run(mockSentContactId, mockSentBatchId, alreadySentEmail);
 db.prepare(`
   INSERT INTO global_email_history (email, first_seen_at, sent_at, status)
   VALUES (?, datetime('now'), datetime('now'), 'sent')
@@ -255,6 +265,7 @@ assert(precontactedResult.emailsPending === 2, 'Remaining 2 contacts successfull
 db.prepare('DELETE FROM outreach_queue WHERE contact_id IN (SELECT id FROM contacts WHERE email = ?)').run(alreadySentEmail);
 db.prepare('DELETE FROM global_email_history WHERE email = ?').run(alreadySentEmail);
 db.prepare('DELETE FROM contacts WHERE email = ?').run(alreadySentEmail);
+db.prepare('DELETE FROM batches WHERE id = ?').run(mockSentBatchId);
 
 // ── TEST 10: EXPLICIT COMPANY NAMES ON EVERY ROW (EQUIVALENCE TEST) ─────
 console.log('\n--- Test 10: Explicit Company Names In Every Row (Equivalence) ---');

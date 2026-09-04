@@ -176,6 +176,43 @@ export function initializeDatabase() {
   try { db.run(sql`ALTER TABLE outreach_queue ADD COLUMN next_retry_at TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE outreach_queue ADD COLUMN error_message TEXT`); } catch {}
 
+  // Self-Healing Reconciliation for Global Email History
+  // Invariant 1: An email is marked 'sent' in global_email_history ONLY IF there is a genuine successful send in contacts
+  // (status = 'sent' with a non-null sent_at timestamp, excluding dry-run simulated sends).
+  try {
+    db.run(sql`
+      DELETE FROM global_email_history
+      WHERE status = 'sent'
+        AND email NOT IN (
+          SELECT DISTINCT LOWER(TRIM(email))
+          FROM contacts
+          WHERE status = 'sent'
+            AND sent_at IS NOT NULL
+            AND (gmail_message_id IS NULL OR gmail_message_id NOT LIKE 'dryrun_%')
+        )
+    `);
+  } catch (err) {
+    console.error('[Migration] Failed to reconcile global_email_history sent entries:', err);
+  }
+
+  // Invariant 2: Remove non-sent ('queued', 'discovered', 'sending') global_email_history records
+  // if their contacts only belong to deleted or cancelled batches.
+  try {
+    db.run(sql`
+      DELETE FROM global_email_history
+      WHERE status != 'sent'
+        AND email NOT IN (
+          SELECT DISTINCT LOWER(TRIM(c.email))
+          FROM contacts c
+          JOIN batches b ON c.batch_id = b.id
+          WHERE b.status NOT IN ('deleted', 'cancelled')
+            AND c.status IN ('queued', 'generating', 'generated', 'processing')
+        )
+    `);
+  } catch (err) {
+    console.error('[Migration] Failed to reconcile global_email_history queued entries:', err);
+  }
+
   // Seed default data
   seedDatabase();
 }

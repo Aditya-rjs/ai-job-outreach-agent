@@ -158,24 +158,46 @@ export async function processBatchFile(
       });
     }
 
-    // 4. Global deduplication check against global_email_history
+    // 4. Global deduplication check against permanent real sends and active non-deleted batches
     const existingGlobalHistory = new Set<string>();
     if (validEmailsList.length > 0) {
       // Chunk queries if there are many emails
       const CHUNK_SIZE = 500;
       for (let i = 0; i < validEmailsList.length; i += CHUNK_SIZE) {
         const chunk = validEmailsList.slice(i, i + CHUNK_SIZE);
-        const records = db
-          .select({ email: globalEmailHistory.email, status: globalEmailHistory.status })
+
+        // A. Permanent Real Sends: Check global_email_history where status = 'sent'
+        const sentRecords = db
+          .select({ email: globalEmailHistory.email })
           .from(globalEmailHistory)
-          .where(inArray(globalEmailHistory.email, chunk))
+          .where(
+            and(
+              inArray(globalEmailHistory.email, chunk),
+              eq(globalEmailHistory.status, 'sent')
+            )
+          )
           .all();
 
-        for (const rec of records) {
-          // An email with active status ('queued', 'sending', 'sent') cannot receive another email
-          if (rec.status === 'queued' || rec.status === 'sending' || rec.status === 'sent') {
-            existingGlobalHistory.add(rec.email);
-          }
+        for (const rec of sentRecords) {
+          existingGlobalHistory.add(rec.email.toLowerCase().trim());
+        }
+
+        // B. Active In-Flight Contacts: Check contacts queued in ACTIVE (non-deleted, non-cancelled) batches
+        const activeQueued = db
+          .select({ email: contacts.email })
+          .from(contacts)
+          .innerJoin(batches, eq(contacts.batchId, batches.id))
+          .where(
+            and(
+              inArray(contacts.email, chunk),
+              sql`batches.status NOT IN ('deleted', 'cancelled')`,
+              sql`contacts.status IN ('queued', 'generating', 'generated', 'processing', 'sending')`
+            )
+          )
+          .all();
+
+        for (const rec of activeQueued) {
+          existingGlobalHistory.add(rec.email.toLowerCase().trim());
         }
       }
     }
@@ -297,6 +319,8 @@ export async function processBatchFile(
                 target: globalEmailHistory.email,
                 set: {
                   status: 'queued',
+                  firstContactId: c.id,
+                  firstBatchId: batchId,
                 },
               })
               .run();

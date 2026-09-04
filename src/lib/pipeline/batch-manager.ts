@@ -116,7 +116,14 @@ export function deleteBatch(batchId: string): DeleteBatchResult {
 
     // D. Global Email History:
     // Successful-send status ('sent') determines permanent history.
-    // Clean up ONLY contacts that were NEVER sent (status != 'sent').
+    // If a contact's email in global_email_history has status = 'sent', it is preserved forever.
+    // Any record in global_email_history that was never sent (status != 'sent') is cleaned up.
+    const batchEmails = Array.from(
+      new Set(batchContacts.map((c) => c.email.trim().toLowerCase()))
+    );
+
+    // Delete records from global_email_history that belong to this batch or this batch's contacts
+    // where status is NOT 'sent'
     tx.delete(globalEmailHistory)
       .where(
         and(
@@ -125,6 +132,21 @@ export function deleteBatch(batchId: string): DeleteBatchResult {
         )
       )
       .run();
+
+    if (batchEmails.length > 0) {
+      const CHUNK_SIZE = 500;
+      for (let i = 0; i < batchEmails.length; i += CHUNK_SIZE) {
+        const chunk = batchEmails.slice(i, i + CHUNK_SIZE);
+        tx.delete(globalEmailHistory)
+          .where(
+            and(
+              inArray(globalEmailHistory.email, chunk),
+              ne(globalEmailHistory.status, 'sent')
+            )
+          )
+          .run();
+      }
+    }
 
     // E. Transition batch to soft-deleted state
     tx.update(batches)
