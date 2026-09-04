@@ -72,7 +72,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     fs.writeFileSync(targetPath, buffer);
 
     // Process the file through the full Phase 2 pipeline
-    const result = await processBatchFile(buffer, filename);
+    const result = await processBatchFile(buffer, filename, targetPath);
 
     return NextResponse.json({
       success: true,

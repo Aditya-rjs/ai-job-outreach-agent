@@ -67,6 +67,19 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
     return { success: false, error: `Contact "${contactId}" not found.`, errorCategory: 'validation' };
   }
 
+  // 1b. Validate parent batch existence and active status
+  const parentBatch = db.select().from(batches).where(eq(batches.id, contact.batchId)).get();
+  if (!parentBatch) {
+    return { success: false, error: `Parent batch "${contact.batchId}" not found.`, errorCategory: 'validation' };
+  }
+  if (parentBatch.status === 'deleted' || parentBatch.status === 'cancelled') {
+    return {
+      success: false,
+      error: `Parent batch "${parentBatch.filename}" has been ${parentBatch.status}. Outreach send blocked.`,
+      errorCategory: 'validation',
+    };
+  }
+
   // 2. Validate email format
   const normalizedTo = normalizeEmail(contact.email);
   if (!isValidEmail(normalizedTo)) {

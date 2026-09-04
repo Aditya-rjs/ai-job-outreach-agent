@@ -30,6 +30,7 @@ export function getDashboardStats(): DashboardStats {
       totalCompanies: sql<number>`COUNT(DISTINCT CASE WHEN company_name IS NOT NULL AND company_name != '' THEN company_name END)`,
     })
     .from(contacts)
+    .where(sql`contacts.batch_id NOT IN (SELECT id FROM batches WHERE status = 'deleted')`)
     .get() ?? {
     totalContacts: 0,
     emailsSent: 0,
@@ -44,9 +45,11 @@ export function getDashboardStats(): DashboardStats {
   // Queue metrics
   const queueStats = db
     .select({
-      queueSize: sql<number>`SUM(CASE WHEN status IN ('pending', 'processing') THEN 1 ELSE 0 END)`,
+      queueSize: sql<number>`SUM(CASE WHEN outreach_queue.status IN ('pending', 'processing') THEN 1 ELSE 0 END)`,
     })
     .from(outreachQueue)
+    .innerJoin(contacts, eq(outreachQueue.contactId, contacts.id))
+    .where(sql`contacts.batch_id NOT IN (SELECT id FROM batches WHERE status = 'deleted')`)
     .get() ?? { queueSize: 0 };
 
   const queueSize = queueStats.queueSize ?? 0;

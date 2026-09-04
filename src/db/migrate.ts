@@ -21,10 +21,24 @@ export function initializeDatabase() {
       emails_failed INTEGER NOT NULL DEFAULT 0,
       emails_pending INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'processing',
+      file_path TEXT,
+      deleted_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
   `);
+
+  // Safe schema migrations for batches table
+  try {
+    db.run(sql`ALTER TABLE batches ADD COLUMN file_path TEXT`);
+  } catch {
+    // Column may already exist
+  }
+  try {
+    db.run(sql`ALTER TABLE batches ADD COLUMN deleted_at TEXT`);
+  } catch {
+    // Column may already exist
+  }
 
   db.run(sql`
     CREATE TABLE IF NOT EXISTS contacts (

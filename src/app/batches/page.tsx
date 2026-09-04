@@ -2,18 +2,21 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Layers, Plus, RefreshCw, FileText, ArrowRight } from 'lucide-react';
+import { Layers, Plus, RefreshCw, FileText, ArrowRight, Trash2, CheckCircle2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { formatDateTime } from '@/lib/utils';
+import { DeleteBatchModal } from '@/components/batches/delete-batch-modal';
 import type { Batch } from '@/types';
 
 export default function BatchesPage() {
   const [batchesList, setBatchesList] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [batchToDelete, setBatchToDelete] = useState<Batch | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
@@ -85,6 +88,13 @@ export default function BatchesPage() {
         </div>
       </div>
 
+      {successMessage && (
+        <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 animate-in fade-in">
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+          <span>{successMessage}</span>
+        </div>
+      )}
+
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
           {error}
@@ -130,7 +140,7 @@ export default function BatchesPage() {
                   <th className="px-4 py-3 text-center">Invalid</th>
                   <th className="px-4 py-3 text-center">Queued</th>
                   <th className="px-4 py-3 text-center">Status</th>
-                  <th className="px-4 py-3 text-right">Action</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -172,12 +182,24 @@ export default function BatchesPage() {
                       </Badge>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <Link href={`/batches/${batch.id}`}>
-                        <Button variant="ghost" size="sm">
-                          View
-                          <ArrowRight className="h-3.5 w-3.5 ml-1" />
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Link href={`/batches/${batch.id}`}>
+                          <Button variant="ghost" size="sm" className="h-8 px-2.5 text-xs">
+                            View
+                            <ArrowRight className="h-3 w-3 ml-1" />
+                          </Button>
+                        </Link>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => setBatchToDelete(batch)}
+                          className="h-8 px-2.5 text-xs bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-800 border border-red-200"
+                          title="Delete Batch"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span className="sr-only sm:not-sr-only sm:ml-1">Delete</span>
                         </Button>
-                      </Link>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -186,6 +208,19 @@ export default function BatchesPage() {
           </div>
         </Card>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteBatchModal
+        batch={batchToDelete}
+        isOpen={!!batchToDelete}
+        onClose={() => setBatchToDelete(null)}
+        onSuccess={(deleted) => {
+          setBatchToDelete(null);
+          setSuccessMessage(`Batch "${deleted.filename}" deleted successfully.`);
+          setRefreshKey((k) => k + 1);
+          setTimeout(() => setSuccessMessage(null), 5000);
+        }}
+      />
     </div>
   );
 }

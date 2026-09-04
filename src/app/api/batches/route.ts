@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/db';
 import { batches } from '@/db/schema';
-import { desc } from 'drizzle-orm';
+import { desc, ne } from 'drizzle-orm';
 import { initializeDatabase } from '@/db/migrate';
 import type { ApiResponse, Batch } from '@/types';
 
@@ -17,7 +17,12 @@ export async function GET(): Promise<NextResponse<ApiResponse<Batch[]>>> {
   try {
     ensureInitialized();
     const db = getDb();
-    const records = db.select().from(batches).orderBy(desc(batches.uploadDate)).all();
+    const records = db
+      .select()
+      .from(batches)
+      .where(ne(batches.status, 'deleted'))
+      .orderBy(desc(batches.uploadDate))
+      .all();
 
     return NextResponse.json({
       success: true,

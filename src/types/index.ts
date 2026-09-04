@@ -22,10 +22,10 @@ export interface DashboardStats {
   outreachStatus: 'idle' | 'running' | 'sending' | 'paused' | 'stopped' | 'waiting' | 'completed' | 'quota_reached';
 }
 
-// Batch types
 export interface Batch {
   id: string;
   filename: string;
+  filePath?: string | null;
   uploadDate: string;
   totalRecords: number;
   validRecords: number;
@@ -37,11 +37,12 @@ export interface Batch {
   emailsFailed: number;
   emailsPending: number;
   status: BatchStatus;
+  deletedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-export type BatchStatus = 'processing' | 'queued' | 'sending' | 'paused' | 'completed' | 'failed';
+export type BatchStatus = 'processing' | 'queued' | 'sending' | 'paused' | 'completed' | 'failed' | 'cancelled' | 'deleted';
 
 // Contact types
 export interface Contact {

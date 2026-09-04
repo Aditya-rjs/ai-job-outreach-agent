@@ -26,7 +26,8 @@ export interface BatchProcessingResult {
  */
 export async function processBatchFile(
   fileBuffer: Buffer,
-  filename: string
+  filename: string,
+  filePath?: string
 ): Promise<BatchProcessingResult> {
   const db = getDb();
   const batchId = `batch_${ulid()}`;
@@ -38,6 +39,7 @@ export async function processBatchFile(
     .values({
       id: batchId,
       filename,
+      filePath: filePath || null,
       uploadDate: now,
       totalRecords: 0,
       validRecords: 0,

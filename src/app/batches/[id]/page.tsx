@@ -2,6 +2,7 @@
 
 import { useState, useEffect, use } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
   Search,
@@ -13,11 +14,13 @@ import {
   AlertCircle,
   X,
   RotateCw,
+  Trash2,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { formatDateTime } from '@/lib/utils';
+import { DeleteBatchModal } from '@/components/batches/delete-batch-modal';
 import type { Batch, Contact } from '@/types';
 
 export default function BatchDetailPage({
@@ -25,6 +28,7 @@ export default function BatchDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const router = useRouter();
   const resolvedParams = use(params);
   const batchId = resolvedParams.id;
 
@@ -34,6 +38,9 @@ export default function BatchDetailPage({
   const [filter, setFilter] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [totalCount, setTotalCount] = useState<number>(0);
+
+  // Delete modal state
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
   // Email generation states
   const [isGeneratingBatch, setIsGeneratingBatch] = useState(false);
@@ -211,6 +218,17 @@ export default function BatchDetailPage({
                   Generate AI Emails
                 </>
               )}
+            </Button>
+
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setIsDeleteModalOpen(true)}
+              disabled={loading || isGeneratingBatch}
+              className="gap-1.5 bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-800 border border-red-200"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete Batch
             </Button>
           </div>
         </div>
@@ -540,6 +558,17 @@ export default function BatchDetailPage({
           </div>
         </div>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteBatchModal
+        batch={batch}
+        isOpen={isDeleteModalOpen}
+        onClose={() => setIsDeleteModalOpen(false)}
+        onSuccess={() => {
+          setIsDeleteModalOpen(false);
+          router.push('/batches');
+        }}
+      />
     </div>
   );
 }

@@ -39,6 +39,11 @@ export async function GET(
       );
     }
 
+    // Exclude contacts belonging to deleted batches
+    conditions.push(
+      sql`contacts.batch_id NOT IN (SELECT id FROM batches WHERE status = 'deleted')`
+    );
+
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     const totalCount = db

@@ -12,7 +12,7 @@ async function run() {
 
   initializeDatabase();
   const fileBuffer = fs.readFileSync(filePath);
-  const result = await processBatchFile(fileBuffer, filename);
+  const result = await processBatchFile(fileBuffer, filename, filePath);
   console.log('BATCH_RESULT:' + JSON.stringify(result));
 }
 

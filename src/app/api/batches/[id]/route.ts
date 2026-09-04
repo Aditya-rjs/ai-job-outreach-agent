@@ -23,7 +23,7 @@ export async function GET(
     const db = getDb();
     const record = db.select().from(batches).where(eq(batches.id, id)).get();
 
-    if (!record) {
+    if (!record || record.status === 'deleted') {
       return NextResponse.json(
         { success: false, error: `Batch with ID "${id}" was not found.` },
         { status: 404 }
@@ -38,6 +38,39 @@ export async function GET(
     console.error('Fetch batch error:', error);
     return NextResponse.json(
       { success: false, error: 'Failed to retrieve batch details.' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+): Promise<NextResponse<ApiResponse<{ message: string; batchId: string }>>> {
+  try {
+    ensureInitialized();
+    const { id } = await params;
+    const { deleteBatch } = await import('@/lib/pipeline/batch-manager');
+    const result = deleteBatch(id);
+
+    if (!result.success) {
+      return NextResponse.json(
+        { success: false, error: result.error || 'Failed to delete batch.' },
+        { status: (result.statusCode as number) || 400 }
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        message: 'Batch deleted successfully.',
+        batchId: result.batchId,
+      },
+    });
+  } catch (error) {
+    console.error('Delete batch error:', error);
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : 'Failed to delete batch.' },
       { status: 500 }
     );
   }

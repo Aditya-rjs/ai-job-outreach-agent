@@ -172,6 +172,7 @@ export function acquireNextEligibleJob(workerId: string): NextEligibleJob | null
     })
     .from(outreachQueue)
     .innerJoin(contacts, eq(outreachQueue.contactId, contacts.id))
+    .innerJoin(batches, eq(contacts.batchId, batches.id))
     .where(
       sql`
         (
@@ -183,6 +184,7 @@ export function acquireNextEligibleJob(workerId: string): NextEligibleJob | null
             AND outreach_queue.next_retry_at <= ${nowIso}
           )
         )
+        AND batches.status NOT IN ('cancelled', 'deleted')
         AND contacts.status IN ('generated', 'queued')
         AND (contacts.is_relevant IS NULL OR contacts.is_relevant = 1)
         AND contacts.is_duplicate = 0

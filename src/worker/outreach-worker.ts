@@ -1,6 +1,6 @@
 import { initializeDatabase } from '@/db/migrate';
 import { getDb } from '@/db';
-import { schedulerState } from '@/db/schema';
+import { schedulerState, batches, outreachQueue } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import {
   acquireWorkerLease,
@@ -187,6 +187,17 @@ async function runWorkerLoop() {
       // 9. Execute Outreach Send
       const { queueItem, contact } = nextJob;
       const attemptTimestamp = new Date().toISOString();
+
+      // Verify parent batch is still active and has not been deleted/cancelled
+      const parentBatch = db.select().from(batches).where(eq(batches.id, contact.batchId)).get();
+      if (!parentBatch || parentBatch.status === 'deleted' || parentBatch.status === 'cancelled') {
+        console.warn(`[Outreach Worker] Parent batch ${contact.batchId} was deleted/cancelled. Aborting send for ${contact.email}.`);
+        db.update(outreachQueue)
+          .set({ status: 'cancelled', updatedAt: attemptTimestamp })
+          .where(eq(outreachQueue.id, queueItem.id))
+          .run();
+        continue;
+      }
 
       console.log(`\n----------------------------------------------------------------------`);
       console.log(`[Outreach Worker] Processing queue item ${queueItem.id} for: ${contact.email} (${contact.companyName || 'Unknown Company'})`);
