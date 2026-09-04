@@ -100,3 +100,33 @@ This guide walks you through setting up Google Cloud OAuth 2.0 credentials for t
    - Enter your email address into the **Send Test Email** input.
    - Click **Send Test Email**.
    - Check your inbox: you should receive the integration test email with your active resume PDF attached!
+
+---
+
+## 7. Railway Production Deployment Configuration
+
+When running in Railway production (`https://ai-job-outreach-agent-production.up.railway.app`):
+
+### 1. Update Google Cloud Console Authorized Redirect URIs
+In **APIs & Services** > **Credentials** > Click your OAuth 2.0 Web Client:
+Under **Authorized redirect URIs**, ensure you have added:
+```
+https://ai-job-outreach-agent-production.up.railway.app/api/gmail/callback
+```
+*(Also keep `http://localhost:3000/api/gmail/callback` for local development).*
+
+### 2. Railway Environment Variables
+In your Railway Service **Variables** tab, set:
+```env
+NEXT_PUBLIC_APP_URL=https://ai-job-outreach-agent-production.up.railway.app
+GMAIL_REDIRECT_URI=https://ai-job-outreach-agent-production.up.railway.app/api/gmail/callback
+GOOGLE_CLIENT_ID=your_client_id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-your_actual_client_secret
+```
+
+### 3. Troubleshooting `invalid_client` Error
+If Google returns `invalid_client`:
+- **API Key vs Client Secret**: Verify that `GOOGLE_CLIENT_SECRET` is your **OAuth 2.0 Client Secret** (which begins with `GOCSPX-`), and **NOT** a Google Cloud API Key (which begins with `AIzaSy`).
+- **Matching Credentials**: Verify that the Client Secret was generated for the exact same Client ID in the Google Cloud Console.
+- **Client Type**: Ensure the OAuth client was created as a **Web application** (not Desktop, Android, or iOS).
+- **No Quotes**: Ensure the value in Railway does not have literal quotation marks or leading/trailing spaces.

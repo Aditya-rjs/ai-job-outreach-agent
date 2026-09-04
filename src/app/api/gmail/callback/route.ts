@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { validateOAuthState, handleOAuthCallback, clearOAuthState } from '@/lib/gmail/gmail-client';
 import { initializeDatabase } from '@/db/migrate';
+import { getPublicAppUrl, getOAuthRedirectUri } from '@/lib/config/url';
 
 let initialized = false;
 function ensureInitialized() {
@@ -18,13 +19,22 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const state = searchParams.get('state');
   const error = searchParams.get('error');
 
-  const baseUrl = request.nextUrl.origin;
+  const baseUrl = getPublicAppUrl(request);
+  const redirectUri = getOAuthRedirectUri(request);
+
+  console.log('[Gmail Callback] Received OAuth callback:', {
+    baseUrl,
+    redirectUri,
+    hasCode: Boolean(code),
+    hasState: Boolean(state),
+    hasError: Boolean(error),
+  });
 
   // Handle user rejection or Google error
   if (error) {
     console.warn('[Gmail Callback] Google returned authorization error:', error);
     clearOAuthState();
-    return NextResponse.redirect(new URL(`/settings?error=Access%20was%20denied%20by%20Google`, baseUrl));
+    return NextResponse.redirect(new URL(`/settings?error=${encodeURIComponent('Access was denied by Google: ' + error)}`, baseUrl));
   }
 
   // Handle missing code
@@ -41,7 +51,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    const result = await handleOAuthCallback(code);
+    const result = await handleOAuthCallback(code, redirectUri);
     if (result.success) {
       console.log(`[Gmail Callback] Authorization succeeded for ${result.email || 'account'}`);
       return NextResponse.redirect(new URL('/settings?gmail=connected', baseUrl));

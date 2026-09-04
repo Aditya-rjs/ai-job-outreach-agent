@@ -11,15 +11,52 @@ import { encrypt, decrypt } from '@/lib/security/encryption';
 const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
 
 /**
- * Creates an unauthenticated Google OAuth2Client instance using environment configuration.
+ * Returns safe diagnostic metadata about the current OAuth configuration
+ * without exposing sensitive client secrets or tokens.
  */
-export function createOAuth2Client(): OAuth2Client {
+export function getSafeOAuthDiagnostics(customRedirectUri?: string) {
   const clientId = env.googleClientId();
   const clientSecret = env.googleClientSecret();
-  const redirectUri = env.gmailRedirectUri();
+  const redirectUri = customRedirectUri || env.gmailRedirectUri();
+
+  const clientIdClean = clientId.trim();
+  const clientSecretClean = clientSecret.trim();
+
+  const secretFingerprint = clientSecretClean
+    ? crypto.createHash('sha256').update(clientSecretClean).digest('hex').slice(0, 8)
+    : 'none';
+
+  const isApiKey = clientSecretClean.startsWith('AIzaSy');
+  const isStandardWebSecret = clientSecretClean.startsWith('GOCSPX-');
+
+  return {
+    hasClientId: Boolean(clientIdClean),
+    clientIdLength: clientIdClean.length,
+    clientIdEndsWithGoogle: clientIdClean.endsWith('.apps.googleusercontent.com'),
+    clientIdSuffix: clientIdClean.length > 20 ? '...' + clientIdClean.slice(-25) : clientIdClean,
+    hasClientSecret: Boolean(clientSecretClean),
+    clientSecretLength: clientSecretClean.length,
+    clientSecretPrefix: clientSecretClean.slice(0, 7),
+    clientSecretFingerprint: secretFingerprint,
+    isStandardWebSecretFormat: isStandardWebSecret,
+    isApiKeyFormat: isApiKey,
+    redirectUri,
+    isHttpsRedirect: redirectUri.startsWith('https://'),
+  };
+}
+
+/**
+ * Creates an unauthenticated Google OAuth2Client instance using environment configuration.
+ */
+export function createOAuth2Client(customRedirectUri?: string): OAuth2Client {
+  const clientId = env.googleClientId();
+  const clientSecret = env.googleClientSecret();
+  const redirectUri = customRedirectUri || env.gmailRedirectUri();
 
   if (!clientId || !clientSecret) {
-    throw new Error('Google OAuth credentials not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env.local.');
+    throw new Error(
+      'Google OAuth credentials not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in environment variables.'
+    );
   }
 
   return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
@@ -28,8 +65,9 @@ export function createOAuth2Client(): OAuth2Client {
 /**
  * Generates an OAuth authorization consent URL with CSRF state protection.
  */
-export function generateAuthUrl(): { url: string; state: string } {
-  const oauth2Client = createOAuth2Client();
+export function generateAuthUrl(customRedirectUri?: string): { url: string; state: string } {
+  const redirectUri = customRedirectUri || env.gmailRedirectUri();
+  const oauth2Client = createOAuth2Client(redirectUri);
   const state = crypto.randomBytes(24).toString('hex');
 
   // Store state in settings table with 10-minute expiry
@@ -49,6 +87,7 @@ export function generateAuthUrl(): { url: string; state: string } {
     scope: [GMAIL_SEND_SCOPE],
     prompt: 'consent',
     state,
+    redirect_uri: redirectUri,
   });
 
   return { url, state };
@@ -87,9 +126,81 @@ export function clearOAuthState(): void {
 /**
  * Exchanges authorization code for tokens, verifies connection, encrypts, and stores them safely in SQLite.
  */
-export async function handleOAuthCallback(code: string): Promise<{ success: boolean; email?: string }> {
-  const oauth2Client = createOAuth2Client();
-  const { tokens } = await oauth2Client.getToken(code);
+export async function handleOAuthCallback(
+  code: string,
+  customRedirectUri?: string
+): Promise<{ success: boolean; email?: string }> {
+  const redirectUri = customRedirectUri || env.gmailRedirectUri();
+  const oauth2Client = createOAuth2Client(redirectUri);
+
+  const diag = getSafeOAuthDiagnostics(redirectUri);
+  console.log('[Gmail Callback] Initiating token exchange with Google OAuth2:', {
+    redirectUri: diag.redirectUri,
+    clientIdSuffix: diag.clientIdSuffix,
+    clientSecretPrefix: diag.clientSecretPrefix + '***',
+    clientSecretLength: diag.clientSecretLength,
+    clientSecretFingerprint: diag.clientSecretFingerprint,
+    isStandardWebSecretFormat: diag.isStandardWebSecretFormat,
+    codeLength: code ? code.length : 0,
+  });
+
+  if (diag.isApiKeyFormat) {
+    console.warn(
+      '[Gmail Callback] CONFIGURATION MISMATCH DETECTED: GOOGLE_CLIENT_SECRET starts with "AIzaSy". ' +
+        'This is the format of an API key, NOT a Google OAuth 2.0 Web Client Secret! ' +
+        'OAuth 2.0 Client Secrets for Web Applications typically start with "GOCSPX-". ' +
+        'Please create or copy an OAuth 2.0 Client Secret from Google Cloud Console > APIs & Services > Credentials.'
+    );
+  }
+
+  let tokens: Credentials;
+  try {
+    const response = await oauth2Client.getToken({
+      code,
+      redirect_uri: redirectUri,
+    });
+    tokens = response.tokens;
+  } catch (exchangeErr: unknown) {
+    const err = exchangeErr as {
+      message?: string;
+      response?: {
+        status?: number;
+        data?: { error?: string; error_description?: string };
+      };
+    };
+
+    const status = err?.response?.status;
+    const errorType = err?.response?.data?.error || err?.message || 'unknown_token_exchange_error';
+    const errorDescription = err?.response?.data?.error_description || '';
+
+    console.error('[Gmail Callback] Google Token Exchange Failed:', {
+      httpStatus: status,
+      oauthError: errorType,
+      errorDescription,
+      redirectUriUsed: redirectUri,
+      clientIdSuffix: diag.clientIdSuffix,
+      clientSecretLength: diag.clientSecretLength,
+      clientSecretFingerprint: diag.clientSecretFingerprint,
+      isStandardWebSecretFormat: diag.isStandardWebSecretFormat,
+      isApiKeyFormat: diag.isApiKeyFormat,
+    });
+
+    let friendlyError = errorType;
+    if (errorType === 'invalid_client') {
+      friendlyError = 'invalid_client (Google rejected Client ID or Secret)';
+      if (diag.isApiKeyFormat) {
+        friendlyError += ' - Warning: Your GOOGLE_CLIENT_SECRET starts with AIzaSy (API Key) instead of GOCSPX- (OAuth Client Secret)';
+      } else if (errorDescription) {
+        friendlyError += `: ${errorDescription}`;
+      } else {
+        friendlyError += ' - Please verify that GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Railway match the Web Application credentials in Google Cloud Console';
+      }
+    } else if (errorDescription) {
+      friendlyError += `: ${errorDescription}`;
+    }
+
+    throw new Error(friendlyError);
+  }
 
   oauth2Client.setCredentials(tokens);
 

@@ -1,10 +1,3 @@
-function getEnvVar(key: string, defaultValue?: string): string {
-  const value = process.env[key] || defaultValue;
-  if (value === undefined) {
-    throw new Error(`Missing environment variable: ${key}`);
-  }
-  return value;
-}
 
 function getOptionalEnvVar(key: string, defaultValue: string = ''): string {
   return process.env[key] || defaultValue;
@@ -20,21 +13,23 @@ export function isValidTimezone(tz: string): boolean {
   }
 }
 
+import { sanitizeEnvValue, getPublicAppUrl, getOAuthRedirectUri } from './url';
+
 export const env = {
   // AI
-  geminiApiKey: () => getEnvVar('GEMINI_API_KEY', ''),
+  geminiApiKey: () => sanitizeEnvValue(process.env.GEMINI_API_KEY),
 
-  // Gmail OAuth
-  googleClientId: () => getOptionalEnvVar('GOOGLE_CLIENT_ID'),
-  googleClientSecret: () => getOptionalEnvVar('GOOGLE_CLIENT_SECRET'),
-  gmailRedirectUri: () => getOptionalEnvVar('GMAIL_REDIRECT_URI', 'http://localhost:3000/api/gmail/callback'),
+  // Gmail OAuth with sanitization (strips accidental quotes and whitespace)
+  googleClientId: () => sanitizeEnvValue(process.env.GOOGLE_CLIENT_ID),
+  googleClientSecret: () => sanitizeEnvValue(process.env.GOOGLE_CLIENT_SECRET),
+  gmailRedirectUri: (request?: Parameters<typeof getOAuthRedirectUri>[0]) => getOAuthRedirectUri(request),
 
   // Security
-  encryptionKey: () => getOptionalEnvVar('ENCRYPTION_KEY'),
-  nextAuthSecret: () => getOptionalEnvVar('NEXTAUTH_SECRET'),
+  encryptionKey: () => sanitizeEnvValue(process.env.ENCRYPTION_KEY),
+  nextAuthSecret: () => sanitizeEnvValue(process.env.NEXTAUTH_SECRET),
 
   // App & Execution Mode
-  appUrl: () => getOptionalEnvVar('NEXT_PUBLIC_APP_URL', 'http://localhost:3000'),
+  appUrl: (request?: Parameters<typeof getPublicAppUrl>[0]) => getPublicAppUrl(request),
   isDryRun: () => process.env.OUTREACH_DRY_RUN === 'true',
   dataDir: () => getOptionalEnvVar('DATA_DIR', 'data'),
 
