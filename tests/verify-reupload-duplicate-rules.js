@@ -272,7 +272,7 @@ async function runTests() {
     const cPhantomId = 'contact_phantom_1';
     db.prepare(`
       INSERT INTO contacts (id, batch_id, email, company_name, is_relevant, email_valid, is_duplicate, status, relevance_reason, created_at, updated_at)
-      VALUES (?, ?, 'reconciled.candidate@example.com', 'Tech Corp', 1, 1, 1, 'skipped', 'Duplicate: email already queued or contacted in previous outreach.', datetime('now'), datetime('now'))
+      VALUES (?, ?, 'reconciled.candidate@example.com', 'Tech Corp', NULL, 1, 1, 'skipped', 'Duplicate: email already queued or contacted in previous outreach.', datetime('now'), datetime('now'))
     `).run(cPhantomId, testBatchId);
 
     // Contact 2: legitimate in-file duplicate (Category E)

@@ -226,7 +226,7 @@ export function initializeDatabase() {
       WHERE b.status NOT IN ('deleted', 'cancelled')
         AND c.status = 'skipped'
         AND c.is_duplicate = 1
-        AND c.is_relevant = 1
+        AND (c.is_relevant = 1 OR c.is_relevant IS NULL)
         AND c.email_valid = 1
         AND c.relevance_reason LIKE 'Duplicate: email already queued or contacted in previous outreach%'
         AND LOWER(TRIM(c.email)) NOT IN (
@@ -249,6 +249,8 @@ export function initializeDatabase() {
           UPDATE contacts
           SET status = 'queued',
               is_duplicate = 0,
+              is_relevant = 1,
+              relevance_confidence = COALESCE(relevance_confidence, 0.9),
               relevance_reason = 'Restored: previous outreach was simulated or deleted',
               updated_at = ${now}
           WHERE id = ${c.id}
