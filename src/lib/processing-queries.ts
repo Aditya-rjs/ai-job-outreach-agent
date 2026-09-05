@@ -1,0 +1,591 @@
+import { getDb } from '@/db';
+import { sql } from 'drizzle-orm';
+
+export interface ProcessingPipelineStats {
+  classificationPendingCount: number;
+  emailGenerationPendingCount: number;
+  generationRetryCount: number;
+  readyToSendCount: number;
+  lastUpdated: string;
+}
+
+export interface ClassificationPendingRecord {
+  companyName: string;
+  normalizedName: string;
+  contactCount: number;
+  contactEmails: string[];
+  representativeContacts: string[]; // e.g. ["Garima Mohan — gmohan@xebia.com"]
+  classificationResult: string;
+  retryCount: number;
+  lastErrorCategory: string | null;
+  nextRetryAt: string | null;
+  geminiModel: string;
+  confidence: number | null;
+  reason: string | null;
+  createdAt: string;
+}
+
+export interface CompanyContactItem {
+  id: string;
+  contactName: string | null;
+  email: string;
+  designation: string | null;
+  companyName: string | null;
+  batchFilename: string;
+}
+
+export interface GenerationPendingRecord {
+  id: string;
+  contactName: string | null;
+  companyName: string | null;
+  email: string;
+  generationStatus: 'PENDING_GENERATION' | 'GENERATING';
+  generationAttemptCount: number;
+  nextGenerationRetryAt: string | null;
+  batchFilename: string;
+  createdAt: string;
+}
+
+export interface GenerationRetryRecord {
+  id: string;
+  contactName: string | null;
+  companyName: string | null;
+  email: string;
+  generationStatus: 'RETRY_PENDING';
+  generationAttemptCount: number;
+  lastGenerationErrorCategory: string | null;
+  nextGenerationRetryAt: string | null;
+  batchFilename: string;
+  createdAt: string;
+}
+
+export interface ReadyToSendRecord {
+  id: string;
+  contactName: string | null;
+  companyName: string | null;
+  email: string;
+  emailSubject: string;
+  emailBody: string;
+  emailStrategy: string | null;
+  generatedAt: string | null;
+  queueStatus: string;
+  queuePriority: number;
+  batchFilename: string;
+  status: string;
+}
+
+export interface ProcessingPaginationOptions {
+  search?: string;
+  page?: number;
+  limit?: number;
+}
+
+// ---------------------------------------------------------------------------
+// 1. CANONICAL STATS FOR AI OUTREACH PROCESSING
+// ---------------------------------------------------------------------------
+
+export function getProcessingPipelineStats(): ProcessingPipelineStats {
+  const db = getDb();
+  const nowIso = new Date().toISOString();
+
+  // 1. Classification Pending: Unique normalized companies in active batches with classification_result = 'PENDING'
+  const classPendingRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(DISTINCT LOWER(TRIM(c.company_name))) as count
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    LEFT JOIN company_classifications cc ON cc.normalized_name = LOWER(TRIM(c.company_name))
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      AND (cc.classification_result = 'PENDING' OR (cc.classification_result IS NULL AND c.is_relevant IS NULL))
+  `);
+
+  // 2. Email Generation Pending: Gemini-relevant contacts awaiting initial generation
+  const genPendingRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(c.id) as count
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.is_relevant = 1
+      AND c.email_valid = 1
+      AND c.is_duplicate = 0
+      AND c.sent_at IS NULL
+      AND (
+        c.generation_status IN ('PENDING_GENERATION', 'GENERATING')
+        OR (
+          c.generation_status IS NULL
+          AND c.status IN ('queued', 'generating', 'discovered')
+          AND (c.email_subject IS NULL OR c.email_body IS NULL OR TRIM(c.email_subject) = '' OR TRIM(c.email_body) = '')
+        )
+      )
+  `);
+
+  // 3. Generation Retry: Contacts in active batches with generation_status = 'RETRY_PENDING'
+  const genRetryRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(c.id) as count
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.is_relevant = 1
+      AND c.email_valid = 1
+      AND c.is_duplicate = 0
+      AND c.sent_at IS NULL
+      AND c.generation_status = 'RETRY_PENDING'
+  `);
+
+  // 4. Ready to Send: Exact scheduler eligibility predicate
+  const readyToSendRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(DISTINCT c.id) as count
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    INNER JOIN outreach_queue oq ON oq.contact_id = c.id
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND (
+        oq.status = 'pending'
+        OR (
+          oq.status = 'failed'
+          AND oq.attempts < 3
+          AND oq.next_retry_at IS NOT NULL
+          AND oq.next_retry_at <= ${nowIso}
+        )
+      )
+      AND c.is_relevant = 1
+      AND c.email_valid = 1
+      AND c.is_duplicate = 0
+      AND c.sent_at IS NULL
+      AND c.email_subject IS NOT NULL
+      AND TRIM(c.email_subject) != ''
+      AND c.email_body IS NOT NULL
+      AND TRIM(c.email_body) != ''
+      AND (c.generation_status = 'GENERATED' OR c.status = 'generated')
+      AND NOT EXISTS (
+        SELECT 1 FROM global_email_history geh
+        WHERE geh.email = LOWER(TRIM(c.email))
+          AND (geh.status = 'sent' OR geh.sent_at IS NOT NULL)
+      )
+  `);
+
+  return {
+    classificationPendingCount: classPendingRow?.count ?? 0,
+    emailGenerationPendingCount: genPendingRow?.count ?? 0,
+    generationRetryCount: genRetryRow?.count ?? 0,
+    readyToSendCount: readyToSendRow?.count ?? 0,
+    lastUpdated: new Date().toISOString(),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 2. CLASSIFICATION PENDING (Company-Level Grouping)
+// ---------------------------------------------------------------------------
+
+export function getClassificationPendingList(opts: ProcessingPaginationOptions = {}): {
+  records: ClassificationPendingRecord[];
+  total: number;
+} {
+  const db = getDb();
+  const search = (opts.search || '').trim().toLowerCase();
+  const page = Math.max(1, opts.page || 1);
+  const limit = Math.max(1, Math.min(opts.limit || 25, 200));
+  const offset = (page - 1) * limit;
+
+  const searchClause = search
+    ? sql`AND (LOWER(TRIM(c.company_name)) LIKE ${`%${search}%`} OR LOWER(c.contact_name) LIKE ${`%${search}%`} OR LOWER(c.email) LIKE ${`%${search}%`})`
+    : sql``;
+
+  const countRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(DISTINCT LOWER(TRIM(c.company_name))) as count
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    LEFT JOIN company_classifications cc ON cc.normalized_name = LOWER(TRIM(c.company_name))
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      AND (cc.classification_result = 'PENDING' OR (cc.classification_result IS NULL AND c.is_relevant IS NULL))
+      ${searchClause}
+  `);
+  const total = countRow?.count ?? 0;
+
+  const rows = db.all<{
+    companyName: string;
+    normalizedName: string;
+    contactCount: number;
+    contactEmailsStr: string | null;
+    contactPairsStr: string | null;
+    classificationResult: string;
+    retryCount: number;
+    lastErrorCategory: string | null;
+    nextRetryAt: string | null;
+    geminiModel: string;
+    confidence: number | null;
+    reason: string | null;
+    createdAt: string;
+  }>(sql`
+    SELECT
+      COALESCE(cc.company_name, TRIM(c.company_name)) as companyName,
+      LOWER(TRIM(c.company_name)) as normalizedName,
+      COUNT(DISTINCT c.id) as contactCount,
+      GROUP_CONCAT(DISTINCT c.email) as contactEmailsStr,
+      GROUP_CONCAT(DISTINCT CASE WHEN c.contact_name IS NOT NULL AND TRIM(c.contact_name) != '' THEN c.contact_name || ' — ' || c.email ELSE c.email END) as contactPairsStr,
+      COALESCE(cc.classification_result, 'PENDING') as classificationResult,
+      COALESCE(cc.retry_count, 0) as retryCount,
+      cc.last_error_category as lastErrorCategory,
+      cc.next_retry_at as nextRetryAt,
+      COALESCE(cc.gemini_model, 'gemini-3.8-flash') as geminiModel,
+      cc.confidence,
+      cc.reason,
+      COALESCE(cc.created_at, MIN(c.created_at)) as createdAt
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    LEFT JOIN company_classifications cc ON cc.normalized_name = LOWER(TRIM(c.company_name))
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      AND (cc.classification_result = 'PENDING' OR (cc.classification_result IS NULL AND c.is_relevant IS NULL))
+      ${searchClause}
+    GROUP BY LOWER(TRIM(c.company_name))
+    ORDER BY cc.retry_count DESC, contactCount DESC, companyName ASC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  const records: ClassificationPendingRecord[] = rows.map((r) => {
+    const contactEmails = r.contactEmailsStr ? r.contactEmailsStr.split(',').filter(Boolean) : [];
+    const representativeContacts = r.contactPairsStr ? r.contactPairsStr.split(',').filter(Boolean) : [];
+
+    return {
+      companyName: r.companyName,
+      normalizedName: r.normalizedName,
+      contactCount: r.contactCount,
+      contactEmails,
+      representativeContacts,
+      classificationResult: r.classificationResult,
+      retryCount: r.retryCount,
+      lastErrorCategory: r.lastErrorCategory,
+      nextRetryAt: r.nextRetryAt,
+      geminiModel: r.geminiModel,
+      confidence: r.confidence,
+      reason: r.reason,
+      createdAt: r.createdAt,
+    };
+  });
+
+  return { records, total };
+}
+
+// ---------------------------------------------------------------------------
+// 3. EXPANDED CONTACTS FOR A PENDING COMPANY
+// ---------------------------------------------------------------------------
+
+export function getCompanyContactsList(normalizedName: string): CompanyContactItem[] {
+  const db = getDb();
+  const target = normalizedName.trim().toLowerCase();
+
+  const rows = db.all<CompanyContactItem>(sql`
+    SELECT
+      c.id,
+      c.contact_name as contactName,
+      c.email,
+      c.designation,
+      c.company_name as companyName,
+      b.filename as batchFilename
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND LOWER(TRIM(c.company_name)) = ${target}
+    ORDER BY c.contact_name ASC, c.email ASC
+  `);
+
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// 4. EMAIL GENERATION PENDING (Only Gemini-Relevant Contacts)
+// ---------------------------------------------------------------------------
+
+export function getEmailGenerationPendingList(opts: ProcessingPaginationOptions = {}): {
+  records: GenerationPendingRecord[];
+  total: number;
+} {
+  const db = getDb();
+  const search = (opts.search || '').trim().toLowerCase();
+  const page = Math.max(1, opts.page || 1);
+  const limit = Math.max(1, Math.min(opts.limit || 25, 200));
+  const offset = (page - 1) * limit;
+
+  const searchClause = search
+    ? sql`AND (LOWER(c.contact_name) LIKE ${`%${search}%`} OR LOWER(c.email) LIKE ${`%${search}%`} OR LOWER(c.company_name) LIKE ${`%${search}%`})`
+    : sql``;
+
+  const countRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(c.id) as count
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.is_relevant = 1
+      AND c.email_valid = 1
+      AND c.is_duplicate = 0
+      AND c.sent_at IS NULL
+      AND (
+        c.generation_status IN ('PENDING_GENERATION', 'GENERATING')
+        OR (
+          c.generation_status IS NULL
+          AND c.status IN ('queued', 'generating', 'discovered')
+          AND (c.email_subject IS NULL OR c.email_body IS NULL OR TRIM(c.email_subject) = '' OR TRIM(c.email_body) = '')
+        )
+      )
+      ${searchClause}
+  `);
+  const total = countRow?.count ?? 0;
+
+  const rows = db.all<{
+    id: string;
+    contactName: string | null;
+    companyName: string | null;
+    email: string;
+    generationStatus: string | null;
+    generationAttemptCount: number;
+    nextGenerationRetryAt: string | null;
+    batchFilename: string;
+    createdAt: string;
+  }>(sql`
+    SELECT
+      c.id,
+      c.contact_name as contactName,
+      c.company_name as companyName,
+      c.email,
+      COALESCE(c.generation_status, 'PENDING_GENERATION') as generationStatus,
+      COALESCE(c.generation_attempt_count, 0) as generationAttemptCount,
+      c.next_generation_retry_at as nextGenerationRetryAt,
+      b.filename as batchFilename,
+      c.created_at as createdAt
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.is_relevant = 1
+      AND c.email_valid = 1
+      AND c.is_duplicate = 0
+      AND c.sent_at IS NULL
+      AND (
+        c.generation_status IN ('PENDING_GENERATION', 'GENERATING')
+        OR (
+          c.generation_status IS NULL
+          AND c.status IN ('queued', 'generating', 'discovered')
+          AND (c.email_subject IS NULL OR c.email_body IS NULL OR TRIM(c.email_subject) = '' OR TRIM(c.email_body) = '')
+        )
+      )
+      ${searchClause}
+    ORDER BY c.created_at ASC, c.id ASC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  const records: GenerationPendingRecord[] = rows.map((r) => ({
+    id: r.id,
+    contactName: r.contactName,
+    companyName: r.companyName,
+    email: r.email,
+    generationStatus: r.generationStatus === 'GENERATING' ? 'GENERATING' : 'PENDING_GENERATION',
+    generationAttemptCount: r.generationAttemptCount,
+    nextGenerationRetryAt: r.nextGenerationRetryAt,
+    batchFilename: r.batchFilename,
+    createdAt: r.createdAt,
+  }));
+
+  return { records, total };
+}
+
+// ---------------------------------------------------------------------------
+// 5. GENERATION RETRY (Transient Errors Waiting for Auto-Retry)
+// ---------------------------------------------------------------------------
+
+export function getGenerationRetryList(opts: ProcessingPaginationOptions = {}): {
+  records: GenerationRetryRecord[];
+  total: number;
+} {
+  const db = getDb();
+  const search = (opts.search || '').trim().toLowerCase();
+  const page = Math.max(1, opts.page || 1);
+  const limit = Math.max(1, Math.min(opts.limit || 25, 200));
+  const offset = (page - 1) * limit;
+
+  const searchClause = search
+    ? sql`AND (LOWER(c.contact_name) LIKE ${`%${search}%`} OR LOWER(c.email) LIKE ${`%${search}%`} OR LOWER(c.company_name) LIKE ${`%${search}%`})`
+    : sql``;
+
+  const countRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(c.id) as count
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.is_relevant = 1
+      AND c.email_valid = 1
+      AND c.is_duplicate = 0
+      AND c.sent_at IS NULL
+      AND c.generation_status = 'RETRY_PENDING'
+      ${searchClause}
+  `);
+  const total = countRow?.count ?? 0;
+
+  const rows = db.all<{
+    id: string;
+    contactName: string | null;
+    companyName: string | null;
+    email: string;
+    generationStatus: string;
+    generationAttemptCount: number;
+    lastGenerationErrorCategory: string | null;
+    nextGenerationRetryAt: string | null;
+    batchFilename: string;
+    createdAt: string;
+  }>(sql`
+    SELECT
+      c.id,
+      c.contact_name as contactName,
+      c.company_name as companyName,
+      c.email,
+      c.generation_status as generationStatus,
+      COALESCE(c.generation_attempt_count, 0) as generationAttemptCount,
+      c.last_generation_error_category as lastGenerationErrorCategory,
+      c.next_generation_retry_at as nextGenerationRetryAt,
+      b.filename as batchFilename,
+      c.created_at as createdAt
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.is_relevant = 1
+      AND c.email_valid = 1
+      AND c.is_duplicate = 0
+      AND c.sent_at IS NULL
+      AND c.generation_status = 'RETRY_PENDING'
+      ${searchClause}
+    ORDER BY c.next_generation_retry_at ASC, c.generation_attempt_count DESC, c.id ASC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  const records: GenerationRetryRecord[] = rows.map((r) => ({
+    id: r.id,
+    contactName: r.contactName,
+    companyName: r.companyName,
+    email: r.email,
+    generationStatus: 'RETRY_PENDING',
+    generationAttemptCount: r.generationAttemptCount,
+    lastGenerationErrorCategory: r.lastGenerationErrorCategory,
+    nextGenerationRetryAt: r.nextGenerationRetryAt,
+    batchFilename: r.batchFilename,
+    createdAt: r.createdAt,
+  }));
+
+  return { records, total };
+}
+
+// ---------------------------------------------------------------------------
+// 6. READY TO SEND (Matches Canonical Scheduler Sendability Exactly)
+// ---------------------------------------------------------------------------
+
+export function getReadyToSendList(opts: ProcessingPaginationOptions = {}): {
+  records: ReadyToSendRecord[];
+  total: number;
+} {
+  const db = getDb();
+  const search = (opts.search || '').trim().toLowerCase();
+  const page = Math.max(1, opts.page || 1);
+  const limit = Math.max(1, Math.min(opts.limit || 25, 200));
+  const offset = (page - 1) * limit;
+  const nowIso = new Date().toISOString();
+
+  const searchClause = search
+    ? sql`AND (LOWER(c.contact_name) LIKE ${`%${search}%`} OR LOWER(c.email) LIKE ${`%${search}%`} OR LOWER(c.company_name) LIKE ${`%${search}%`} OR LOWER(c.email_subject) LIKE ${`%${search}%`})`
+    : sql``;
+
+  const countRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(DISTINCT c.id) as count
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    INNER JOIN outreach_queue oq ON oq.contact_id = c.id
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND (
+        oq.status = 'pending'
+        OR (
+          oq.status = 'failed'
+          AND oq.attempts < 3
+          AND oq.next_retry_at IS NOT NULL
+          AND oq.next_retry_at <= ${nowIso}
+        )
+      )
+      AND c.is_relevant = 1
+      AND c.email_valid = 1
+      AND c.is_duplicate = 0
+      AND c.sent_at IS NULL
+      AND c.email_subject IS NOT NULL
+      AND TRIM(c.email_subject) != ''
+      AND c.email_body IS NOT NULL
+      AND TRIM(c.email_body) != ''
+      AND (c.generation_status = 'GENERATED' OR c.status = 'generated')
+      AND NOT EXISTS (
+        SELECT 1 FROM global_email_history geh
+        WHERE geh.email = LOWER(TRIM(c.email))
+          AND (geh.status = 'sent' OR geh.sent_at IS NOT NULL)
+      )
+      ${searchClause}
+  `);
+  const total = countRow?.count ?? 0;
+
+  const rows = db.all<{
+    id: string;
+    contactName: string | null;
+    companyName: string | null;
+    email: string;
+    emailSubject: string;
+    emailBody: string;
+    emailStrategy: string | null;
+    generatedAt: string | null;
+    queueStatus: string;
+    queuePriority: number;
+    batchFilename: string;
+    status: string;
+  }>(sql`
+    SELECT
+      c.id,
+      c.contact_name as contactName,
+      c.company_name as companyName,
+      c.email,
+      c.email_subject as emailSubject,
+      c.email_body as emailBody,
+      c.email_strategy as emailStrategy,
+      c.generated_at as generatedAt,
+      oq.status as queueStatus,
+      oq.priority as queuePriority,
+      b.filename as batchFilename,
+      c.status
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    INNER JOIN outreach_queue oq ON oq.contact_id = c.id
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND (
+        oq.status = 'pending'
+        OR (
+          oq.status = 'failed'
+          AND oq.attempts < 3
+          AND oq.next_retry_at IS NOT NULL
+          AND oq.next_retry_at <= ${nowIso}
+        )
+      )
+      AND c.is_relevant = 1
+      AND c.email_valid = 1
+      AND c.is_duplicate = 0
+      AND c.sent_at IS NULL
+      AND c.email_subject IS NOT NULL
+      AND TRIM(c.email_subject) != ''
+      AND c.email_body IS NOT NULL
+      AND TRIM(c.email_body) != ''
+      AND (c.generation_status = 'GENERATED' OR c.status = 'generated')
+      AND NOT EXISTS (
+        SELECT 1 FROM global_email_history geh
+        WHERE geh.email = LOWER(TRIM(c.email))
+          AND (geh.status = 'sent' OR geh.sent_at IS NOT NULL)
+      )
+      ${searchClause}
+    ORDER BY oq.priority DESC, oq.created_at ASC, c.id ASC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  return { records: rows, total };
+}

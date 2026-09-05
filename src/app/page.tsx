@@ -26,6 +26,7 @@ import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/lib/utils';
 import type { DashboardStats, Batch, SchedulerConfig } from '@/types';
 import { DashboardDetailModal, type DashboardCardViewId } from '@/components/dashboard/dashboard-detail-modal';
+import { ProcessingPipelineSection } from '@/components/dashboard/processing-pipeline-section';
 
 const POLL_INTERVAL_MS = 6000; // 6 seconds automatic refresh
 
@@ -614,6 +615,9 @@ export default function DashboardPage() {
           active={activeModalView === 'skipped-filtered'}
         />
       </div>
+
+      {/* AI Outreach Processing Pipeline Section */}
+      <ProcessingPipelineSection refreshTrigger={lastSyncTime?.getTime()} />
 
       {/* Two-column layout for recent batches and activity */}
       <div className="grid gap-6 lg:grid-cols-2">
