@@ -13,20 +13,70 @@ function ensureInitialized() {
   }
 }
 
+import {
+  getTotalContactsList,
+  getEligibleQueuedList,
+  getEmailsGeneratedList,
+  getEmailsSentList,
+  getEmailsSkippedList,
+} from '@/lib/dashboard-queries';
+
+export const dynamic = 'force-dynamic';
+
 export async function GET(
   request: NextRequest
-): Promise<NextResponse<ApiResponse<{ contacts: (Contact & { batchFilename?: string })[]; total: number }>>> {
+): Promise<NextResponse> {
   try {
     ensureInitialized();
     const db = getDb();
 
     const searchParams = request.nextUrl.searchParams;
+    const view = searchParams.get('view');
     const search = (searchParams.get('search') || '').trim().toLowerCase();
     const status = searchParams.get('status');
+    const mode = searchParams.get('mode') as 'real' | 'simulated' | null;
     const limit = parseInt(searchParams.get('limit') || '50', 10);
     const page = parseInt(searchParams.get('page') || '1', 10);
     const offset = (page - 1) * limit;
 
+    // 1. If a canonical dashboard view is requested, route to single source of truth
+    if (view === 'contacts-found') {
+      const result = getTotalContactsList({ search, page, limit });
+      return NextResponse.json({ success: true, data: result }, {
+        headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+      });
+    }
+
+    if (view === 'eligible-queued') {
+      const result = getEligibleQueuedList({ search, page, limit });
+      return NextResponse.json({ success: true, data: result }, {
+        headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+      });
+    }
+
+    if (view === 'emails-generated') {
+      const result = getEmailsGeneratedList({ search, page, limit });
+      return NextResponse.json({ success: true, data: result }, {
+        headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+      });
+    }
+
+    if (view === 'emails-sent') {
+      const sendMode = mode || (process.env.OUTREACH_DRY_RUN === 'true' ? 'simulated' : 'real');
+      const result = getEmailsSentList({ search, page, limit, mode: sendMode });
+      return NextResponse.json({ success: true, data: result }, {
+        headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+      });
+    }
+
+    if (view === 'skipped-filtered') {
+      const result = getEmailsSkippedList({ search, page, limit });
+      return NextResponse.json({ success: true, data: result }, {
+        headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+      });
+    }
+
+    // 2. Standard contacts query (fallback for global contacts page)
     const conditions = [];
 
     if (status && status !== 'all') {
@@ -75,6 +125,13 @@ export async function GET(
         sentAt: contacts.sentAt,
         errorMessage: contacts.errorMessage,
         sendAttemptCount: contacts.sendAttemptCount,
+        generationStatus: contacts.generationStatus,
+        generationAttemptCount: contacts.generationAttemptCount,
+        generationClaimToken: contacts.generationClaimToken,
+        generationLeaseExpiresAt: contacts.generationLeaseExpiresAt,
+        lastGenerationErrorCategory: contacts.lastGenerationErrorCategory,
+        nextGenerationRetryAt: contacts.nextGenerationRetryAt,
+        lastGenerationAttemptAt: contacts.lastGenerationAttemptAt,
         createdAt: contacts.createdAt,
         updatedAt: contacts.updatedAt,
         batchFilename: batches.filename,
@@ -93,6 +150,10 @@ export async function GET(
       data: {
         contacts: records as (Contact & { batchFilename?: string })[],
         total: totalCount,
+      },
+    }, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
       },
     });
   } catch (error) {

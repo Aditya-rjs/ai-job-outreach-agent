@@ -12,6 +12,16 @@ import {
 } from '@/lib/scheduler/time-utils';
 import { getGeminiTelemetry } from '@/lib/ai/gemini-client';
 
+import {
+  getTotalCompaniesCount,
+  getRelevantCompaniesCount,
+  getTotalContactsCount,
+  getEligibleQueuedCount,
+  getEmailsGeneratedCount,
+  getEmailsSentCount,
+  getEmailsSkippedCount,
+} from './dashboard-queries';
+
 
 export function getDashboardStats(): DashboardStats {
   const db = getDb();
@@ -19,39 +29,37 @@ export function getDashboardStats(): DashboardStats {
   // Reconcile quota first
   const quota = reconcileDailyQuota();
 
-  // Aggregate contact metrics
+  const isDryRun = process.env.OUTREACH_DRY_RUN === 'true';
+
+  // Canonical 7-card statistics (Single Source of Truth)
+  const totalCompanies = getTotalCompaniesCount();
+  const relevantCompanies = getRelevantCompaniesCount();
+  const totalContacts = getTotalContactsCount();
+  const emailsQueued = getEligibleQueuedCount();
+  const emailsGenerated = getEmailsGeneratedCount();
+  const emailsSent = getEmailsSentCount(false);
+  const emailsSimulated = getEmailsSentCount(true);
+  const emailsSkipped = getEmailsSkippedCount();
+
+  // Aggregate secondary generation metrics
   const contactStats = db
     .select({
-      totalContacts: count(),
-      emailsSent: sql<number>`SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END)`,
-      emailsSimulated: sql<number>`SUM(CASE WHEN status = 'simulated' THEN 1 ELSE 0 END)`,
       emailsFailed: sql<number>`SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)`,
-      emailsSkipped: sql<number>`SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END)`,
-      emailsGenerated: sql<number>`SUM(CASE WHEN generation_status = 'GENERATED' OR (status = 'generated' AND email_body IS NOT NULL) THEN 1 ELSE 0 END)`,
       emailsPendingGeneration: sql<number>`SUM(CASE WHEN generation_status = 'PENDING_GENERATION' OR (is_relevant = 1 AND email_valid = 1 AND is_duplicate = 0 AND status = 'queued' AND (email_body IS NULL OR generation_status IS NULL)) THEN 1 ELSE 0 END)`,
       emailsGenerating: sql<number>`SUM(CASE WHEN generation_status = 'GENERATING' OR status = 'generating' THEN 1 ELSE 0 END)`,
       emailsGenerationRetryPending: sql<number>`SUM(CASE WHEN generation_status = 'RETRY_PENDING' THEN 1 ELSE 0 END)`,
       emailsGenerationFailed: sql<number>`SUM(CASE WHEN generation_status = 'GENERATION_FAILED' THEN 1 ELSE 0 END)`,
       emailsUncertain: sql<number>`SUM(CASE WHEN status = 'uncertain' THEN 1 ELSE 0 END)`,
-      relevantCompanies: sql<number>`SUM(CASE WHEN is_relevant = 1 AND is_duplicate = 0 THEN 1 ELSE 0 END)`,
-      totalCompanies: sql<number>`COUNT(DISTINCT CASE WHEN company_name IS NOT NULL AND company_name != '' THEN company_name END)`,
     })
     .from(contacts)
     .where(sql`contacts.batch_id NOT IN (SELECT id FROM batches WHERE status = 'deleted')`)
     .get() ?? {
-    totalContacts: 0,
-    emailsSent: 0,
-    emailsSimulated: 0,
     emailsFailed: 0,
-    emailsSkipped: 0,
-    emailsGenerated: 0,
     emailsPendingGeneration: 0,
     emailsGenerating: 0,
     emailsGenerationRetryPending: 0,
     emailsGenerationFailed: 0,
     emailsUncertain: 0,
-    relevantCompanies: 0,
-    totalCompanies: 0,
   };
 
 
@@ -81,7 +89,6 @@ export function getDashboardStats(): DashboardStats {
 
   const lease = isLeaseActive();
   const isWithinWindow = isWithinDailyWindow(new Date(), timezone, startHour, startMinute);
-  const isDryRun = process.env.OUTREACH_DRY_RUN === 'true';
 
   let outreachStatus: DashboardStats['outreachStatus'] = 'idle';
   if (isStopped) {
@@ -96,34 +103,27 @@ export function getDashboardStats(): DashboardStats {
     outreachStatus = 'sending';
   } else if (queueSize > 0) {
     outreachStatus = 'running';
-  } else if (((contactStats.emailsSent ?? 0) > 0 || (contactStats.emailsSimulated ?? 0) > 0) && queueSize === 0) {
+  } else if (((emailsSent > 0) || (emailsSimulated > 0)) && queueSize === 0) {
     outreachStatus = 'completed';
   }
-
-  // Get emails queued count
-  const emailsQueued = db
-    .select({ count: count() })
-    .from(contacts)
-    .where(sql`status IN ('queued', 'generating', 'processing')`)
-    .get()?.count ?? 0;
 
   const gmailConnected = db.select().from(settings).where(eq(settings.key, 'gmail_connected')).get();
   const gmailEmail = db.select().from(settings).where(eq(settings.key, 'gmail_email')).get();
 
   return {
-    totalCompanies: contactStats.totalCompanies ?? 0,
-    relevantCompanies: contactStats.relevantCompanies ?? 0,
-    totalContacts: contactStats.totalContacts ?? 0,
-    emailsSent: contactStats.emailsSent ?? 0,
-    emailsSimulated: contactStats.emailsSimulated ?? 0,
+    totalCompanies,
+    relevantCompanies,
+    totalContacts,
+    emailsSent,
+    emailsSimulated,
     emailsFailed: contactStats.emailsFailed ?? 0,
     emailsQueued,
-    emailsGenerated: contactStats.emailsGenerated ?? 0,
+    emailsGenerated,
     emailsPendingGeneration: contactStats.emailsPendingGeneration ?? 0,
     emailsGenerating: contactStats.emailsGenerating ?? 0,
     emailsGenerationRetryPending: contactStats.emailsGenerationRetryPending ?? 0,
     emailsGenerationFailed: contactStats.emailsGenerationFailed ?? 0,
-    emailsSkipped: contactStats.emailsSkipped ?? 0,
+    emailsSkipped,
     emailsUncertain: contactStats.emailsUncertain ?? 0,
     todaySentCount,
     todaySimulatedCount,

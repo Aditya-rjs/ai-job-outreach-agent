@@ -25,6 +25,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/lib/utils';
 import type { DashboardStats, Batch, SchedulerConfig } from '@/types';
+import { DashboardDetailModal, type DashboardCardViewId } from '@/components/dashboard/dashboard-detail-modal';
 
 const POLL_INTERVAL_MS = 6000; // 6 seconds automatic refresh
 
@@ -37,6 +38,47 @@ export default function DashboardPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+
+  // Active detail view for clickable dashboard cards
+  const [activeModalView, setActiveModalView] = useState<DashboardCardViewId | null>(null);
+
+  // Read initial ?view= parameter from URL if available
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const initialView = params.get('view') as DashboardCardViewId | null;
+      const validViews: DashboardCardViewId[] = [
+        'total-companies',
+        'relevant-tech',
+        'contacts-found',
+        'eligible-queued',
+        'emails-generated',
+        'emails-sent',
+        'skipped-filtered',
+      ];
+      if (initialView && validViews.includes(initialView)) {
+        setActiveModalView(initialView);
+      }
+    }
+  }, []);
+
+  const handleOpenCardView = (viewId: DashboardCardViewId) => {
+    setActiveModalView(viewId);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('view', viewId);
+      window.history.pushState({}, '', url.toString());
+    }
+  };
+
+  const handleCloseCardView = () => {
+    setActiveModalView(null);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('view');
+      window.history.pushState({}, '', url.toString());
+    }
+  };
 
   // In-flight guard and response sequencing references
   const inFlightRef = useRef(false);
@@ -525,37 +567,51 @@ export default function DashboardPage() {
           title="Total Companies"
           value={stats ? stats.totalCompanies : 0}
           icon={Building2}
+          onClick={() => handleOpenCardView('total-companies')}
+          active={activeModalView === 'total-companies'}
         />
         <StatCard
           title="Relevant Tech"
           value={stats ? stats.relevantCompanies : 0}
           icon={CheckCircle2}
+          onClick={() => handleOpenCardView('relevant-tech')}
+          active={activeModalView === 'relevant-tech'}
         />
         <StatCard
           title="Contacts Found"
           value={stats ? stats.totalContacts : 0}
           icon={Inbox}
+          onClick={() => handleOpenCardView('contacts-found')}
+          active={activeModalView === 'contacts-found'}
         />
         <StatCard
           title="Eligible Queued"
           value={stats ? stats.emailsQueued : 0}
           icon={Clock}
+          onClick={() => handleOpenCardView('eligible-queued')}
+          active={activeModalView === 'eligible-queued'}
         />
         <StatCard
           title="Emails Generated"
           value={stats ? stats.emailsGenerated : 0}
           icon={Sparkles}
+          onClick={() => handleOpenCardView('emails-generated')}
+          active={activeModalView === 'emails-generated'}
         />
         <StatCard
           title={stats?.isDryRun ? "Simulated Sends" : "Emails Sent"}
           value={stats ? (stats.isDryRun ? stats.emailsSimulated : stats.emailsSent) : 0}
           subtitle={stats?.isDryRun ? "Simulated — no real emails sent." : "30 successful real emails/day"}
           icon={Send}
+          onClick={() => handleOpenCardView('emails-sent')}
+          active={activeModalView === 'emails-sent'}
         />
         <StatCard
           title="Skipped / Filtered"
           value={stats ? stats.emailsSkipped : 0}
           icon={AlertCircle}
+          onClick={() => handleOpenCardView('skipped-filtered')}
+          active={activeModalView === 'skipped-filtered'}
         />
       </div>
 
@@ -663,6 +719,15 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Interactive Detail Modal for Dashboard Statistics */}
+      {activeModalView && (
+        <DashboardDetailModal
+          view={activeModalView}
+          onClose={handleCloseCardView}
+          isDryRun={Boolean(stats?.isDryRun)}
+        />
+      )}
     </div>
   );
 }
