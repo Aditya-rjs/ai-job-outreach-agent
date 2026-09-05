@@ -28,11 +28,26 @@ export interface DashboardStats {
   geminiTelemetry?: {
     currentModel: string;
     maxConcurrency: number;
+    minDispatchGapMs?: number;
+    effectivePacingMs?: number;
     inFlightRequests: number;
     queuedRequests: number;
+    queueDepth?: number;
+    totalRequests?: number;
+    requestsStarted?: number;
+    requestsSucceeded?: number;
+    requestsFailed?: number;
     recent429Count: number;
+    rateLimit429Count?: number;
+    consecutive429Count?: number;
+    isCooldownActive?: boolean;
+    cooldownUntil?: string | null;
+    cooldownRemainingSeconds?: number;
     recentTransientErrorCount: number;
+    last429At?: string | null;
+    lastTransientErrorAt?: string | null;
   };
+
   outreachStatus: 'idle' | 'running' | 'sending' | 'paused' | 'stopped' | 'waiting' | 'completed' | 'quota_reached';
 }
 

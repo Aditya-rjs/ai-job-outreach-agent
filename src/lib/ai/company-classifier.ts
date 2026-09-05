@@ -1,7 +1,7 @@
 import { getDb } from '@/db';
 import { companyClassifications } from '@/db/schema';
 import { inArray, eq } from 'drizzle-orm';
-import { callGemini, getGeminiClient, categorizeGeminiError, sanitizeSecretText, GEMINI_PRIORITIES, type CategorizedGeminiError } from './gemini-client';
+import { callGemini, getGeminiClient, categorizeGeminiError, sanitizeSecretText, GEMINI_PRIORITIES, globalGeminiLimiter, type CategorizedGeminiError } from './gemini-client';
 
 import { normalizeCompanyName, formatCompanyDisplayName } from '@/lib/utils/company';
 
@@ -400,7 +400,64 @@ export async function classifyCompanies(
         const diag = categorizeGeminiError(err);
         console.warn(`[CompanyClassifier] Gemini batch classification failed (${diag.code}): ${diag.safeDetail}`);
 
-        // Handle failure for every company in this chunk
+        const isRateLimit =
+          diag.code === 'RATE_LIMIT_EXCEEDED' ||
+          /\b429\b/.test(diag.safeDetail) ||
+          /RESOURCE_EXHAUSTED/i.test(diag.safeDetail);
+
+        if (isRateLimit) {
+          globalGeminiLimiter.recordError(err);
+
+          // 1. Mark attempted chunk as PENDING with retryCount: 1
+          const nextRetryAt = computeNextRetryTime(1);
+          for (const item of chunk) {
+            const pendingResult: CompanyClassificationResult = {
+              companyName: item.companyName,
+              normalizedName: item.normalizedName,
+              relevant: null,
+              confidence: null,
+              status: 'PENDING',
+              source: 'gemini',
+              geminiModel: configuredModel,
+              retryCount: 1,
+              lastErrorCategory: diag.code,
+              nextRetryAt,
+              reason: 'Classification Pending — Gemini temporarily unavailable. Will retry automatically.',
+            };
+            finalMap.set(item.normalizedName, pendingResult);
+            memoryCache.set(item.normalizedName, pendingResult);
+            newlyClassified.push(pendingResult);
+          }
+
+          // 2. Mark remaining UNATTEMPTED companies as PENDING with retryCount: 0
+          const remainingCompanies = toClassify.slice(i + BATCH_SIZE);
+          for (const item of remainingCompanies) {
+            const unattemptedResult: CompanyClassificationResult = {
+              companyName: item.companyName,
+              normalizedName: item.normalizedName,
+              relevant: null,
+              confidence: null,
+              status: 'PENDING',
+              source: 'gemini',
+              geminiModel: configuredModel,
+              retryCount: 0,
+              lastErrorCategory: null,
+              nextRetryAt,
+              reason: 'Classification Pending — Queued for background classification.',
+            };
+            finalMap.set(item.normalizedName, unattemptedResult);
+            memoryCache.set(item.normalizedName, unattemptedResult);
+            newlyClassified.push(unattemptedResult);
+          }
+
+          console.warn(
+            `[CompanyClassifier] Rate limit encountered. Marked ${chunk.length} attempted companies (retry #1) and ${remainingCompanies.length} unattempted companies (retry #0) as PENDING.`
+          );
+          // STOP chunk loop immediately to protect quota
+          break;
+        }
+
+        // Handle failure for non-429 error
         for (const item of chunk) {
           if (diag.isTransient) {
             // Transient failure -> PENDING with 2-minute initial retry
@@ -443,6 +500,7 @@ export async function classifyCompanies(
           }
         }
       }
+
     } else {
       // GEMINI_API_KEY is not configured
       const diag = categorizeGeminiError(new Error('GEMINI_API_KEY is not configured in the environment.'));

@@ -8,7 +8,7 @@ import {
   type CompanyEvaluationInput,
   type CompanyClassificationResult,
 } from '@/lib/ai/company-classifier';
-import { categorizeGeminiError } from '@/lib/ai/gemini-client';
+import { categorizeGeminiError, globalGeminiLimiter } from '@/lib/ai/gemini-client';
 
 export interface ReconcileResult {
   processed: number;
@@ -18,6 +18,17 @@ export interface ReconcileResult {
   failed: number;
 }
 
+// In-memory set to prevent duplicate classification operations within the same process
+const activeClassificationOperations = new Set<string>();
+
+export function getActiveClassificationClaims(): string[] {
+  return Array.from(activeClassificationOperations);
+}
+
+export function resetActiveClassificationClaimsForTesting(): void {
+  activeClassificationOperations.clear();
+}
+
 /**
  * Periodically processes company classifications that are PENDING and due for retry.
  * Survives application and container restarts by reading and persisting state in SQLite.
@@ -25,21 +36,31 @@ export interface ReconcileResult {
 export async function reconcilePendingClassifications(
   geminiCallerOverride?: (prompt: string) => Promise<string>
 ): Promise<ReconcileResult> {
+  // Check if global Gemini 429 cooldown is currently active
+  if (globalGeminiLimiter.isCooldownActive()) {
+    console.log(
+      `[ClassificationReconciler] Global Gemini 429 cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()}. Skipping reconciliation run.`
+    );
+    return { processed: 0, succeeded: 0, promotedToQueue: 0, stillPending: 0, failed: 0 };
+  }
+
   const db = getDb();
   const now = new Date();
   const nowIso = now.toISOString();
 
-  // 1. Fetch pending company classifications due for retry
+  // 1. Fetch pending company classifications due for retry and not leased
   const pendingRecords = db
     .select()
     .from(companyClassifications)
     .where(
       and(
         eq(companyClassifications.classificationResult, 'PENDING'),
-        sql`(${companyClassifications.nextRetryAt} IS NULL OR ${companyClassifications.nextRetryAt} <= ${nowIso})`
+        sql`(${companyClassifications.nextRetryAt} IS NULL OR ${companyClassifications.nextRetryAt} <= ${nowIso})`,
+        sql`(${companyClassifications.claimToken} IS NULL OR ${companyClassifications.leaseExpiresAt} < ${nowIso})`
       )
     )
-    .all();
+    .all()
+    .filter((r) => !activeClassificationOperations.has(r.normalizedName));
 
   if (pendingRecords.length === 0) {
     return { processed: 0, succeeded: 0, promotedToQueue: 0, stillPending: 0, failed: 0 };
@@ -47,6 +68,7 @@ export async function reconcilePendingClassifications(
 
   console.log(`[ClassificationReconciler] Found ${pendingRecords.length} pending company classifications due for retry.`);
 
+  let processed = 0;
   let succeeded = 0;
   let promotedToQueue = 0;
   let stillPending = 0;
@@ -87,8 +109,49 @@ export async function reconcilePendingClassifications(
   // 3. Process in controlled batches of 10
   const BATCH_SIZE = 10;
   for (let i = 0; i < pendingRecords.length; i += BATCH_SIZE) {
+    // Check if cooldown became active during execution of earlier chunks
+    if (globalGeminiLimiter.isCooldownActive()) {
+      console.log(
+        `[ClassificationReconciler] Global Gemini cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()}. Stopping chunk loop.`
+      );
+      break;
+    }
+
     const chunkRecords = pendingRecords.slice(i, i + BATCH_SIZE);
-    const chunkInputs: CompanyEvaluationInput[] = chunkRecords.map((r) => {
+    const claimToken = `reconcile_${ulid()}`;
+    const leaseExpiresAt = new Date(Date.now() + 60000).toISOString();
+
+    // Atomic claim lease per company record
+    const claimedChunk: typeof chunkRecords = [];
+    for (const r of chunkRecords) {
+      try {
+        const claimRes = db.run(sql`
+          UPDATE company_classifications
+          SET claim_token = ${claimToken},
+              lease_expires_at = ${leaseExpiresAt},
+              updated_at = ${nowIso}
+          WHERE normalized_name = ${r.normalizedName}
+            AND classification_result = 'PENDING'
+            AND (claim_token IS NULL OR lease_expires_at < ${nowIso})
+        `);
+        if (claimRes.changes > 0) {
+          activeClassificationOperations.add(r.normalizedName);
+          claimedChunk.push(r);
+        }
+      } catch {
+        // Fallback for environments where migration is pending
+        activeClassificationOperations.add(r.normalizedName);
+        claimedChunk.push(r);
+      }
+    }
+
+    if (claimedChunk.length === 0) {
+      continue;
+    }
+
+    processed += claimedChunk.length;
+
+    const chunkInputs: CompanyEvaluationInput[] = claimedChunk.map((r) => {
       const ctx = contextMap.get(r.normalizedName);
       return {
         companyName: r.companyName,
@@ -102,9 +165,10 @@ export async function reconcilePendingClassifications(
     try {
       const results = await classifyWithGeminiBatch(chunkInputs, geminiCallerOverride, { isRetry: true });
 
-
       for (const res of results) {
-        // Persist final resolution in SQLite
+        activeClassificationOperations.delete(res.normalizedName);
+
+        // Persist final resolution in SQLite and release lease
         db.update(companyClassifications)
           .set({
             isRelevant: res.relevant,
@@ -115,6 +179,8 @@ export async function reconcilePendingClassifications(
             classificationResult: res.status,
             lastErrorCategory: null,
             nextRetryAt: null,
+            claimToken: null,
+            leaseExpiresAt: null,
             updatedAt: new Date().toISOString(),
           })
           .where(eq(companyClassifications.normalizedName, res.normalizedName))
@@ -129,8 +195,22 @@ export async function reconcilePendingClassifications(
       const diag = categorizeGeminiError(err);
       console.warn(`[ClassificationReconciler] Batch retry failed (${diag.code}): ${diag.safeDetail}`);
 
-      for (const r of chunkRecords) {
-        if (diag.isTransient) {
+      // Release in-memory claims
+      for (const r of claimedChunk) {
+        activeClassificationOperations.delete(r.normalizedName);
+      }
+
+      const isRateLimit =
+        diag.code === 'RATE_LIMIT_EXCEEDED' ||
+        /\b429\b/.test(diag.safeDetail) ||
+        /RESOURCE_EXHAUSTED/i.test(diag.safeDetail);
+
+      if (isRateLimit) {
+        // Propagate into global rate limiter if custom caller was passed
+        globalGeminiLimiter.recordError(err);
+
+        // Persist failure and increment retryCount EXACTLY ONCE for this attempted chunk
+        for (const r of claimedChunk) {
           const newRetryCount = r.retryCount + 1;
           const nextRetry = computeNextRetryTime(newRetryCount, now);
 
@@ -139,19 +219,51 @@ export async function reconcilePendingClassifications(
               retryCount: newRetryCount,
               lastErrorCategory: diag.code,
               nextRetryAt: nextRetry,
+              claimToken: null,
+              leaseExpiresAt: null,
               updatedAt: new Date().toISOString(),
             })
             .where(eq(companyClassifications.normalizedName, r.normalizedName))
             .run();
 
           stillPending++;
-        } else {
-          // Permanent configuration error -> mark FAILED
+        }
+
+        console.warn(
+          `[ClassificationReconciler] 429 Rate limit encountered on chunk. Stopping reconciliation run immediately to protect quota. 0 subsequent chunks attempted.`
+        );
+
+        // STOP THE CURRENT RUN IMMEDIATELY — DO NOT ATTEMPT REMAINING CHUNKS!
+        break;
+      } else if (diag.isTransient) {
+        for (const r of claimedChunk) {
+          const newRetryCount = r.retryCount + 1;
+          const nextRetry = computeNextRetryTime(newRetryCount, now);
+
+          db.update(companyClassifications)
+            .set({
+              retryCount: newRetryCount,
+              lastErrorCategory: diag.code,
+              nextRetryAt: nextRetry,
+              claimToken: null,
+              leaseExpiresAt: null,
+              updatedAt: new Date().toISOString(),
+            })
+            .where(eq(companyClassifications.normalizedName, r.normalizedName))
+            .run();
+
+          stillPending++;
+        }
+      } else {
+        // Permanent configuration error -> mark FAILED
+        for (const r of claimedChunk) {
           db.update(companyClassifications)
             .set({
               classificationResult: 'FAILED',
               lastErrorCategory: diag.code,
               nextRetryAt: null,
+              claimToken: null,
+              leaseExpiresAt: null,
               reason: `Gemini configuration error: ${diag.explanation}`,
               updatedAt: new Date().toISOString(),
             })
@@ -173,13 +285,14 @@ export async function reconcilePendingClassifications(
   reconcileActiveBatchCounters(db);
 
   return {
-    processed: pendingRecords.length,
+    processed,
     succeeded,
     promotedToQueue,
     stillPending,
     failed,
   };
 }
+
 
 /**
  * Cascades a resolved company classification to all contacts of that company across active batches.

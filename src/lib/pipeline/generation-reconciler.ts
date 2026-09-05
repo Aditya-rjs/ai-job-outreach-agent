@@ -3,7 +3,7 @@ import { contacts, batches, resume, outreachQueue, globalEmailHistory } from '@/
 import { eq, and, sql, asc, desc } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { generatePersonalizedEmail } from '@/lib/ai/email-generator';
-import { categorizeGeminiError } from '@/lib/ai/gemini-client';
+import { categorizeGeminiError, globalGeminiLimiter } from '@/lib/ai/gemini-client';
 import type { StructuredResumeProfile, Contact } from '@/types';
 
 export const GENERATION_LEASE_MS = 90 * 1000; // 90-second lease per contact
@@ -83,10 +83,25 @@ export async function reconcilePendingEmailGenerations(options: {
   const workerId = options.claimWorkerId || `gen_worker_${process.pid}`;
   const batchLimit = options.batchSize || parseInt(process.env.EMAIL_GEN_BATCH_SIZE || '4', 10);
 
-  // 1. Recover any expired generation leases from crashed workers
+  // 1. Check if global Gemini 429 cooldown is active
+  if (globalGeminiLimiter.isCooldownActive()) {
+    console.log(
+      `[GenerationReconciler] Global Gemini 429 cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()}. Skipping generation run.`
+    );
+    return {
+      processed: 0,
+      succeeded: 0,
+      retryPending: 0,
+      failed: 0,
+      recovered: 0,
+      skippedReason: 'GEMINI_COOLDOWN_ACTIVE',
+    };
+  }
+
+  // 2. Recover any expired generation leases from crashed workers
   const recovered = recoverStaleGeneratingContacts();
 
-  // 2. Verify active verified resume exists as source of truth
+  // 3. Verify active verified resume exists as source of truth
   const resumeRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();
   if (!resumeRecord || !resumeRecord.parsedData) {
     return {
@@ -98,6 +113,7 @@ export async function reconcilePendingEmailGenerations(options: {
       skippedReason: 'NO_ACTIVE_RESUME',
     };
   }
+
 
   let profile: StructuredResumeProfile;
   try {
@@ -184,11 +200,19 @@ export async function reconcilePendingEmailGenerations(options: {
     .all();
   const recentBodies = recentRecords.map((r) => r.emailBody).filter((b): b is string => Boolean(b));
 
+  let processed = 0;
   let succeeded = 0;
   let retryPending = 0;
   let failed = 0;
 
   for (const contact of candidates) {
+    if (globalGeminiLimiter.isCooldownActive()) {
+      console.log(
+        `[GenerationReconciler] Global Gemini 429 cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()}. Stopping candidate generation loop.`
+      );
+      break;
+    }
+
     const claimToken = `${workerId}_${ulid()}`;
     const leaseExpiresAt = new Date(Date.now() + GENERATION_LEASE_MS).toISOString();
 
@@ -214,6 +238,8 @@ export async function reconcilePendingEmailGenerations(options: {
       // Claimed by another worker or already generated
       continue;
     }
+
+    processed++;
 
     const isRetry = contact.generationStatus === 'RETRY_PENDING' || (contact.generationAttemptCount || 0) > 0;
 
@@ -289,6 +315,15 @@ export async function reconcilePendingEmailGenerations(options: {
       const attemptTimestamp = new Date().toISOString();
       const currentAttempts = (contact.generationAttemptCount || 0) + 1;
 
+      const isRateLimit =
+        diag.code === 'RATE_LIMIT_EXCEEDED' ||
+        /\b429\b/.test(diag.safeDetail) ||
+        /RESOURCE_EXHAUSTED/i.test(diag.safeDetail);
+
+      if (isRateLimit) {
+        globalGeminiLimiter.recordError(genErr);
+      }
+
       if (diag.isTransient) {
         const nextRetry = computeGenerationRetryTime(currentAttempts, new Date());
         db.update(contacts)
@@ -327,14 +362,22 @@ export async function reconcilePendingEmailGenerations(options: {
         failed++;
         console.error(`[GenerationReconciler] Permanent generation failure for ${contact.email} (${diag.code}): ${diag.safeDetail}`);
       }
+
+      if (isRateLimit) {
+        console.warn(
+          `[GenerationReconciler] 429 Rate limit encountered for ${contact.email}. Stopping generation loop immediately.`
+        );
+        break;
+      }
     }
   }
 
   return {
-    processed: candidates.length,
+    processed,
     succeeded,
     retryPending,
     failed,
     recovered,
   };
+
 }

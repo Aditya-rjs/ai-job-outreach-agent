@@ -12,6 +12,9 @@ export const companyClassifications = sqliteTable('company_classifications', {
   retryCount: integer('retry_count').default(0).notNull(),
   lastErrorCategory: text('last_error_category'),
   nextRetryAt: text('next_retry_at'),
+  claimToken: text('claim_token'),
+  leaseExpiresAt: text('lease_expires_at'),
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
 });
+

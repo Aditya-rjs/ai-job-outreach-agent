@@ -231,10 +231,20 @@ export interface GeminiTelemetry {
   currentModel: string;
   maxConcurrency: number;
   minDispatchGapMs: number;
+  effectivePacingMs: number;
   inFlightRequests: number;
   queuedRequests: number;
+  queueDepth: number;
   totalRequests: number;
+  requestsStarted: number;
+  requestsSucceeded: number;
+  requestsFailed: number;
   recent429Count: number;
+  rateLimit429Count: number;
+  consecutive429Count: number;
+  isCooldownActive: boolean;
+  cooldownUntil: string | null;
+  cooldownRemainingSeconds: number;
   recentTransientErrorCount: number;
   last429At: string | null;
   lastTransientErrorAt: string | null;
@@ -257,15 +267,69 @@ interface QueuedItem<T = unknown> {
   reject: (reason?: unknown) => void;
 }
 
-class GlobalGeminiRateLimiter {
+/**
+ * Extracts Retry-After duration in milliseconds from Gemini / HTTP response or error metadata.
+ * Returns null if no valid Retry-After specification is detected.
+ */
+export function extractRetryAfterMs(err: unknown): number | null {
+  if (!err) return null;
+
+  const anyErr = err as Record<string, any>;
+  if (typeof anyErr.retryAfter === 'number' && anyErr.retryAfter > 0) {
+    return Math.min(Math.max(anyErr.retryAfter * 1000, 1000), 3600000);
+  }
+  if (typeof anyErr.retryDelayMs === 'number' && anyErr.retryDelayMs > 0) {
+    return Math.min(Math.max(anyErr.retryDelayMs, 1000), 3600000);
+  }
+
+  const headers = anyErr.response?.headers || anyErr.headers;
+  if (headers) {
+    const rawVal = typeof headers.get === 'function' ? headers.get('retry-after') : headers['retry-after'];
+    if (rawVal) {
+      const parsedSec = parseFloat(rawVal);
+      if (!isNaN(parsedSec) && parsedSec > 0) {
+        return Math.min(Math.max(parsedSec * 1000, 1000), 3600000);
+      }
+    }
+  }
+
+  const msg = anyErr.message ? String(anyErr.message) : String(err);
+  const secMatch =
+    msg.match(/retry(?:-after| in| after)?[:\s]+(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?/i) ||
+    msg.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/i);
+  if (secMatch && secMatch[1]) {
+    const s = parseFloat(secMatch[1]);
+    if (!isNaN(s) && s > 0) {
+      return Math.min(Math.max(Math.round(s * 1000), 1000), 3600000);
+    }
+  }
+
+  const minMatch = msg.match(/retry(?:-after| in| after)?[:\s]+(\d+(?:\.\d+)?)\s*m(?:in(?:ute)?s?)?/i);
+  if (minMatch && minMatch[1]) {
+    const m = parseFloat(minMatch[1]);
+    if (!isNaN(m) && m > 0) {
+      return Math.min(Math.max(Math.round(m * 60 * 1000), 1000), 3600000);
+    }
+  }
+
+  return null;
+}
+
+export class GlobalGeminiRateLimiter {
   private inFlight = 0;
   private queue: QueuedItem<any>[] = [];
   private lastDispatchTime = 0;
   private totalRequests = 0;
-  private recent429Count = 0;
+  private requestsStarted = 0;
+  private requestsSucceeded = 0;
+  private requestsFailed = 0;
+  private rateLimit429Count = 0;
+  private consecutive429Count = 0;
   private recentTransientErrorCount = 0;
   private last429At: string | null = null;
   private lastTransientErrorAt: string | null = null;
+  private cooldownUntil = 0;
+  private cooldownTimer: NodeJS.Timeout | null = null;
 
   public getMaxConcurrency(): number {
     const configured = parseInt(process.env.GEMINI_MAX_CONCURRENCY || '', 10);
@@ -277,30 +341,131 @@ class GlobalGeminiRateLimiter {
     return !isNaN(configured) && configured >= 0 ? configured : 1000;
   }
 
+  public getBaseCooldownMs(): number {
+    const configured = parseInt(process.env.GEMINI_COOLDOWN_BASE_MS || '', 10);
+    return !isNaN(configured) && configured > 0 ? configured : 60000;
+  }
+
+  public getMaxCooldownMs(): number {
+    const configured = parseInt(process.env.GEMINI_COOLDOWN_MAX_MS || '', 10);
+    return !isNaN(configured) && configured > 0 ? configured : 900000;
+  }
+
+  public isCooldownActive(): boolean {
+    return Date.now() < this.cooldownUntil;
+  }
+
+  public getCooldownRemainingMs(): number {
+    return Math.max(0, this.cooldownUntil - Date.now());
+  }
+
+  public getCooldownUntilIso(): string | null {
+    return this.cooldownUntil > 0 ? new Date(this.cooldownUntil).toISOString() : null;
+  }
+
+  public resetCooldown(): void {
+    if (this.cooldownTimer) {
+      clearTimeout(this.cooldownTimer);
+      this.cooldownTimer = null;
+    }
+    this.cooldownUntil = 0;
+    this.consecutive429Count = 0;
+  }
+
+  public resetForTesting(): void {
+    this.resetCooldown();
+    this.inFlight = 0;
+    this.queue = [];
+    this.lastDispatchTime = 0;
+    this.totalRequests = 0;
+    this.requestsStarted = 0;
+    this.requestsSucceeded = 0;
+    this.requestsFailed = 0;
+    this.rateLimit429Count = 0;
+    this.recentTransientErrorCount = 0;
+    this.last429At = null;
+    this.lastTransientErrorAt = null;
+  }
+
   public getTelemetry(): GeminiTelemetry {
     const configuredModel = process.env.GEMINI_MODEL?.trim();
+    const remainingMs = this.getCooldownRemainingMs();
     return {
       currentModel: configuredModel || 'gemini-3.8-flash',
       maxConcurrency: this.getMaxConcurrency(),
       minDispatchGapMs: this.getMinDispatchGapMs(),
+      effectivePacingMs: this.getMinDispatchGapMs(),
       inFlightRequests: this.inFlight,
       queuedRequests: this.queue.length,
+      queueDepth: this.queue.length,
       totalRequests: this.totalRequests,
-      recent429Count: this.recent429Count,
+      requestsStarted: this.requestsStarted,
+      requestsSucceeded: this.requestsSucceeded,
+      requestsFailed: this.requestsFailed,
+      recent429Count: this.rateLimit429Count,
+      rateLimit429Count: this.rateLimit429Count,
+      consecutive429Count: this.consecutive429Count,
+      isCooldownActive: this.isCooldownActive(),
+      cooldownUntil: this.getCooldownUntilIso(),
+      cooldownRemainingSeconds: Math.ceil(remainingMs / 1000),
       recentTransientErrorCount: this.recentTransientErrorCount,
       last429At: this.last429At,
       lastTransientErrorAt: this.lastTransientErrorAt,
     };
   }
 
-  public recordError(err: unknown) {
+  public handle429(err?: unknown): number {
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    this.rateLimit429Count++;
+    this.last429At = nowIso;
+    this.consecutive429Count++;
+
+    const retryAfterMs = extractRetryAfterMs(err);
+    let cooldownMs: number;
+
+    if (retryAfterMs !== null && retryAfterMs > 0) {
+      cooldownMs = retryAfterMs;
+      console.warn(`[GlobalGeminiRateLimiter] 429 Rate Limit Exceeded. Using Retry-After: ${Math.round(cooldownMs / 1000)}s`);
+    } else {
+      const baseMs = this.getBaseCooldownMs();
+      const maxMs = this.getMaxCooldownMs();
+      cooldownMs = Math.min(baseMs * Math.pow(2, this.consecutive429Count - 1), maxMs);
+      console.warn(`[GlobalGeminiRateLimiter] 429 Rate Limit Exceeded (consecutive #${this.consecutive429Count}). Global cooldown: ${Math.round(cooldownMs / 1000)}s`);
+    }
+
+    const newCooldownUntil = now + cooldownMs;
+    if (newCooldownUntil > this.cooldownUntil) {
+      this.cooldownUntil = newCooldownUntil;
+    }
+
+    if (this.cooldownTimer) {
+      clearTimeout(this.cooldownTimer);
+    }
+    const timerDelay = Math.max(50, this.cooldownUntil - Date.now());
+    this.cooldownTimer = setTimeout(() => {
+      this.cooldownTimer = null;
+      this.processNext();
+    }, timerDelay);
+    if (typeof this.cooldownTimer?.unref === 'function') {
+      this.cooldownTimer.unref();
+    }
+
+    return this.cooldownUntil;
+
+  }
+
+  public recordSuccess(): void {
+    this.requestsSucceeded++;
+    this.consecutive429Count = 0;
+  }
+
+  public recordError(err: unknown): void {
     const diag = categorizeGeminiError(err);
     const nowIso = new Date().toISOString();
     if (diag.code === 'RATE_LIMIT_EXCEEDED') {
-      this.recent429Count++;
-      this.last429At = nowIso;
-    }
-    if (diag.isTransient) {
+      this.handle429(err);
+    } else if (diag.isTransient) {
       this.recentTransientErrorCount++;
       this.lastTransientErrorAt = nowIso;
     }
@@ -334,6 +499,22 @@ class GlobalGeminiRateLimiter {
   }
 
   private async processNext() {
+    // If global 429 cooldown is active, pause queue processing completely
+    if (this.isCooldownActive()) {
+      const remainingMs = this.getCooldownRemainingMs();
+      if (!this.cooldownTimer) {
+        this.cooldownTimer = setTimeout(() => {
+          this.cooldownTimer = null;
+          this.processNext();
+        }, Math.max(50, remainingMs));
+        if (typeof this.cooldownTimer?.unref === 'function') {
+          this.cooldownTimer.unref();
+        }
+      }
+      return;
+
+    }
+
     if (this.inFlight >= this.getMaxConcurrency() || this.queue.length === 0) {
       return;
     }
@@ -352,18 +533,29 @@ class GlobalGeminiRateLimiter {
 
     this.inFlight++;
     this.totalRequests++;
+    this.requestsStarted++;
     this.lastDispatchTime = Date.now();
 
     try {
       const result = await item.task();
+      this.recordSuccess();
       item.resolve(result);
     } catch (err) {
-      this.recordError(err);
+      this.requestsFailed++;
+      const diag = categorizeGeminiError(err);
+      if (diag.code === 'RATE_LIMIT_EXCEEDED') {
+        this.handle429(err);
+      } else {
+        this.recordError(err);
+      }
       item.reject(err);
     } finally {
       this.inFlight--;
-      // Trigger subsequent item processing
-      setTimeout(() => this.processNext(), 50);
+      if (this.isCooldownActive()) {
+        // Cooldown was activated by this failure; do not immediately dispatch next
+      } else {
+        setTimeout(() => this.processNext(), 50);
+      }
     }
   }
 }
@@ -373,6 +565,7 @@ export const globalGeminiLimiter = new GlobalGeminiRateLimiter();
 export function getGeminiTelemetry(): GeminiTelemetry {
   return globalGeminiLimiter.getTelemetry();
 }
+
 
 /**
  * Calls Gemini with automatic retries for transient errors.
@@ -441,13 +634,20 @@ export async function callGemini(
           break;
         }
 
-        // Retry transient errors with backoff
+        // Do NOT blindly retry 429 / RATE_LIMIT_EXCEEDED inside callGemini!
+        // A single 429 must propagate immediately into the global rate-limit circuit breaker.
+        if (diag.code === 'RATE_LIMIT_EXCEEDED') {
+          break;
+        }
+
+        // Retry other transient errors (timeouts, network glitches) with backoff
         if (attempt < maxRetries) {
           const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
           await new Promise((res) => setTimeout(res, delay));
           continue;
         }
         break;
+
       }
     }
 
