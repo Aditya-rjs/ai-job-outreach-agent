@@ -23,6 +23,7 @@ import {
 import { getGmailConnectionStatus } from '@/lib/gmail/gmail-client';
 import { sendOutreachEmail } from '@/lib/gmail/send-email';
 import { reconcilePendingClassifications } from '@/lib/pipeline/classification-reconciler';
+import { reconcilePendingEmailGenerations } from '@/lib/pipeline/generation-reconciler';
 
 const WORKER_ID = `worker_${process.pid}_${Math.random().toString(36).substring(2, 8)}`;
 let isShuttingDown = false;
@@ -53,6 +54,7 @@ process.on('SIGINT', () => handleShutdown('SIGINT'));
 process.on('SIGTERM', () => handleShutdown('SIGTERM'));
 
 let lastClassificationReconcileAt = 0;
+let lastEmailGenerationReconcileAt = 0;
 
 /**
  * Main persistent worker loop.
@@ -83,6 +85,15 @@ async function runWorkerLoop() {
           console.warn('[Outreach Worker] Error reconciling pending classifications:', err)
         );
       }
+
+      // Autonomous AI Email Generation: continuous background preparation (send-ahead)
+      if (Date.now() - lastEmailGenerationReconcileAt >= 15000) {
+        lastEmailGenerationReconcileAt = Date.now();
+        await reconcilePendingEmailGenerations({ claimWorkerId: WORKER_ID }).catch((err) =>
+          console.warn('[Outreach Worker] Error reconciling pending email generations:', err)
+        );
+      }
+
 
       // 3. Check scheduler pause / stop controls
       const db = getDb();

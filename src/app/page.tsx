@@ -456,7 +456,7 @@ export default function DashboardPage() {
                 <span className="text-sm text-muted-foreground">contacts staged</span>
               </div>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                {stats?.emailsGenerated ?? 0} AI personalized emails ready
+                {stats?.emailsGenerated ?? 0} ready • {stats?.emailsPendingGeneration ?? 0} pending gen
               </p>
             </div>
 
@@ -493,8 +493,31 @@ export default function DashboardPage() {
               </p>
             </div>
           </div>
+
+          {/* Autonomous AI Email Generation & Gemini Observability */}
+          <div className="rounded-lg bg-secondary/50 p-3 text-xs border border-border/50 flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Sparkles className="h-4 w-4 text-primary shrink-0" />
+              <span className="font-semibold text-foreground">Autonomous AI Email Generation:</span>
+              <span className="text-muted-foreground">
+                {stats?.emailsGenerated ?? 0} Ready • {stats?.emailsPendingGeneration ?? 0} Pending • {stats?.emailsGenerating ?? 0} In Progress
+                {(stats?.emailsGenerationRetryPending ?? 0) > 0 ? ` • ${stats?.emailsGenerationRetryPending} Retry Pending` : ''}
+                {(stats?.emailsGenerationFailed ?? 0) > 0 ? ` • ${stats?.emailsGenerationFailed} Failed` : ''}
+              </span>
+            </div>
+            {stats?.geminiTelemetry && (
+              <div className="flex items-center gap-3 text-[11px] text-muted-foreground shrink-0">
+                <span>Model: <code className="font-mono font-medium text-foreground">{stats.geminiTelemetry.currentModel}</code></span>
+                <span>In-Flight: <code className="font-mono text-foreground">{stats.geminiTelemetry.inFlightRequests}/{stats.geminiTelemetry.maxConcurrency}</code></span>
+                {stats.geminiTelemetry.recent429Count > 0 ? (
+                  <span className="text-amber-600 font-medium">429 Rate Limits: {stats.geminiTelemetry.recent429Count}</span>
+                ) : null}
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
+
 
       {/* Stat Cards Grid */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7">

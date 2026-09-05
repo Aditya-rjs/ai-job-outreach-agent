@@ -1,7 +1,8 @@
 import { getDb } from '@/db';
 import { companyClassifications } from '@/db/schema';
 import { inArray, eq } from 'drizzle-orm';
-import { callGemini, getGeminiClient, categorizeGeminiError, sanitizeSecretText, type CategorizedGeminiError } from './gemini-client';
+import { callGemini, getGeminiClient, categorizeGeminiError, sanitizeSecretText, GEMINI_PRIORITIES, type CategorizedGeminiError } from './gemini-client';
+
 import { normalizeCompanyName, formatCompanyDisplayName } from '@/lib/utils/company';
 
 export type ClassificationStatus = 'RELEVANT' | 'IRRELEVANT' | 'NEEDS_REVIEW' | 'PENDING' | 'FAILED';
@@ -207,14 +208,24 @@ Do not include markdown code fences or any explanatory text outside the JSON arr
  */
 export async function classifyWithGeminiBatch(
   companies: CompanyEvaluationInput[],
-  geminiCaller?: (prompt: string) => Promise<string>
+  geminiCaller?: (prompt: string) => Promise<string>,
+  options?: { isRetry?: boolean }
 ): Promise<CompanyClassificationResult[]> {
   const configuredModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
   const prompt = buildClassificationPrompt(companies);
+  const priority = options?.isRetry
+    ? GEMINI_PRIORITIES.CLASSIFICATION_RETRY
+    : GEMINI_PRIORITIES.COMPANY_CLASSIFICATION;
 
   const responseText = typeof geminiCaller === 'function'
     ? await geminiCaller(prompt)
-    : await callGemini(prompt, { model: configuredModel, temperature: 0.1 });
+    : await callGemini(prompt, {
+        model: configuredModel,
+        temperature: 0.1,
+        priority,
+        taskName: `company-classification-${companies.length}`,
+      });
+
 
   const cleaned = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
   const parsed = JSON.parse(cleaned);

@@ -307,10 +307,13 @@ export async function processBatchFile(
             isDuplicate: c.isDuplicate,
             emailValid: c.emailValid,
             status: c.status,
+            generationStatus: c.status === 'queued' ? 'PENDING_GENERATION' : null,
+            generationAttemptCount: 0,
             sendAttemptCount: 0,
             createdAt: now,
             updatedAt: now,
           })
+
           .run();
 
         // B. Update global_email_history

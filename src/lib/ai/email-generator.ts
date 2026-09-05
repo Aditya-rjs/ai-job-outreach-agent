@@ -1,4 +1,4 @@
-import { callGemini, getGeminiClient } from './gemini-client';
+import { callGemini, getGeminiClient, GEMINI_PRIORITIES, categorizeGeminiError } from './gemini-client';
 import { checkEmailSimilarity } from './similarity';
 import type { StructuredResumeProfile, GeneratedEmailResult } from '@/types';
 
@@ -12,7 +12,10 @@ export interface EmailGenerationInput {
   relevanceReason?: string | null;
   recentEmails?: string[];
   preferredStrategy?: string;
+  isRetry?: boolean;
+  strictGemini?: boolean;
 }
+
 
 const STRATEGIES = [
   'skills-focused',
@@ -237,7 +240,15 @@ export async function generatePersonalizedEmail(
     const prompt = buildGenerationPrompt(input, currentStrategy, avoidGuidance);
 
     try {
-      const responseText = await callGemini(prompt, { temperature: 0.3 + attempt * 0.1 });
+      const priority = input.isRetry
+        ? GEMINI_PRIORITIES.GENERATION_RETRY
+        : GEMINI_PRIORITIES.EMAIL_GENERATION;
+
+      const responseText = await callGemini(prompt, {
+        temperature: 0.3 + attempt * 0.1,
+        priority,
+        taskName: `email-gen-${input.companyName}`,
+      });
       const cleaned = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleaned);
 
@@ -277,9 +288,17 @@ export async function generatePersonalizedEmail(
       }
     } catch (err) {
       console.warn(`Gemini email generation attempt ${attempt} failed:`, err);
+      if (input.strictGemini) {
+        throw err;
+      }
     }
   }
 
-  // Safe fallback if all AI attempts fail
+  if (input.strictGemini) {
+    throw new Error(`Failed to generate email for ${input.companyName} via Gemini after ${maxAttempts} attempts.`);
+  }
+
+  // Safe fallback if all AI attempts fail and not strictGemini
   return heuristicGenerateEmail(input, attempt);
 }
+

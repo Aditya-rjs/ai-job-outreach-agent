@@ -7,6 +7,10 @@ export interface DashboardStats {
   emailsFailed: number;
   emailsQueued: number;
   emailsGenerated: number;
+  emailsPendingGeneration: number;
+  emailsGenerating: number;
+  emailsGenerationRetryPending: number;
+  emailsGenerationFailed: number;
   emailsSkipped: number;
   emailsUncertain: number;
   todaySentCount: number;
@@ -21,8 +25,17 @@ export interface DashboardStats {
   isDryRun: boolean;
   gmailConnected: boolean;
   gmailEmail: string | null;
+  geminiTelemetry?: {
+    currentModel: string;
+    maxConcurrency: number;
+    inFlightRequests: number;
+    queuedRequests: number;
+    recent429Count: number;
+    recentTransientErrorCount: number;
+  };
   outreachStatus: 'idle' | 'running' | 'sending' | 'paused' | 'stopped' | 'waiting' | 'completed' | 'quota_reached';
 }
+
 
 export interface Batch {
   id: string;
@@ -73,9 +86,23 @@ export interface Contact {
   sentAt: string | null;
   errorMessage: string | null;
   sendAttemptCount: number;
+  generationStatus?: GenerationStatus | null;
+  generationAttemptCount?: number;
+  generationClaimToken?: string | null;
+  generationLeaseExpiresAt?: string | null;
+  lastGenerationErrorCategory?: string | null;
+  nextGenerationRetryAt?: string | null;
+  lastGenerationAttemptAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
+
+export type GenerationStatus =
+  | 'PENDING_GENERATION'
+  | 'GENERATING'
+  | 'GENERATED'
+  | 'GENERATION_FAILED'
+  | 'RETRY_PENDING';
 
 export type ContactStatus =
   | 'discovered'
@@ -89,6 +116,7 @@ export type ContactStatus =
   | 'failed'
   | 'skipped'
   | 'uncertain';
+
 
 // Queue types
 export interface QueueItem {

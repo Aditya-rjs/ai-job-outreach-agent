@@ -73,7 +73,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
             inArray(contacts.status, allowedStatuses as Contact['status'][]),
             eq(contacts.emailValid, true),
             eq(contacts.isDuplicate, false),
-            sql`(${contacts.isRelevant} = 1 OR ${contacts.isRelevant} IS NULL)`
+            sql`(${contacts.isRelevant} = 1 OR ${contacts.isRelevant} IS NULL)`,
+            forceRegenerate ? sql`1=1` : sql`(${contacts.generationStatus} != 'GENERATED' OR ${contacts.generationStatus} IS NULL OR ${contacts.emailSubject} IS NULL)`
           )
         )
         .all() as Contact[];
@@ -87,7 +88,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
             inArray(contacts.status, allowedStatuses as Contact['status'][]),
             eq(contacts.emailValid, true),
             eq(contacts.isDuplicate, false),
-            sql`(${contacts.isRelevant} = 1 OR ${contacts.isRelevant} IS NULL)`
+            sql`(${contacts.isRelevant} = 1 OR ${contacts.isRelevant} IS NULL)`,
+            forceRegenerate ? sql`1=1` : sql`(${contacts.generationStatus} != 'GENERATED' OR ${contacts.generationStatus} IS NULL OR ${contacts.emailSubject} IS NULL)`
           )
         )
         .limit(100)
@@ -98,7 +100,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       return NextResponse.json({
         success: true,
         data: {
-          message: 'No eligible queued contacts found to generate emails for.',
+          message: 'No eligible contacts found requiring AI email generation.',
           totalEligible: 0,
           generatedCount: 0,
           failedCount: 0,
@@ -137,9 +139,31 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       const preferredStrategy = strategiesList[contactIdx % strategiesList.length];
       contactIdx++;
 
-      // Mark as generating
+      const nowIso = new Date().toISOString();
+
+      // Check if currently locked by background worker
+      if (
+        !forceRegenerate &&
+        contact.generationStatus === 'GENERATING' &&
+        contact.generationLeaseExpiresAt &&
+        contact.generationLeaseExpiresAt > nowIso
+      ) {
+        continue;
+      }
+
+      // Mark as generating with claim token
+      const claimToken = `manual_${Math.random().toString(36).substring(2, 9)}`;
+      const leaseExpiresAt = new Date(Date.now() + 90000).toISOString();
+
       db.update(contacts)
-        .set({ status: 'generating', updatedAt: new Date().toISOString() })
+        .set({
+          status: 'generating',
+          generationStatus: 'GENERATING',
+          generationClaimToken: claimToken,
+          generationLeaseExpiresAt: leaseExpiresAt,
+          lastGenerationAttemptAt: nowIso,
+          updatedAt: nowIso,
+        })
         .where(eq(contacts.id, contact.id))
         .run();
 
@@ -156,7 +180,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
           preferredStrategy,
         });
 
-        const now = new Date().toISOString();
+        const finishTimestamp = new Date().toISOString();
         db.update(contacts)
           .set({
             emailSubject: result.subject,
@@ -164,10 +188,13 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
             emailStrategy: result.strategy,
             personalizationPoints: JSON.stringify(result.personalization_points),
             resumeVersion,
-            generatedAt: now,
+            generatedAt: finishTimestamp,
+            generationStatus: 'GENERATED',
+            generationClaimToken: null,
+            generationLeaseExpiresAt: null,
             status: 'generated',
             errorMessage: null,
-            updatedAt: now,
+            updatedAt: finishTimestamp,
           })
           .where(eq(contacts.id, contact.id))
           .run();
@@ -184,6 +211,9 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         db.update(contacts)
           .set({
             status: 'failed',
+            generationStatus: 'GENERATION_FAILED',
+            generationClaimToken: null,
+            generationLeaseExpiresAt: null,
             errorMessage: errMsg,
             updatedAt: new Date().toISOString(),
           })
@@ -203,6 +233,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         resumeVersion,
       },
     });
+
   } catch (error) {
     console.error('Batch email generation error:', error);
     return NextResponse.json(

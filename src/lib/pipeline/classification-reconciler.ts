@@ -100,7 +100,8 @@ export async function reconcilePendingClassifications(
     });
 
     try {
-      const results = await classifyWithGeminiBatch(chunkInputs, geminiCallerOverride);
+      const results = await classifyWithGeminiBatch(chunkInputs, geminiCallerOverride, { isRetry: true });
+
 
       for (const res of results) {
         // Persist final resolution in SQLite
@@ -184,10 +185,11 @@ export async function reconcilePendingClassifications(
  * Cascades a resolved company classification to all contacts of that company across active batches.
  * Returns the number of eligible contacts newly promoted into the outreach queue.
  */
-function cascadeClassificationToContacts(
+export function cascadeClassificationToContacts(
   db: ReturnType<typeof getDb>,
   result: CompanyClassificationResult
 ): number {
+
   let promotedCount = 0;
   const nowIso = new Date().toISOString();
 
@@ -215,13 +217,14 @@ function cascadeClassificationToContacts(
       const isEligible = c.emailValid && !c.isDuplicate;
 
       if (isEligible) {
-        // Promote eligible contact to queued
+        // Promote eligible contact to queued and schedule for generation if not already generated
         db.update(contacts)
           .set({
             isRelevant: true,
             relevanceConfidence: result.confidence,
             relevanceReason: result.reason,
             status: 'queued',
+            generationStatus: sql`CASE WHEN generation_status = 'GENERATED' THEN 'GENERATED' ELSE 'PENDING_GENERATION' END`,
             updatedAt: nowIso,
           })
           .where(eq(contacts.id, c.id))
@@ -255,6 +258,7 @@ function cascadeClassificationToContacts(
             isRelevant: true,
             relevanceConfidence: result.confidence,
             relevanceReason: result.reason,
+            generationStatus: null,
             updatedAt: nowIso,
           })
           .where(eq(contacts.id, c.id))
@@ -268,6 +272,7 @@ function cascadeClassificationToContacts(
           relevanceConfidence: result.confidence,
           relevanceReason: result.reason,
           status: 'skipped',
+          generationStatus: null,
           updatedAt: nowIso,
         })
         .where(eq(contacts.id, c.id))
@@ -283,6 +288,7 @@ function cascadeClassificationToContacts(
           relevanceConfidence: result.confidence,
           relevanceReason: result.reason,
           status: 'uncertain',
+          generationStatus: null,
           updatedAt: nowIso,
         })
         .where(eq(contacts.id, c.id))
@@ -291,6 +297,7 @@ function cascadeClassificationToContacts(
       db.delete(outreachQueue).where(eq(outreachQueue.contactId, c.id)).run();
     }
   }
+
 
   return promotedCount;
 }

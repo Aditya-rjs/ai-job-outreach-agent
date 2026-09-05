@@ -10,6 +10,8 @@ import {
   isWithinDailyWindow,
   getConfiguredTimezone,
 } from '@/lib/scheduler/time-utils';
+import { getGeminiTelemetry } from '@/lib/ai/gemini-client';
+
 
 export function getDashboardStats(): DashboardStats {
   const db = getDb();
@@ -25,7 +27,11 @@ export function getDashboardStats(): DashboardStats {
       emailsSimulated: sql<number>`SUM(CASE WHEN status = 'simulated' THEN 1 ELSE 0 END)`,
       emailsFailed: sql<number>`SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)`,
       emailsSkipped: sql<number>`SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END)`,
-      emailsGenerated: sql<number>`SUM(CASE WHEN status = 'generated' THEN 1 ELSE 0 END)`,
+      emailsGenerated: sql<number>`SUM(CASE WHEN generation_status = 'GENERATED' OR (status = 'generated' AND email_body IS NOT NULL) THEN 1 ELSE 0 END)`,
+      emailsPendingGeneration: sql<number>`SUM(CASE WHEN generation_status = 'PENDING_GENERATION' OR (is_relevant = 1 AND email_valid = 1 AND is_duplicate = 0 AND status = 'queued' AND (email_body IS NULL OR generation_status IS NULL)) THEN 1 ELSE 0 END)`,
+      emailsGenerating: sql<number>`SUM(CASE WHEN generation_status = 'GENERATING' OR status = 'generating' THEN 1 ELSE 0 END)`,
+      emailsGenerationRetryPending: sql<number>`SUM(CASE WHEN generation_status = 'RETRY_PENDING' THEN 1 ELSE 0 END)`,
+      emailsGenerationFailed: sql<number>`SUM(CASE WHEN generation_status = 'GENERATION_FAILED' THEN 1 ELSE 0 END)`,
       emailsUncertain: sql<number>`SUM(CASE WHEN status = 'uncertain' THEN 1 ELSE 0 END)`,
       relevantCompanies: sql<number>`SUM(CASE WHEN is_relevant = 1 AND is_duplicate = 0 THEN 1 ELSE 0 END)`,
       totalCompanies: sql<number>`COUNT(DISTINCT CASE WHEN company_name IS NOT NULL AND company_name != '' THEN company_name END)`,
@@ -39,10 +45,15 @@ export function getDashboardStats(): DashboardStats {
     emailsFailed: 0,
     emailsSkipped: 0,
     emailsGenerated: 0,
+    emailsPendingGeneration: 0,
+    emailsGenerating: 0,
+    emailsGenerationRetryPending: 0,
+    emailsGenerationFailed: 0,
     emailsUncertain: 0,
     relevantCompanies: 0,
     totalCompanies: 0,
   };
+
 
   // Queue metrics
   const queueStats = db
@@ -108,6 +119,10 @@ export function getDashboardStats(): DashboardStats {
     emailsFailed: contactStats.emailsFailed ?? 0,
     emailsQueued,
     emailsGenerated: contactStats.emailsGenerated ?? 0,
+    emailsPendingGeneration: contactStats.emailsPendingGeneration ?? 0,
+    emailsGenerating: contactStats.emailsGenerating ?? 0,
+    emailsGenerationRetryPending: contactStats.emailsGenerationRetryPending ?? 0,
+    emailsGenerationFailed: contactStats.emailsGenerationFailed ?? 0,
     emailsSkipped: contactStats.emailsSkipped ?? 0,
     emailsUncertain: contactStats.emailsUncertain ?? 0,
     todaySentCount,
@@ -122,8 +137,10 @@ export function getDashboardStats(): DashboardStats {
     isDryRun,
     gmailConnected: gmailConnected?.value === 'true',
     gmailEmail: gmailEmail?.value ?? null,
+    geminiTelemetry: getGeminiTelemetry(),
     outreachStatus,
   };
+
 }
 
 export function getSchedulerConfig(): SchedulerConfig {

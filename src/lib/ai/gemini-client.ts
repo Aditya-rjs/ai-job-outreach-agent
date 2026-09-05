@@ -227,8 +227,156 @@ export function categorizeGeminiError(err: unknown): CategorizedGeminiError {
   };
 }
 
+export interface GeminiTelemetry {
+  currentModel: string;
+  maxConcurrency: number;
+  minDispatchGapMs: number;
+  inFlightRequests: number;
+  queuedRequests: number;
+  totalRequests: number;
+  recent429Count: number;
+  recentTransientErrorCount: number;
+  last429At: string | null;
+  lastTransientErrorAt: string | null;
+}
+
+export const GEMINI_PRIORITIES = {
+  COMPANY_CLASSIFICATION: 1,
+  CLASSIFICATION_RETRY: 2,
+  EMAIL_GENERATION: 3,
+  GENERATION_RETRY: 4,
+} as const;
+
+interface QueuedItem<T = unknown> {
+  id: string;
+  priority: number;
+  taskName: string;
+  enqueuedAt: number;
+  task: () => Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+}
+
+class GlobalGeminiRateLimiter {
+  private inFlight = 0;
+  private queue: QueuedItem<any>[] = [];
+  private lastDispatchTime = 0;
+  private totalRequests = 0;
+  private recent429Count = 0;
+  private recentTransientErrorCount = 0;
+  private last429At: string | null = null;
+  private lastTransientErrorAt: string | null = null;
+
+  public getMaxConcurrency(): number {
+    const configured = parseInt(process.env.GEMINI_MAX_CONCURRENCY || '', 10);
+    return !isNaN(configured) && configured > 0 ? configured : 2;
+  }
+
+  public getMinDispatchGapMs(): number {
+    const configured = parseInt(process.env.GEMINI_MIN_DISPATCH_GAP_MS || '', 10);
+    return !isNaN(configured) && configured >= 0 ? configured : 1000;
+  }
+
+  public getTelemetry(): GeminiTelemetry {
+    const configuredModel = process.env.GEMINI_MODEL?.trim();
+    return {
+      currentModel: configuredModel || 'gemini-3.8-flash',
+      maxConcurrency: this.getMaxConcurrency(),
+      minDispatchGapMs: this.getMinDispatchGapMs(),
+      inFlightRequests: this.inFlight,
+      queuedRequests: this.queue.length,
+      totalRequests: this.totalRequests,
+      recent429Count: this.recent429Count,
+      recentTransientErrorCount: this.recentTransientErrorCount,
+      last429At: this.last429At,
+      lastTransientErrorAt: this.lastTransientErrorAt,
+    };
+  }
+
+  public recordError(err: unknown) {
+    const diag = categorizeGeminiError(err);
+    const nowIso = new Date().toISOString();
+    if (diag.code === 'RATE_LIMIT_EXCEEDED') {
+      this.recent429Count++;
+      this.last429At = nowIso;
+    }
+    if (diag.isTransient) {
+      this.recentTransientErrorCount++;
+      this.lastTransientErrorAt = nowIso;
+    }
+  }
+
+  public enqueue<T>(
+    task: () => Promise<T>,
+    priority: number = GEMINI_PRIORITIES.EMAIL_GENERATION,
+    taskName: string = 'unnamed-gemini-task'
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const item: QueuedItem<T> = {
+        id: Math.random().toString(36).substring(2, 9),
+        priority,
+        taskName,
+        enqueuedAt: Date.now(),
+        task,
+        resolve,
+        reject,
+      };
+
+      this.queue.push(item);
+      // Priority queue ordering: lower number = higher priority; FIFO within same priority
+      this.queue.sort((a, b) => {
+        if (a.priority !== b.priority) return a.priority - b.priority;
+        return a.enqueuedAt - b.enqueuedAt;
+      });
+
+      this.processNext();
+    });
+  }
+
+  private async processNext() {
+    if (this.inFlight >= this.getMaxConcurrency() || this.queue.length === 0) {
+      return;
+    }
+
+    const now = Date.now();
+    const timeSinceLast = now - this.lastDispatchTime;
+    const gap = this.getMinDispatchGapMs();
+
+    if (timeSinceLast < gap) {
+      setTimeout(() => this.processNext(), gap - timeSinceLast);
+      return;
+    }
+
+    const item = this.queue.shift();
+    if (!item) return;
+
+    this.inFlight++;
+    this.totalRequests++;
+    this.lastDispatchTime = Date.now();
+
+    try {
+      const result = await item.task();
+      item.resolve(result);
+    } catch (err) {
+      this.recordError(err);
+      item.reject(err);
+    } finally {
+      this.inFlight--;
+      // Trigger subsequent item processing
+      setTimeout(() => this.processNext(), 50);
+    }
+  }
+}
+
+export const globalGeminiLimiter = new GlobalGeminiRateLimiter();
+
+export function getGeminiTelemetry(): GeminiTelemetry {
+  return globalGeminiLimiter.getTelemetry();
+}
+
 /**
  * Calls Gemini with automatic retries for transient errors.
+ * Routes all traffic through the GlobalGeminiRateLimiter with strict priority management.
  * Uses gemini-3.8-flash as the sole stable default model.
  */
 export async function callGemini(
@@ -238,64 +386,72 @@ export async function callGemini(
     temperature?: number;
     maxRetries?: number;
     timeoutMs?: number;
+    priority?: number;
+    taskName?: string;
   } = {}
 ): Promise<string> {
-  const client = getGeminiClient();
-  if (!client) {
-    throw new Error('GEMINI_API_KEY is not configured in the environment.');
-  }
+  const priority = options.priority ?? GEMINI_PRIORITIES.EMAIL_GENERATION;
+  const taskName = options.taskName ?? 'gemini-call';
 
-  const configuredModel = process.env.GEMINI_MODEL?.trim();
-  const model = options.model || configuredModel || 'gemini-3.8-flash';
-  const maxRetries = options.maxRetries ?? 3;
-  const timeoutMs = options.timeoutMs ?? 15000;
+  return globalGeminiLimiter.enqueue(async () => {
+    const client = getGeminiClient();
+    if (!client) {
+      throw new Error('GEMINI_API_KEY is not configured in the environment.');
+    }
 
-  let lastError: unknown;
+    const configuredModel = process.env.GEMINI_MODEL?.trim();
+    const model = options.model || configuredModel || 'gemini-3.8-flash';
+    const maxRetries = options.maxRetries ?? 3;
+    const timeoutMs = options.timeoutMs ?? 15000;
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const abortController = new AbortController();
-      const timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
+    let lastError: unknown;
 
-      const response = await Promise.race([
-        client.models.generateContent({
-          model,
-          contents: prompt,
-          config: {
-            temperature: options.temperature ?? 0.1,
-          },
-        }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Gemini request timed out after ${timeoutMs}ms`)), timeoutMs)
-        ),
-      ]);
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const abortController = new AbortController();
+        const timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
 
-      clearTimeout(timeoutId);
+        const response = await Promise.race([
+          client.models.generateContent({
+            model,
+            contents: prompt,
+            config: {
+              temperature: options.temperature ?? 0.1,
+            },
+          }),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Gemini request timed out after ${timeoutMs}ms`)), timeoutMs)
+          ),
+        ]);
 
-      const text = response.text;
-      if (!text) {
-        throw new Error('Empty response from Gemini');
-      }
+        clearTimeout(timeoutId);
 
-      return text.trim();
-    } catch (err: unknown) {
-      lastError = err;
-      const diag = categorizeGeminiError(err);
+        const text = response.text;
+        if (!text) {
+          throw new Error('Empty response from Gemini');
+        }
 
-      // Do NOT retry permanent errors (auth, model not found, bad request, missing key)
-      if (!diag.isTransient) {
+        return text.trim();
+      } catch (err: unknown) {
+        lastError = err;
+        const diag = categorizeGeminiError(err);
+
+        // Do NOT retry permanent errors (auth, model not found, bad request, missing key)
+        if (!diag.isTransient) {
+          break;
+        }
+
+        // Retry transient errors with backoff
+        if (attempt < maxRetries) {
+          const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
+          await new Promise((res) => setTimeout(res, delay));
+          continue;
+        }
         break;
       }
-
-      // Retry transient errors with backoff
-      if (attempt < maxRetries) {
-        const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
-        await new Promise((res) => setTimeout(res, delay));
-        continue;
-      }
-      break;
     }
-  }
 
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }, priority, taskName);
 }
+

@@ -217,7 +217,7 @@ export default function BatchDetailPage({
               ) : (
                 <>
                   <Sparkles className="h-4 w-4" />
-                  Generate AI Emails
+                  Generate Now
                 </>
               )}
             </Button>
@@ -235,6 +235,15 @@ export default function BatchDetailPage({
           </div>
         </div>
       )}
+
+      {/* Autonomous AI Generation Notice */}
+      <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-primary flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 shrink-0" />
+          <span>AI email generation runs automatically in the background. You can use <strong>Generate Now</strong> to process pending emails immediately.</span>
+        </div>
+      </div>
+
 
       {/* Feedback banner */}
       {generationFeedback && (

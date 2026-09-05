@@ -26,10 +26,20 @@ export const contacts = sqliteTable('contacts', {
   sentAt: text('sent_at'),
   errorMessage: text('error_message'),
   sendAttemptCount: integer('send_attempt_count').default(0).notNull(),
+  generationStatus: text('generation_status', { enum: ['PENDING_GENERATION', 'GENERATING', 'GENERATED', 'GENERATION_FAILED', 'RETRY_PENDING'] }),
+  generationAttemptCount: integer('generation_attempt_count').default(0).notNull(),
+  generationClaimToken: text('generation_claim_token'),
+  generationLeaseExpiresAt: text('generation_lease_expires_at'),
+  lastGenerationErrorCategory: text('last_generation_error_category'),
+  nextGenerationRetryAt: text('next_generation_retry_at'),
+  lastGenerationAttemptAt: text('last_generation_attempt_at'),
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
 }, (table) => ([
   index('idx_contacts_batch_id').on(table.batchId),
   index('idx_contacts_email').on(table.email),
   index('idx_contacts_status').on(table.status),
+  index('idx_contacts_gen_status').on(table.generationStatus),
+  index('idx_contacts_next_gen_retry').on(table.nextGenerationRetryAt),
 ]));
+

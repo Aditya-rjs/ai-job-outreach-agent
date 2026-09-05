@@ -73,14 +73,57 @@ export function initializeDatabase() {
       sent_at TEXT,
       error_message TEXT,
       send_attempt_count INTEGER NOT NULL DEFAULT 0,
+      generation_status TEXT,
+      generation_attempt_count INTEGER NOT NULL DEFAULT 0,
+      generation_claim_token TEXT,
+      generation_lease_expires_at TEXT,
+      last_generation_error_category TEXT,
+      next_generation_retry_at TEXT,
+      last_generation_attempt_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
   `);
 
+  // Safe schema migrations for contacts generation fields
+  try { db.run(sql`ALTER TABLE contacts ADD COLUMN generation_status TEXT`); } catch {}
+  try { db.run(sql`ALTER TABLE contacts ADD COLUMN generation_attempt_count INTEGER NOT NULL DEFAULT 0`); } catch {}
+  try { db.run(sql`ALTER TABLE contacts ADD COLUMN generation_claim_token TEXT`); } catch {}
+  try { db.run(sql`ALTER TABLE contacts ADD COLUMN generation_lease_expires_at TEXT`); } catch {}
+  try { db.run(sql`ALTER TABLE contacts ADD COLUMN last_generation_error_category TEXT`); } catch {}
+  try { db.run(sql`ALTER TABLE contacts ADD COLUMN next_generation_retry_at TEXT`); } catch {}
+  try { db.run(sql`ALTER TABLE contacts ADD COLUMN last_generation_attempt_at TEXT`); } catch {}
+
   db.run(sql`CREATE INDEX IF NOT EXISTS idx_contacts_batch_id ON contacts(batch_id)`);
   db.run(sql`CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email)`);
   db.run(sql`CREATE INDEX IF NOT EXISTS idx_contacts_status ON contacts(status)`);
+  db.run(sql`CREATE INDEX IF NOT EXISTS idx_contacts_gen_status ON contacts(generation_status)`);
+  db.run(sql`CREATE INDEX IF NOT EXISTS idx_contacts_next_gen_retry ON contacts(next_generation_retry_at)`);
+
+
+  // Backfill generation status for existing records
+  try {
+    db.run(sql`
+      UPDATE contacts
+      SET generation_status = 'GENERATED'
+      WHERE generation_status IS NULL
+        AND email_subject IS NOT NULL
+        AND email_body IS NOT NULL
+    `);
+    db.run(sql`
+      UPDATE contacts
+      SET generation_status = 'PENDING_GENERATION'
+      WHERE generation_status IS NULL
+        AND is_relevant = 1
+        AND email_valid = 1
+        AND is_duplicate = 0
+        AND sent_at IS NULL
+        AND (email_subject IS NULL OR email_body IS NULL)
+    `);
+  } catch (backfillErr) {
+    console.warn('[migrate] Backfill generation status skipped:', backfillErr);
+  }
+
 
   db.run(sql`
     CREATE TABLE IF NOT EXISTS global_email_history (
