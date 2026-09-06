@@ -165,9 +165,9 @@ async function runAllTests() {
   const reconcileRes = await reconcilePendingClassifications(mockGemini429Caller);
 
   assert(callerInvocations === 1, `Gemini batch caller was invoked exactly 1 time (actual: ${callerInvocations})`);
-  assert(reconcileRes.processed === 10, `Reconciler reports 10 companies processed in chunk 1 (actual: ${reconcileRes.processed})`);
+  assert(reconcileRes.processed === 20, `Reconciler reports 20 companies processed in chunk 1 (actual: ${reconcileRes.processed})`);
   assert(reconcileRes.succeeded === 0, `0 companies succeeded (actual: ${reconcileRes.succeeded})`);
-  assert(reconcileRes.stillPending === 10, `10 companies marked stillPending in chunk 1 (actual: ${reconcileRes.stillPending})`);
+  assert(reconcileRes.stillPending === 20, `20 companies marked stillPending in chunk 1 (actual: ${reconcileRes.stillPending})`);
 
   // Verify chunk 1 companies have retryCount = 1
   const chunk1Companies = db
@@ -178,20 +178,13 @@ async function runAllTests() {
   assert(chunk1Companies?.retryCount === 1, `Chunk 1 company has retryCount === 1 (actual: ${chunk1Companies?.retryCount})`);
   assert(chunk1Companies?.lastErrorCategory === 'RATE_LIMIT_EXCEEDED', `Chunk 1 company has lastErrorCategory RATE_LIMIT_EXCEEDED`);
 
-  // Verify chunk 2 and 3 companies (unattempted) STILL have retryCount = 0!
+  // Verify chunk 2 companies (unattempted) STILL have retryCount = 0!
   const chunk2Companies = db
-    .select()
-    .from(companyClassifications)
-    .where(eq(companyClassifications.normalizedName, 'company_15'))
-    .get();
-  assert(chunk2Companies?.retryCount === 0, `Unattempted company in chunk 2 has retryCount === 0 (actual: ${chunk2Companies?.retryCount})`);
-
-  const chunk3Companies = db
     .select()
     .from(companyClassifications)
     .where(eq(companyClassifications.normalizedName, 'company_25'))
     .get();
-  assert(chunk3Companies?.retryCount === 0, `Unattempted company in chunk 3 has retryCount === 0 (actual: ${chunk3Companies?.retryCount})`);
+  assert(chunk2Companies?.retryCount === 0, `Unattempted company in chunk 2 has retryCount === 0 (actual: ${chunk2Companies?.retryCount})`);
 
   // --------------------------------------------------------------------------
   // TEST B: Global Cooldown Activates on 429

@@ -1,5 +1,6 @@
 import { getDb } from '@/db';
 import { sql } from 'drizzle-orm';
+import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
 import type { Contact } from '@/types';
 
 export interface CompanyDetailRecord {
@@ -332,6 +333,7 @@ export function getTotalContactsList(opts: PaginationOptions = {}): {
 
 export function getEligibleQueuedCount(): number {
   const db = getDb();
+  const cooldownCutoffIso = getCooldownCutoffIso();
   const row = db.get<{ count: number }>(sql`
     SELECT COUNT(DISTINCT c.id) as count
     FROM contacts c
@@ -346,7 +348,9 @@ export function getEligibleQueuedCount(): number {
       AND NOT EXISTS (
         SELECT 1 FROM global_email_history geh
         WHERE geh.email = LOWER(TRIM(c.email))
-          AND (geh.status = 'sent' OR geh.sent_at IS NOT NULL)
+          AND geh.status = 'sent'
+          AND geh.sent_at IS NOT NULL
+          AND geh.sent_at > ${cooldownCutoffIso}
       )
   `);
   return row?.count ?? 0;
@@ -357,6 +361,7 @@ export function getEligibleQueuedList(opts: PaginationOptions = {}): {
   total: number;
 } {
   const db = getDb();
+  const cooldownCutoffIso = getCooldownCutoffIso();
   const search = (opts.search || '').trim().toLowerCase();
   const page = Math.max(1, opts.page || 1);
   const limit = Math.max(1, Math.min(opts.limit || 50, 200));
@@ -380,7 +385,9 @@ export function getEligibleQueuedList(opts: PaginationOptions = {}): {
       AND NOT EXISTS (
         SELECT 1 FROM global_email_history geh
         WHERE geh.email = LOWER(TRIM(c.email))
-          AND (geh.status = 'sent' OR geh.sent_at IS NOT NULL)
+          AND geh.status = 'sent'
+          AND geh.sent_at IS NOT NULL
+          AND geh.sent_at > ${cooldownCutoffIso}
       )
       ${searchClause}
   `);
@@ -475,7 +482,9 @@ export function getEligibleQueuedList(opts: PaginationOptions = {}): {
       AND NOT EXISTS (
         SELECT 1 FROM global_email_history geh
         WHERE geh.email = LOWER(TRIM(c.email))
-          AND (geh.status = 'sent' OR geh.sent_at IS NOT NULL)
+          AND geh.status = 'sent'
+          AND geh.sent_at IS NOT NULL
+          AND geh.sent_at > ${cooldownCutoffIso}
       )
       ${searchClause}
     ORDER BY oq.priority DESC, oq.created_at ASC

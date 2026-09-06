@@ -16,6 +16,8 @@ export function seedDatabase() {
       intervalMinutes: 3,
       startHour: 10,
       startMinute: 0,
+      endHour: 16,
+      endMinute: 0,
     })
     .onConflictDoNothing()
     .run();

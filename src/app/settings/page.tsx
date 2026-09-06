@@ -592,21 +592,21 @@ export default function SettingsPage() {
             </div>
             <div>
               <CardTitle>Sending Schedule</CardTitle>
-              <CardDescription>Configure daily sending limits and timing</CardDescription>
+              <CardDescription>Daily sending window: 10:00 AM–4:00 PM IST with 6-day contact cooldown</CardDescription>
             </div>
           </div>
         </CardHeader>
         <CardContent>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-lg border border-border p-4">
-              <p className="text-xs font-medium text-muted-foreground">Daily Limit</p>
-              <p className="text-2xl font-bold text-foreground mt-1">30</p>
-              <p className="text-xs text-muted-foreground">emails per day</p>
+              <p className="text-xs font-medium text-muted-foreground">Sending Window</p>
+              <p className="text-2xl font-bold text-foreground mt-1">10 AM – 4 PM</p>
+              <p className="text-xs text-muted-foreground">active sending hours (IST)</p>
             </div>
             <div className="rounded-lg border border-border p-4">
-              <p className="text-xs font-medium text-muted-foreground">Start Time</p>
-              <p className="text-2xl font-bold text-foreground mt-1">10:00 AM</p>
-              <p className="text-xs text-muted-foreground">daily window start</p>
+              <p className="text-xs font-medium text-muted-foreground">Global Cooldown</p>
+              <p className="text-2xl font-bold text-foreground mt-1">6 Days</p>
+              <p className="text-xs text-muted-foreground">144 hrs per sent contact</p>
             </div>
             <div className="rounded-lg border border-border p-4">
               <p className="text-xs font-medium text-muted-foreground">Interval</p>

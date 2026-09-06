@@ -38,6 +38,8 @@ export async function PUT(request: NextRequest): Promise<NextResponse<ApiRespons
       if (body.scheduler.intervalMinutes !== undefined) schedulerUpdates.intervalMinutes = body.scheduler.intervalMinutes;
       if (body.scheduler.startHour !== undefined) schedulerUpdates.startHour = body.scheduler.startHour;
       if (body.scheduler.startMinute !== undefined) schedulerUpdates.startMinute = body.scheduler.startMinute;
+      if (body.scheduler.endHour !== undefined) schedulerUpdates.endHour = body.scheduler.endHour;
+      if (body.scheduler.endMinute !== undefined) schedulerUpdates.endMinute = body.scheduler.endMinute;
       if (body.scheduler.isPaused !== undefined) schedulerUpdates.isPaused = body.scheduler.isPaused;
       updateSchedulerConfig(schedulerUpdates);
     }

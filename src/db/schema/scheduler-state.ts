@@ -15,6 +15,8 @@ export const schedulerState = sqliteTable('scheduler_state', {
   intervalMinutes: integer('interval_minutes').default(3).notNull(),
   startHour: integer('start_hour').default(10).notNull(),
   startMinute: integer('start_minute').default(0).notNull(),
+  endHour: integer('end_hour').default(16).notNull(),
+  endMinute: integer('end_minute').default(0).notNull(),
   workerId: text('worker_id'),
   lockedUntil: text('locked_until'),
   lastHeartbeatAt: text('last_heartbeat_at'),

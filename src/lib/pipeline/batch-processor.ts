@@ -7,6 +7,7 @@ import { getFieldMapping, applyFieldMapping, type NormalizedContactRecord } from
 import { parsePdf } from '@/lib/parsers/pdf-parser';
 import { classifyCompanies } from '@/lib/ai/company-classifier';
 import { reconstructCanonicalContacts } from '@/lib/pipeline/canonical-ingestion';
+import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
 
 export interface BatchProcessingResult {
   batchId: string;
@@ -158,22 +159,24 @@ export async function processBatchFile(
       });
     }
 
-    // 4. Global deduplication check against permanent real sends and active non-deleted batches
+    // 4. Global deduplication check against 6-day (144-hour) cooldown and active non-deleted batches
     const existingGlobalHistory = new Set<string>();
     if (validEmailsList.length > 0) {
       // Chunk queries if there are many emails
       const CHUNK_SIZE = 500;
+      const cooldownCutoffIso = getCooldownCutoffIso();
       for (let i = 0; i < validEmailsList.length; i += CHUNK_SIZE) {
         const chunk = validEmailsList.slice(i, i + CHUNK_SIZE);
 
-        // A. Permanent Real Sends: Check global_email_history where status = 'sent'
+        // A. Confirmed Real Sends within 144-Hour Cooldown:
         const sentRecords = db
           .select({ email: globalEmailHistory.email })
           .from(globalEmailHistory)
           .where(
             and(
               inArray(globalEmailHistory.email, chunk),
-              eq(globalEmailHistory.status, 'sent')
+              eq(globalEmailHistory.status, 'sent'),
+              sql`sent_at IS NOT NULL AND sent_at > ${cooldownCutoffIso}`
             )
           )
           .all();
@@ -212,7 +215,7 @@ export async function processBatchFile(
       if (existingGlobalHistory.has(c.email)) {
         c.isDuplicate = true;
         c.status = 'skipped';
-        c.relevanceReason = 'Duplicate: email already queued or contacted in previous outreach.';
+        c.relevanceReason = 'Duplicate: email in active 6-day cooldown or currently queued.';
         duplicateContactsCount++;
       }
     }

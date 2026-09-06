@@ -66,7 +66,9 @@ assert(decrypted === mockTokens, 'AES-256-GCM decryption successfully restores o
 let tampered = false;
 try {
   const parts = encrypted.split(':');
-  parts[2] = parts[2].substring(0, parts[2].length - 2) + 'ff'; // mutate 1 byte of ciphertext
+  parts[2] = parts[2].endsWith('ff')
+    ? parts[2].substring(0, parts[2].length - 2) + '00'
+    : parts[2].substring(0, parts[2].length - 2) + 'ff';
   testDecrypt(parts.join(':'));
 } catch {
   tampered = true;

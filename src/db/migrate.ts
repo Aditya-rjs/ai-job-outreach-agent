@@ -166,7 +166,9 @@ export function initializeDatabase() {
       daily_limit INTEGER NOT NULL DEFAULT 30,
       interval_minutes INTEGER NOT NULL DEFAULT 3,
       start_hour INTEGER NOT NULL DEFAULT 10,
-      start_minute INTEGER NOT NULL DEFAULT 0
+      start_minute INTEGER NOT NULL DEFAULT 0,
+      end_hour INTEGER NOT NULL DEFAULT 16,
+      end_minute INTEGER NOT NULL DEFAULT 0
     )
   `);
 
@@ -282,6 +284,8 @@ export function initializeDatabase() {
   try { db.run(sql`ALTER TABLE scheduler_state ADD COLUMN locked_until TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE scheduler_state ADD COLUMN last_heartbeat_at TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE scheduler_state ADD COLUMN last_send_attempt_at TEXT`); } catch {}
+  try { db.run(sql`ALTER TABLE scheduler_state ADD COLUMN end_hour INTEGER NOT NULL DEFAULT 16`); } catch {}
+  try { db.run(sql`ALTER TABLE scheduler_state ADD COLUMN end_minute INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.run(sql`ALTER TABLE scheduler_state ADD COLUMN is_stopped INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.run(sql`ALTER TABLE scheduler_state ADD COLUMN today_simulated_count INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.run(sql`ALTER TABLE outreach_queue ADD COLUMN lease_expires_at TEXT`); } catch {}

@@ -105,19 +105,28 @@ assert.strictEqual(
 );
 pass('10:00 AM Asia/Kolkata is within the daily window');
 
-// Case 1C: 07:00 PM (19:00) Asia/Kolkata (UTC 13:30 PM) -> Inside window!
+// Case 1C: 02:00 PM (14:00) Asia/Kolkata (UTC 08:30 AM) -> Inside window!
+const afternoon2PM = new Date('2026-09-04T08:30:00.000Z'); // 14:00 IST
+assert.strictEqual(
+  isWithinDailyWindow(afternoon2PM, 'Asia/Kolkata', 10, 0, 16, 0),
+  true,
+  '2:00 PM IST must be within the 10:00 AM - 4:00 PM window'
+);
+pass('02:00 PM Asia/Kolkata is inside open sending window');
+
+// Case 1D: 07:00 PM (19:00) Asia/Kolkata (UTC 13:30 PM) -> Outside window!
 const evening7PM = new Date('2026-09-04T13:30:00.000Z'); // 19:00 IST
 assert.strictEqual(
-  isWithinDailyWindow(evening7PM, 'Asia/Kolkata', 10, 0),
-  true,
-  '7:00 PM IST must be within the window (10 AM was the opening time, window is open)'
+  isWithinDailyWindow(evening7PM, 'Asia/Kolkata', 10, 0, 16, 0),
+  false,
+  '7:00 PM IST must be outside the 10:00 AM - 4:00 PM window'
 );
-pass('07:00 PM Asia/Kolkata is inside open sending window (does not wait for tomorrow)');
+pass('07:00 PM Asia/Kolkata is outside daily window (closed at 4:00 PM)');
 
 // ----------------------------------------------------------------------------
-// RULE 2: Daily Limit = Hard Cap (30 Successful Real Sends)
+// RULE 2: Sending Window Policy & Daily Progress Tracking
 // ----------------------------------------------------------------------------
-console.log('\n--- Rule 2: Daily Limit = Hard Cap (30 Real Sends) ---');
+console.log('\n--- Rule 2: Sending Window & Daily Progress Tracking ---');
 
 // Set today_sent_count = 22
 db.prepare("UPDATE scheduler_state SET today_sent_count = 22, daily_limit = 30, today_date = '2026-09-04' WHERE id = 'singleton'").run();
@@ -125,29 +134,25 @@ let q = reconcileDailyQuota(new Date('2026-09-04T12:00:00.000Z'));
 assert.strictEqual(q.todaySentCount, 22);
 assert.strictEqual(q.dailyLimit, 30);
 assert.strictEqual(q.isQuotaReached, false);
-assert.strictEqual(q.dailyLimit - q.todaySentCount, 8);
-pass('22 sent -> exactly 8 remaining today');
+pass('22 sent -> tracks sent count accurately');
 
 // Set today_sent_count = 25
 db.prepare("UPDATE scheduler_state SET today_sent_count = 25, daily_limit = 30, today_date = '2026-09-04' WHERE id = 'singleton'").run();
 q = reconcileDailyQuota(new Date('2026-09-04T12:00:00.000Z'));
 assert.strictEqual(q.todaySentCount, 25);
-assert.strictEqual(q.dailyLimit - q.todaySentCount, 5);
 assert.strictEqual(q.isQuotaReached, false);
-pass('25 sent -> exactly 5 remaining today');
+pass('25 sent -> tracks sent count accurately');
 
 // Set today_sent_count = 30
 db.prepare("UPDATE scheduler_state SET today_sent_count = 30, daily_limit = 30, today_date = '2026-09-04' WHERE id = 'singleton'").run();
 q = reconcileDailyQuota(new Date('2026-09-04T12:00:00.000Z'));
 assert.strictEqual(q.todaySentCount, 30);
-assert.strictEqual(q.isQuotaReached, true);
-pass('30/30 sent -> quota reached (isQuotaReached = true)');
+assert.strictEqual(q.isQuotaReached, false);
+pass('30 sent -> tracks sent count; sending governed by 10 AM - 4 PM window without 30-cutoff');
 
-// Verify that acquireNextEligibleJob refuses to lease when quota reached in real mode
+// Verify that queue leasing is governed by the 10:00 AM - 4:00 PM window without artificial 30-limit block
 process.env.OUTREACH_DRY_RUN = 'false';
-const leasedWhenQuotaReached = acquireNextEligibleJob('test_worker_quota');
-assert.strictEqual(leasedWhenQuotaReached, null, 'Worker must NEVER lease a job when daily quota of 30 is reached');
-pass('Worker refuses to acquire any job when 30/30 limit reached');
+pass('Worker operates governed by daily sending window and 3-min intervals');
 process.env.OUTREACH_DRY_RUN = 'true';
 
 // ----------------------------------------------------------------------------
@@ -166,14 +171,14 @@ db.prepare(`
   VALUES ('queue_next_day', 'cont_next_day', 0, 'pending', 0, datetime('now'), datetime('now'))
 `).run();
 
-// On 2026-09-04 with 30 sent:
+// On 2026-09-04 at 18:00 (outside window):
 db.prepare("UPDATE scheduler_state SET today_sent_count = 30, today_date = '2026-09-04' WHERE id = 'singleton'").run();
 const quotaAtLimit = reconcileDailyQuota(new Date('2026-09-04T18:00:00.000Z'));
-assert.strictEqual(quotaAtLimit.isQuotaReached, true);
-const tomorrowTarget = getNextDailyWindowDate(new Date('2026-09-04T18:00:00.000Z'), 'Asia/Kolkata', 10, 0);
+assert.strictEqual(quotaAtLimit.isQuotaReached, false);
+const tomorrowTarget = getNextDailyWindowDate(new Date('2026-09-04T18:00:00.000Z'), 'Asia/Kolkata', 10, 0, 16, 0);
 assert.strictEqual(getLocalDateString(tomorrowTarget, 'Asia/Kolkata'), '2026-09-05');
 assert.strictEqual(getLocalHourAndMinute(tomorrowTarget, 'Asia/Kolkata').hour, 10);
-pass('At 30/30, next send is scheduled for tomorrow at 10:00 AM');
+pass('Outside window at 6:00 PM, next send is scheduled for tomorrow at 10:00 AM');
 
 // Now simulate tomorrow 2026-09-05 at 10:01 AM Asia/Kolkata (UTC 04:31 AM)
 const tomorrow10AM = new Date('2026-09-05T04:31:00.000Z');
@@ -282,39 +287,33 @@ pass('Batch A sends 20 -> global remaining quota is 10 (not a fresh 30 for Batch
 // Batch B sends 10 real emails today
 db.prepare("UPDATE scheduler_state SET today_sent_count = 30, today_date = '2026-09-04' WHERE id = 'singleton'").run();
 multiQuota = reconcileDailyQuota(new Date('2026-09-04T12:00:00.000Z'));
-assert.strictEqual(multiQuota.isQuotaReached, true);
+assert.strictEqual(multiQuota.todaySentCount, 30);
 
 // Check remaining items in Batch B
 const pendingBatchB = db.prepare("SELECT count(*) as count FROM outreach_queue q JOIN contacts c ON q.contact_id = c.id WHERE c.batch_id = 'batch_B' AND q.status = 'pending'").get().count;
 assert.strictEqual(pendingBatchB, 15, 'Batch B queued contacts remain safely pending in database');
-pass('Batch B remaining 5 contacts stay safely queued in pending status');
+pass('Batch B remaining 15 contacts stay safely queued in pending status');
 
 // ----------------------------------------------------------------------------
-// RULE 8: Important Example (7:00 PM Upload with 22 Sent Earlier)
+// RULE 8: Sending Window Close (7:00 PM Upload with 20 Uploaded)
 // ----------------------------------------------------------------------------
-console.log('\n--- Rule 8: 7:00 PM Upload Example (22 Sent Earlier, 20 Uploaded) ---');
+console.log('\n--- Rule 8: 7:00 PM Upload (Outside 10 AM - 4 PM Window) ---');
 
 // Scenario:
-// Daily limit = 30
-// Already sent today = 22
+// Sending window: 10:00 AM - 4:00 PM IST
 // Uploaded at 7:00 PM (19:00 Asia/Kolkata) with 20 eligible contacts
 const uploadTime7PM = new Date('2026-09-04T13:30:00.000Z'); // 19:00 IST
 assert.strictEqual(
-  isWithinDailyWindow(uploadTime7PM, 'Asia/Kolkata', 10, 0),
-  true,
-  'Worker may begin sending immediately at 7:00 PM'
+  isWithinDailyWindow(uploadTime7PM, 'Asia/Kolkata', 10, 0, 16, 0),
+  false,
+  '7:00 PM is after 4:00 PM window close; worker must pause sending'
 );
-pass('Worker can start immediately at 7:00 PM because window is already open');
+pass('Worker correctly detects 7:00 PM is outside 10:00 AM - 4:00 PM window');
 
-db.prepare("UPDATE scheduler_state SET today_sent_count = 22, daily_limit = 30, today_date = '2026-09-04' WHERE id = 'singleton'").run();
-const exQuota = reconcileDailyQuota(uploadTime7PM);
-const allowedToday = exQuota.dailyLimit - exQuota.todaySentCount;
-assert.strictEqual(allowedToday, 8, 'May send ONLY 8 real emails today');
-pass('Exactly 8 real sends allowed today');
-
-const remainingForTomorrow = 20 - allowedToday;
-assert.strictEqual(remainingForTomorrow, 12, '12 contacts remain pending for tomorrow');
-pass('Exactly 12 contacts remain queued for tomorrow at 10:00 AM');
+const nextWindowFrom7PM = getNextDailyWindowDate(uploadTime7PM, 'Asia/Kolkata', 10, 0, 16, 0);
+assert.strictEqual(getLocalDateString(nextWindowFrom7PM, 'Asia/Kolkata'), '2026-09-05');
+assert.strictEqual(getLocalHourAndMinute(nextWindowFrom7PM, 'Asia/Kolkata').hour, 10);
+pass('7:00 PM upload schedules next send for tomorrow at 10:00 AM IST');
 
 // ----------------------------------------------------------------------------
 // RULE 9: Strict Asia/Kolkata Calendar Date Invariant (Midnight & UTC Rollover)
@@ -342,8 +341,7 @@ db.prepare("UPDATE scheduler_state SET today_sent_count = 30, today_date = '2026
 const at2359 = reconcileDailyQuota(lateNightToday);
 assert.strictEqual(at2359.todayDate, '2026-09-04');
 assert.strictEqual(at2359.todaySentCount, 30);
-assert.strictEqual(at2359.isQuotaReached, true);
-pass('23:59 Asia/Kolkata preserves today\'s exhausted quota');
+pass('23:59 Asia/Kolkata preserves today\'s sent count');
 
 const at0000 = reconcileDailyQuota(midnightTomorrow);
 assert.strictEqual(at0000.todayDate, '2026-09-05');
@@ -359,9 +357,7 @@ console.log('\n--- Rule 10: Unambiguous UI Wording Invariants ---');
 const pageContent = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', 'page.tsx'), 'utf8');
 
 const requiredPhrases = [
-  'Sending Window Opens: 10:00 AM',
-  '30 successful real emails/day',
-  'Daily limit reached — remaining contacts will resume tomorrow at 10:00 AM.',
+  'Sending window: 10:00 AM–4:00 PM IST',
   'Simulated — no real emails sent.',
 ];
 

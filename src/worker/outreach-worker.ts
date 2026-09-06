@@ -127,31 +127,19 @@ async function runWorkerLoop() {
         }
       }
 
-      // 5. Daily Quota Reconciliation (Asia/Kolkata date boundary)
-      const quota = reconcileDailyQuota();
+      // 5. Daily Counter Reconciliation (Asia/Kolkata date boundary)
+      reconcileDailyQuota();
       const timezone = state.timezone || getConfiguredTimezone();
       const startHour = state.startHour ?? 10;
       const startMinute = state.startMinute ?? 0;
+      const endHour = state.endHour ?? 16;
+      const endMinute = state.endMinute ?? 0;
       const intervalMinutes = state.intervalMinutes ?? 3;
 
-      if (!isDryRun && quota.isQuotaReached) {
-        const tomorrowWindow = getNextDailyWindowDate(new Date(), timezone, startHour, startMinute);
-        const nextIso = tomorrowWindow.toISOString();
-
-        db.update(schedulerState)
-          .set({ nextSendAt: nextIso })
-          .where(eq(schedulerState.id, 'singleton'))
-          .run();
-
-        console.log(`[Outreach Worker] Daily limit reached (${quota.todaySentCount}/${quota.dailyLimit} real emails). Remaining contacts will resume tomorrow at 10:00 AM (${nextIso}).`);
-        await sleep(30000);
-        continue;
-      }
-
-      // 6. Check 10:00 AM Daily Sending Window
+      // 6. Check 10:00 AM - 4:00 PM Daily Sending Window (IST)
       const now = new Date();
-      if (!isWithinDailyWindow(now, timezone, startHour, startMinute)) {
-        const nextWindow = getNextDailyWindowDate(now, timezone, startHour, startMinute);
+      if (!isWithinDailyWindow(now, timezone, startHour, startMinute, endHour, endMinute)) {
+        const nextWindow = getNextDailyWindowDate(now, timezone, startHour, startMinute, endHour, endMinute);
         const nextIso = nextWindow.toISOString();
 
         db.update(schedulerState)
@@ -159,7 +147,7 @@ async function runWorkerLoop() {
           .where(eq(schedulerState.id, 'singleton'))
           .run();
 
-        console.log(`[Outreach Worker] Outside sending window. Next start window at ${nextIso} (${timezone}).`);
+        console.log(`[Outreach Worker] Outside daily sending window (10:00 AM - 4:00 PM ${timezone}). Next window opens at ${nextIso}.`);
         await sleep(30000);
         continue;
       }
@@ -173,8 +161,8 @@ async function runWorkerLoop() {
           timezone,
           startHour,
           startMinute,
-          todaySentCount: quota.todaySentCount,
-          dailyLimit: quota.dailyLimit,
+          endHour,
+          endMinute,
           now,
         });
 

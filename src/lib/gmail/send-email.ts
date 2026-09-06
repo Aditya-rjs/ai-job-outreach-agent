@@ -6,6 +6,7 @@ import { eq, sql, and, ne } from 'drizzle-orm';
 import { getAuthenticatedGmailClient } from './gmail-client';
 import { buildMimeMessage } from './mime-builder';
 import { normalizeEmail, isValidEmail } from '@/lib/utils';
+import { isEmailInCooldown, getCooldownExpiresAt } from '@/lib/scheduler/time-utils';
 import { getResumesDir } from '@/lib/config/paths';
 import type { Contact } from '@/types';
 
@@ -96,15 +97,17 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
     return { success: false, error: 'This contact has already been sent an outreach email.', errorCategory: 'duplicate' };
   }
 
-  // 5. CRITICAL DUPLICATE CHECK (Requirement 16):
-  // Check global email history to guarantee this normalized email has NEVER been sent to before
+  // 5. 6-DAY (144-HOUR) GLOBAL COOLDOWN CHECK:
+  // Check global email history to see if this normalized email is in active 144-hour cooldown
   const historyRecord = db.select().from(globalEmailHistory).where(eq(globalEmailHistory.email, normalizedTo)).get();
-  if (historyRecord && (historyRecord.status === 'sent' || historyRecord.sentAt)) {
+  if (historyRecord && historyRecord.status === 'sent' && isEmailInCooldown(historyRecord.sentAt)) {
+    const expiresAt = getCooldownExpiresAt(historyRecord.sentAt);
+    const expiresText = expiresAt ? expiresAt.toISOString() : 'later';
     db.update(contacts)
       .set({
         isDuplicate: true,
         status: 'skipped',
-        errorMessage: 'Skipped: email was already sent in another batch.',
+        errorMessage: `Skipped: 6-day cooldown active until ${expiresText}. Last sent: ${historyRecord.sentAt}.`,
         updatedAt: new Date().toISOString(),
       })
       .where(eq(contacts.id, contact.id))
@@ -112,7 +115,7 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
 
     return {
       success: false,
-      error: `Outreach email was already sent to ${normalizedTo} on ${historyRecord.sentAt}. Duplicate send blocked.`,
+      error: `Outreach email was sent to ${normalizedTo} on ${historyRecord.sentAt}. 6-day cooldown active until ${expiresText}.`,
       errorCategory: 'duplicate',
     };
   }

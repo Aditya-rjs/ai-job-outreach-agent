@@ -162,43 +162,34 @@ export function saveClassificationsToDb(results: CompanyClassificationResult[]):
 }
 
 /**
- * Constructs the rigorous, authoritative classification prompt for Gemini.
+ * Constructs the minimal, fast classification prompt for Gemini / OpenRouter.
+ * Only sends company name and website, omitting personal recruiter info.
  */
 function buildClassificationPrompt(companies: CompanyEvaluationInput[]): string {
   const descriptions = companies
     .map((c, i) => {
       const parts = [`${i + 1}. Company: "${c.companyName}"`];
       if (c.website) parts.push(`Website: ${c.website}`);
-      if (c.location) parts.push(`Location: ${c.location}`);
-      if (c.designationContext) parts.push(`Contact/Role Context: ${c.designationContext}`);
       return parts.join(' | ');
     })
     .join('\n');
 
-  return `You are an expert technical recruitment evaluator assessing companies to determine if they are relevant employment targets for a Computer Science, Information Technology, and Software Engineering graduate candidate.
+  return `Determine whether each company is relevant for Computer Science, Information Technology, Software Engineering, Cloud, Data, AI/ML, Cybersecurity, or SaaS/digital technology roles.
 
-=== CRITICAL EVALUATION RULES ===
-1. SOLE OBJECTIVE: Determine whether each company offers meaningful Computer Science, Information Technology, or Software Engineering employment opportunities.
-2. What is RELEVANT (relevant = true):
-   - Companies whose primary business is software development, cloud computing, IT services, cybersecurity, AI/ML, data platforms, SaaS, fintech, or digital products.
-   - Major enterprise organizations with substantial in-house software engineering divisions, Global Capability Centers (GCCs), or technical captive units (e.g., major financial institutions, telecom software divisions, e-commerce tech, automotive software labs).
-3. What is IRRELEVANT (relevant = false):
-   - Companies that merely *use* software or off-the-shelf IT internally as an end user (e.g., civil construction, residential real estate brokerages, local retail stores, bakeries, dental clinics, traditional manufacturing without digital engineering). Using computers, email, or buying SaaS does NOT make a company a CS/IT employer.
-4. What is NEEDS REVIEW (relevant = null):
-   - Set relevant = null ONLY when public factual information about the company is genuinely too ambiguous or insufficient to determine whether it employs software/IT professionals.
-   - If the company is a known brand or tech organization (e.g. HCL, TCS, Infosys, LoanTap, InfoEdge, TutorBin, Microsoft, Google), evaluate based on your authoritative industry knowledge.
+Evaluate based on:
+- relevant = true: Software development, IT services/consulting, SaaS, cloud, data, AI, cybersecurity, fintech, or companies with dedicated software/technology engineering operations.
+- relevant = false: Companies that only use standard end-user software (e.g., civil construction, real estate brokerage, retail stores, local services, traditional manufacturing without tech products/engineering).
+- relevant = null: Genuine ambiguity where company domain cannot be identified.
 
-=== COMPANIES TO EVALUATE ===
+COMPANIES TO EVALUATE:
 ${descriptions}
 
-=== OUTPUT FORMAT ===
+OUTPUT FORMAT:
 Respond ONLY with a valid JSON array of objects matching this exact schema:
 [
   {
     "company": "Exact input company name",
-    "relevant": true | false | null,
-    "confidence": number between 0.0 and 1.0,
-    "reason": "1-sentence factual justification"
+    "relevant": true | false | null
   }
 ]
 Do not include markdown code fences or any explanatory text outside the JSON array.`;
@@ -247,16 +238,16 @@ export async function classifyWithGeminiBatch(
   const parsed = JSON.parse(cleaned);
 
   if (!Array.isArray(parsed)) {
-    throw new Error('Gemini response is not an array');
+    throw new Error('AI response is not an array');
   }
 
-  const resultMap = new Map<string, { relevant: boolean | null; confidence: number; reason: string }>();
+  const resultMap = new Map<string, { relevant: boolean | null; confidence: number | null; reason?: string }>();
   for (const item of parsed) {
     if (item && typeof item.company === 'string') {
       const norm = normalizeCompanyName(item.company);
       const isRel = typeof item.relevant === 'boolean' ? item.relevant : null;
-      const conf = typeof item.confidence === 'number' ? Math.min(Math.max(item.confidence, 0), 1) : 0.9;
-      const cleanReason = typeof item.reason === 'string' && item.reason.trim() ? item.reason.trim() : '';
+      const conf = typeof item.confidence === 'number' ? Math.min(Math.max(item.confidence, 0), 1) : null;
+      const cleanReason = typeof item.reason === 'string' && item.reason.trim() ? item.reason.trim() : undefined;
 
       resultMap.set(norm, {
         relevant: isRel,
@@ -278,24 +269,28 @@ export async function classifyWithGeminiBatch(
           companyName: c.companyName,
           normalizedName: c.normalizedName,
           relevant: true,
-          confidence: ai.confidence,
+          confidence: ai.confidence ?? null,
           status: 'RELEVANT',
           source: activeProvider,
           geminiModel: activeModel,
           retryCount: 0,
-          reason: ai.reason ? `Relevant — ${providerLabel}: ${ai.reason}` : `Relevant — ${providerLabel}`,
+          reason: ai.reason
+            ? `Relevant — ${providerLabel}: ${ai.reason}`
+            : `Relevant — ${providerLabel}: Software/IT/Technology Employer`,
         });
       } else if (ai.relevant === false) {
         results.push({
           companyName: c.companyName,
           normalizedName: c.normalizedName,
           relevant: false,
-          confidence: ai.confidence,
+          confidence: ai.confidence ?? null,
           status: 'IRRELEVANT',
           source: activeProvider,
           geminiModel: activeModel,
           retryCount: 0,
-          reason: ai.reason ? `Not Relevant — ${providerLabel}: ${ai.reason}` : `Not Relevant — ${providerLabel}`,
+          reason: ai.reason
+            ? `Not Relevant — ${providerLabel}: ${ai.reason}`
+            : `Not Relevant — ${providerLabel}: Non-Tech Employment Target`,
         });
       } else {
         // Genuine ambiguity from AI
@@ -303,14 +298,14 @@ export async function classifyWithGeminiBatch(
           companyName: c.companyName,
           normalizedName: c.normalizedName,
           relevant: null,
-          confidence: ai.confidence,
+          confidence: ai.confidence ?? null,
           status: 'NEEDS_REVIEW',
           source: activeProvider,
           geminiModel: activeModel,
           retryCount: 0,
           reason: ai.reason
-            ? `Needs Review — ${providerLabel} could not confidently determine relevance: ${ai.reason}`
-            : `Needs Review — ${providerLabel} could not confidently determine relevance.`,
+            ? `Needs Review — ${providerLabel}: ${ai.reason}`
+            : `Needs Review — ${providerLabel} could not determine relevance.`,
         });
       }
     } else {
@@ -319,12 +314,12 @@ export async function classifyWithGeminiBatch(
         companyName: c.companyName,
         normalizedName: c.normalizedName,
         relevant: null,
-        confidence: 0.5,
+        confidence: null,
         status: 'NEEDS_REVIEW',
         source: activeProvider,
         geminiModel: activeModel,
         retryCount: 0,
-        reason: `Needs Review — ${providerLabel} could not confidently determine relevance.`,
+        reason: `Needs Review — ${providerLabel} could not determine relevance.`,
       });
     }
   }
@@ -395,8 +390,8 @@ export async function classifyCompanies(
   const configuredModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
   const hasAi = Boolean(geminiClientOverride !== null && (geminiClientOverride !== undefined || getGeminiClient() || isOpenRouterConfigured()));
 
-  // Controlled batch size of 10 to respect AI rate limits
-  const BATCH_SIZE = 10;
+  // Controlled batch size of 20 to balance throughput and token limits
+  const BATCH_SIZE = 20;
 
   for (let i = 0; i < toClassify.length; i += BATCH_SIZE) {
     const chunk = toClassify.slice(i, i + BATCH_SIZE);
@@ -408,10 +403,6 @@ export async function classifyCompanies(
           finalMap.set(res.normalizedName, res);
           memoryCache.set(res.normalizedName, res);
           newlyClassified.push(res);
-        }
-        // Small pacing delay between batches to protect against burst rate limits
-        if (i + BATCH_SIZE < toClassify.length) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
         }
         continue;
       } catch (err: unknown) {

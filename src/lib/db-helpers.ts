@@ -87,17 +87,17 @@ export function getDashboardStats(): DashboardStats {
   const timezone = scheduler?.timezone ?? getConfiguredTimezone();
   const startHour = scheduler?.startHour ?? 10;
   const startMinute = scheduler?.startMinute ?? 0;
+  const endHour = scheduler?.endHour ?? 16;
+  const endMinute = scheduler?.endMinute ?? 0;
 
   const lease = isLeaseActive();
-  const isWithinWindow = isWithinDailyWindow(new Date(), timezone, startHour, startMinute);
+  const isWithinWindow = isWithinDailyWindow(new Date(), timezone, startHour, startMinute, endHour, endMinute);
 
   let outreachStatus: DashboardStats['outreachStatus'] = 'idle';
   if (isStopped) {
     outreachStatus = 'stopped';
   } else if (isPaused) {
     outreachStatus = 'paused';
-  } else if (!isDryRun && todaySentCount >= dailyLimit) {
-    outreachStatus = 'quota_reached';
   } else if (queueSize > 0 && !isWithinWindow) {
     outreachStatus = 'waiting';
   } else if (queueSize > 0 && lease.isActive) {
@@ -152,7 +152,9 @@ export function getSchedulerConfig(): SchedulerConfig {
   const tz = state?.timezone || getConfiguredTimezone();
   const startHour = state?.startHour ?? 10;
   const startMinute = state?.startMinute ?? 0;
-  const isWithinWindow = isWithinDailyWindow(new Date(), tz, startHour, startMinute);
+  const endHour = state?.endHour ?? 16;
+  const endMinute = state?.endMinute ?? 0;
+  const isWithinWindow = isWithinDailyWindow(new Date(), tz, startHour, startMinute, endHour, endMinute);
   const lease = isLeaseActive();
 
   let schedulerStatus: SchedulerConfig['schedulerStatus'] = 'waiting';
@@ -160,8 +162,6 @@ export function getSchedulerConfig(): SchedulerConfig {
     schedulerStatus = 'stopped';
   } else if (state?.isPaused) {
     schedulerStatus = 'paused';
-  } else if (quota.todaySentCount >= quota.dailyLimit) {
-    schedulerStatus = 'quota_reached';
   } else if (!isWithinWindow) {
     schedulerStatus = 'waiting';
   } else if (lease.isActive) {
@@ -182,6 +182,8 @@ export function getSchedulerConfig(): SchedulerConfig {
     intervalMinutes: state?.intervalMinutes ?? 3,
     startHour,
     startMinute,
+    endHour,
+    endMinute,
     workerId: lease.isActive ? lease.workerId : null,
     lockedUntil: lease.isActive ? lease.lockedUntil : null,
     lastHeartbeatAt: state?.lastHeartbeatAt ?? null,
@@ -264,6 +266,8 @@ export function updateSchedulerConfig(updates: Partial<SchedulerConfig>): void {
   if (updates.intervalMinutes !== undefined) updateData.intervalMinutes = updates.intervalMinutes;
   if (updates.startHour !== undefined) updateData.startHour = updates.startHour;
   if (updates.startMinute !== undefined) updateData.startMinute = updates.startMinute;
+  if (updates.endHour !== undefined) updateData.endHour = updates.endHour;
+  if (updates.endMinute !== undefined) updateData.endMinute = updates.endMinute;
 
   if (Object.keys(updateData).length > 0) {
     db.update(schedulerState)

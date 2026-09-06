@@ -1,7 +1,7 @@
 import { getDb } from '@/db';
 import { contacts, batches, outreachQueue, schedulerState, settings } from '@/db/schema';
 import { eq, and, sql, asc, desc } from 'drizzle-orm';
-import { getLocalDateString, getConfiguredTimezone } from './time-utils';
+import { getLocalDateString, getConfiguredTimezone, getCooldownCutoffIso } from './time-utils';
 import type { QueueItem, Contact } from '@/types';
 
 const QUEUE_ITEM_LEASE_MS = 60 * 1000; // 60 seconds lease per item
@@ -28,7 +28,7 @@ export interface BatchCompletionSummary {
 
 /**
  * Reconciles the daily sent counter at midnight in the configured timezone (Asia/Kolkata).
- * ONLY successful real Gmail sends count toward the hard 30-email limit.
+ * Real sends are governed by the 10:00 AM - 4:00 PM IST sending window (hard 30/day ceiling removed).
  */
 export function reconcileDailyQuota(date: Date = new Date()): {
   todayDate: string;
@@ -73,7 +73,7 @@ export function reconcileDailyQuota(date: Date = new Date()): {
       todaySentCount: verifiedRealCount,
       todaySimulatedCount: 0,
       dailyLimit,
-      isQuotaReached: verifiedRealCount >= dailyLimit,
+      isQuotaReached: false,
     };
   }
 
@@ -104,7 +104,7 @@ export function reconcileDailyQuota(date: Date = new Date()): {
     todaySentCount: effectiveSentCount,
     todaySimulatedCount: state.todaySimulatedCount ?? 0,
     dailyLimit,
-    isQuotaReached: effectiveSentCount >= dailyLimit,
+    isQuotaReached: false,
   };
 }
 
@@ -203,21 +203,15 @@ export function recoverStaleProcessingItems(): number {
 
 /**
  * Fetches the next eligible queue item and acquires an atomic lease for processing.
+ * Sending is allowed during 10:00 AM - 4:00 PM IST (30/day limit removed).
+ * Deduplication enforces 6-day (144-hour) cooldown on confirmed successful sends.
  */
 export function acquireNextEligibleJob(workerId: string): NextEligibleJob | null {
-  const isDryRun = process.env.OUTREACH_DRY_RUN === 'true';
-  // Defense-in-depth: In live send mode, never lease any job if the daily limit has been reached!
-  if (!isDryRun) {
-    const quota = reconcileDailyQuota();
-    if (quota.isQuotaReached) {
-      return null;
-    }
-  }
-
   const db = getDb();
   const now = new Date();
   const nowIso = now.toISOString();
   const leaseExpiresAt = new Date(now.getTime() + QUEUE_ITEM_LEASE_MS).toISOString();
+  const cooldownCutoffIso = getCooldownCutoffIso(now.getTime());
 
   // Find candidate items ordered by: priority desc, scheduledFor asc, createdAt asc, id asc
   const candidates = db
@@ -250,7 +244,9 @@ export function acquireNextEligibleJob(workerId: string): NextEligibleJob | null
         AND NOT EXISTS (
           SELECT 1 FROM global_email_history
           WHERE global_email_history.email = LOWER(TRIM(contacts.email))
-            AND (global_email_history.status = 'sent' OR global_email_history.sent_at IS NOT NULL)
+            AND global_email_history.status = 'sent'
+            AND global_email_history.sent_at IS NOT NULL
+            AND global_email_history.sent_at > ${cooldownCutoffIso}
         )
       `
     )

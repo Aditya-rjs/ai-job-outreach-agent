@@ -81,6 +81,24 @@ export const env = {
     }
     return parsed;
   },
+
+  sendEndHour: () => {
+    const raw = getOptionalEnvVar('SEND_END_HOUR', '16');
+    const parsed = parseInt(raw, 10);
+    if (isNaN(parsed) || parsed < 0 || parsed > 23) {
+      throw new Error(`Invalid SEND_END_HOUR configuration: "${raw}". Must be an integer between 0 and 23.`);
+    }
+    return parsed;
+  },
+
+  sendEndMinute: () => {
+    const raw = getOptionalEnvVar('SEND_END_MINUTE', '0');
+    const parsed = parseInt(raw, 10);
+    if (isNaN(parsed) || parsed < 0 || parsed > 59) {
+      throw new Error(`Invalid SEND_END_MINUTE configuration: "${raw}". Must be an integer between 0 and 59.`);
+    }
+    return parsed;
+  },
 } as const;
 
 /**

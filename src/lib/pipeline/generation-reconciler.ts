@@ -5,6 +5,7 @@ import { ulid } from 'ulid';
 import { generatePersonalizedEmail } from '@/lib/ai/email-generator';
 import { categorizeGeminiError, globalGeminiLimiter } from '@/lib/ai/gemini-client';
 import { isOpenRouterConfigured } from '@/lib/ai/openrouter-client';
+import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
 import type { StructuredResumeProfile, Contact } from '@/types';
 
 export const GENERATION_LEASE_MS = 90 * 1000; // 90-second lease per contact
@@ -141,6 +142,8 @@ export async function reconcilePendingEmailGenerations(options: {
   // - Not previously successfully contacted in global history
   // - generationStatus is PENDING_GENERATION OR RETRY_PENDING (with next_generation_retry_at <= now)
   // - NEVER touch contacts already GENERATED
+  const cooldownCutoffIso = getCooldownCutoffIso(now.getTime());
+
   const candidates = db
     .select({
       contact: contacts,
@@ -157,7 +160,9 @@ export async function reconcilePendingEmailGenerations(options: {
         AND NOT EXISTS (
           SELECT 1 FROM global_email_history
           WHERE global_email_history.email = LOWER(TRIM(contacts.email))
-            AND (global_email_history.status = 'sent' OR global_email_history.sent_at IS NOT NULL)
+            AND global_email_history.status = 'sent'
+            AND global_email_history.sent_at IS NOT NULL
+            AND global_email_history.sent_at > ${cooldownCutoffIso}
         )
         AND (
           contacts.generation_status = 'PENDING_GENERATION'

@@ -191,6 +191,8 @@ export interface SchedulerConfig {
   intervalMinutes: number;
   startHour: number;
   startMinute: number;
+  endHour: number;
+  endMinute: number;
   workerId: string | null;
   lockedUntil: string | null;
   lastHeartbeatAt: string | null;

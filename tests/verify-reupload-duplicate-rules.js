@@ -112,9 +112,9 @@ async function runTests() {
     const contact2 = db.prepare('SELECT * FROM contacts WHERE batch_id = ?').get(batch2.batchId);
     assert.strictEqual(contact2.is_duplicate, 1, 'Re-uploaded real sent contact must be marked is_duplicate = 1');
     assert.strictEqual(contact2.status, 'skipped', 'Re-uploaded real sent contact must be skipped');
-    assert(contact2.relevance_reason.includes('Duplicate: email already queued or contacted in previous outreach.'));
+    assert(contact2.relevance_reason.includes('Duplicate: email in active 6-day cooldown or currently queued.'));
     assert.strictEqual(batch2.emailsPending, 0, 'No outreach pending for real sent contact');
-    pass('Re-upload of genuinely sent contact remains strictly blocked globally');
+    pass('Re-upload of genuinely sent contact remains strictly blocked globally under 6-day cooldown');
   }
 
   // --- Test 2: Dry-Run Only -> Re-upload Eligible ---

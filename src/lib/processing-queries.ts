@@ -1,5 +1,6 @@
 import { getDb } from '@/db';
 import { sql } from 'drizzle-orm';
+import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
 
 export interface ProcessingPipelineStats {
   classificationPendingCount: number;
@@ -134,6 +135,7 @@ export function getProcessingPipelineStats(): ProcessingPipelineStats {
   `);
 
   // 4. Ready to Send: Exact scheduler eligibility predicate
+  const cooldownCutoffIso = getCooldownCutoffIso();
   const readyToSendRow = db.get<{ count: number }>(sql`
     SELECT COUNT(DISTINCT c.id) as count
     FROM contacts c
@@ -161,7 +163,9 @@ export function getProcessingPipelineStats(): ProcessingPipelineStats {
       AND NOT EXISTS (
         SELECT 1 FROM global_email_history geh
         WHERE geh.email = LOWER(TRIM(c.email))
-          AND (geh.status = 'sent' OR geh.sent_at IS NOT NULL)
+          AND geh.status = 'sent'
+          AND geh.sent_at IS NOT NULL
+          AND geh.sent_at > ${cooldownCutoffIso}
       )
   `);
 
@@ -490,6 +494,7 @@ export function getReadyToSendList(opts: ProcessingPaginationOptions = {}): {
   const limit = Math.max(1, Math.min(opts.limit || 25, 200));
   const offset = (page - 1) * limit;
   const nowIso = new Date().toISOString();
+  const cooldownCutoffIso = getCooldownCutoffIso();
 
   const searchClause = search
     ? sql`AND (LOWER(c.contact_name) LIKE ${`%${search}%`} OR LOWER(c.email) LIKE ${`%${search}%`} OR LOWER(c.company_name) LIKE ${`%${search}%`} OR LOWER(c.email_subject) LIKE ${`%${search}%`})`
@@ -522,7 +527,9 @@ export function getReadyToSendList(opts: ProcessingPaginationOptions = {}): {
       AND NOT EXISTS (
         SELECT 1 FROM global_email_history geh
         WHERE geh.email = LOWER(TRIM(c.email))
-          AND (geh.status = 'sent' OR geh.sent_at IS NOT NULL)
+          AND geh.status = 'sent'
+          AND geh.sent_at IS NOT NULL
+          AND geh.sent_at > ${cooldownCutoffIso}
       )
       ${searchClause}
   `);
@@ -580,7 +587,9 @@ export function getReadyToSendList(opts: ProcessingPaginationOptions = {}): {
       AND NOT EXISTS (
         SELECT 1 FROM global_email_history geh
         WHERE geh.email = LOWER(TRIM(c.email))
-          AND (geh.status = 'sent' OR geh.sent_at IS NOT NULL)
+          AND geh.status = 'sent'
+          AND geh.sent_at IS NOT NULL
+          AND geh.sent_at > ${cooldownCutoffIso}
       )
       ${searchClause}
     ORDER BY oq.priority DESC, oq.created_at ASC, c.id ASC

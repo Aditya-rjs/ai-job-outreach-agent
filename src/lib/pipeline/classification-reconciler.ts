@@ -7,9 +7,12 @@ import {
   computeNextRetryTime,
   type CompanyEvaluationInput,
   type CompanyClassificationResult,
+  type ClassificationStatus,
+  type ClassificationSource,
 } from '@/lib/ai/company-classifier';
 import { categorizeGeminiError, globalGeminiLimiter } from '@/lib/ai/gemini-client';
 import { isOpenRouterConfigured } from '@/lib/ai/openrouter-client';
+import { normalizeCompanyName, formatCompanyDisplayName } from '@/lib/utils/company';
 
 export interface ReconcileResult {
   processed: number;
@@ -31,23 +34,156 @@ export function resetActiveClassificationClaimsForTesting(): void {
 }
 
 /**
+ * Discovers active companies in contacts where is_relevant IS NULL and either:
+ * - Immediately cascades to contacts if an authoritative classification already exists.
+ * - Seeds a PENDING row in company_classifications (retryCount: 0, nextRetryAt: nowIso)
+ *   without resetting FAILED records or duplicating rows.
+ */
+export function discoverAndSeedOrphanedCompanies(
+  db: ReturnType<typeof getDb>,
+  nowIso: string = new Date().toISOString()
+): { seeded: number; cascaded: number } {
+  let seeded = 0;
+  let cascaded = 0;
+
+  // Find contacts in active batches where is_relevant IS NULL and company_name is present
+  const unclassifiedContacts = db
+    .select({
+      companyName: contacts.companyName,
+    })
+    .from(contacts)
+    .innerJoin(batches, eq(contacts.batchId, batches.id))
+    .where(
+      and(
+        sql`contacts.company_name IS NOT NULL AND TRIM(contacts.company_name) != ''`,
+        sql`contacts.is_relevant IS NULL`,
+        sql`batches.status NOT IN ('deleted', 'cancelled')`
+      )
+    )
+    .all();
+
+  if (unclassifiedContacts.length === 0) {
+    return { seeded: 0, cascaded: 0 };
+  }
+
+  // Deduplicate by normalized name
+  const companyMap = new Map<string, string>(); // normalized -> original name
+  for (const c of unclassifiedContacts) {
+    if (!c.companyName) continue;
+    const norm = normalizeCompanyName(c.companyName);
+    if (norm && !companyMap.has(norm)) {
+      companyMap.set(norm, c.companyName.trim());
+    }
+  }
+
+  const normalizedNames = Array.from(companyMap.keys());
+  if (normalizedNames.length === 0) {
+    return { seeded: 0, cascaded: 0 };
+  }
+
+  // Query existing classifications in chunks to avoid SQLite variable limits
+  const existingRows: (typeof companyClassifications.$inferSelect)[] = [];
+  const CHUNK_SIZE = 200;
+  for (let i = 0; i < normalizedNames.length; i += CHUNK_SIZE) {
+    const chunk = normalizedNames.slice(i, i + CHUNK_SIZE);
+    const rows = db
+      .select()
+      .from(companyClassifications)
+      .where(inArray(companyClassifications.normalizedName, chunk))
+      .all();
+    existingRows.push(...rows);
+  }
+
+  const existingMap = new Map(existingRows.map((r) => [r.normalizedName, r]));
+
+  for (const [norm, rawName] of companyMap.entries()) {
+    const existing = existingMap.get(norm);
+
+    if (existing) {
+      if (
+        existing.classificationResult === 'RELEVANT' ||
+        existing.classificationResult === 'IRRELEVANT' ||
+        existing.classificationResult === 'NEEDS_REVIEW'
+      ) {
+        // Cascade completed classification immediately to newly discovered contacts without AI call
+        const newlyPromoted = cascadeClassificationToContacts(db, {
+          companyName: existing.companyName,
+          normalizedName: existing.normalizedName,
+          relevant: existing.isRelevant,
+          confidence: existing.confidence,
+          reason: existing.reason || (existing.isRelevant ? 'Relevant — Gemini' : 'Not Relevant — Gemini'),
+          status: existing.classificationResult as ClassificationStatus,
+          source: (existing.classificationSource as ClassificationSource) || 'gemini',
+          geminiModel: existing.geminiModel || 'gemini-3.8-flash',
+          retryCount: existing.retryCount,
+        });
+        cascaded += newlyPromoted;
+      }
+      // If FAILED or PENDING: respect existing state, do not reset
+      continue;
+    }
+
+    // No existing classification: insert as PENDING
+    try {
+      db.insert(companyClassifications)
+        .values({
+          normalizedName: norm,
+          companyName: formatCompanyDisplayName(rawName),
+          isRelevant: null,
+          confidence: null,
+          reason: 'Classification Pending — Discovered unclassified company from active batch.',
+          classificationSource: 'gemini',
+          geminiModel: 'gemini-3.8-flash',
+          classificationResult: 'PENDING',
+          retryCount: 0,
+          nextRetryAt: nowIso,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        })
+        .onConflictDoNothing()
+        .run();
+      seeded++;
+    } catch (err) {
+      console.warn(`[ClassificationReconciler] Failed to seed orphaned company ${norm}:`, err);
+    }
+  }
+
+  return { seeded, cascaded };
+}
+
+/**
  * Periodically processes company classifications that are PENDING and due for retry.
  * Survives application and container restarts by reading and persisting state in SQLite.
  */
 export async function reconcilePendingClassifications(
   geminiCallerOverride?: (prompt: string) => Promise<string>
 ): Promise<ReconcileResult> {
-  // Check if global Gemini 429 cooldown is currently active and OpenRouter is not available
-  if (globalGeminiLimiter.isCooldownActive() && !isOpenRouterConfigured()) {
-    console.log(
-      `[ClassificationReconciler] Global Gemini 429 cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()} and OpenRouter not configured. Skipping reconciliation run.`
-    );
-    return { processed: 0, succeeded: 0, promotedToQueue: 0, stillPending: 0, failed: 0 };
-  }
-
   const db = getDb();
   const now = new Date();
   const nowIso = now.toISOString();
+
+  let promotedToQueue = 0;
+
+  // 0. Discover unclassified companies from active batches and seed them or cascade completed
+  try {
+    const discovery = discoverAndSeedOrphanedCompanies(db, nowIso);
+    promotedToQueue += discovery.cascaded;
+    if (discovery.seeded > 0 || discovery.cascaded > 0) {
+      console.log(
+        `[ClassificationReconciler] Discovered unclassified companies: ${discovery.seeded} seeded as PENDING, ${discovery.cascaded} cascaded from existing classifications.`
+      );
+    }
+  } catch (err) {
+    console.warn('[ClassificationReconciler] Error during orphan discovery:', err);
+  }
+
+  // Check if global Gemini 429 cooldown is currently active and OpenRouter is not available
+  if (globalGeminiLimiter.isCooldownActive() && !isOpenRouterConfigured()) {
+    console.log(
+      `[ClassificationReconciler] Global Gemini 429 cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()} and OpenRouter not configured. Skipping reconciliation AI calls.`
+    );
+    return { processed: 0, succeeded: 0, promotedToQueue, stillPending: 0, failed: 0 };
+  }
 
   // 1. Fetch pending company classifications due for retry and not leased
   const pendingRecords = db
@@ -64,42 +200,41 @@ export async function reconcilePendingClassifications(
     .filter((r) => !activeClassificationOperations.has(r.normalizedName));
 
   if (pendingRecords.length === 0) {
-    return { processed: 0, succeeded: 0, promotedToQueue: 0, stillPending: 0, failed: 0 };
+    return { processed: 0, succeeded: 0, promotedToQueue, stillPending: 0, failed: 0 };
   }
 
   console.log(`[ClassificationReconciler] Found ${pendingRecords.length} pending company classifications due for retry.`);
 
   let processed = 0;
   let succeeded = 0;
-  let promotedToQueue = 0;
   let stillPending = 0;
   let failed = 0;
 
-  // 2. Fetch supplementary company context from contacts for richer Gemini prompt
+  // 2. Fetch supplementary company context from contacts for Gemini / OpenRouter prompt (website only)
   const normalizedNames = pendingRecords.map((r) => r.normalizedName);
-  const contextMap = new Map<string, { website?: string; location?: string; designation?: string }>();
+  const contextMap = new Map<string, { website?: string }>();
 
   try {
     const contactContexts = db
       .select({
         companyName: contacts.companyName,
         website: contacts.companyWebsite,
-        location: contacts.companyLocation,
-        designation: contacts.designation,
       })
       .from(contacts)
-      .where(sql`contacts.company_name IS NOT NULL`)
-      .limit(500)
+      .where(
+        and(
+          sql`contacts.company_name IS NOT NULL`,
+          sql`contacts.company_website IS NOT NULL AND TRIM(contacts.company_website) != ''`
+        )
+      )
       .all();
 
     for (const c of contactContexts) {
       if (!c.companyName) continue;
-      const norm = c.companyName.trim().toLowerCase();
-      if (normalizedNames.includes(norm) && !contextMap.has(norm)) {
+      const norm = normalizeCompanyName(c.companyName);
+      if (norm && normalizedNames.includes(norm) && !contextMap.has(norm)) {
         contextMap.set(norm, {
           website: c.website || undefined,
-          location: c.location || undefined,
-          designation: c.designation || undefined,
         });
       }
     }
@@ -107,8 +242,8 @@ export async function reconcilePendingClassifications(
     console.warn('[ClassificationReconciler] Failed to fetch contact contexts:', err);
   }
 
-  // 3. Process in controlled batches of 10
-  const BATCH_SIZE = 10;
+  // 3. Process in controlled batches of 20
+  const BATCH_SIZE = 20;
   for (let i = 0; i < pendingRecords.length; i += BATCH_SIZE) {
     // Check if cooldown became active during execution of earlier chunks and OpenRouter is not configured
     if (globalGeminiLimiter.isCooldownActive() && !isOpenRouterConfigured()) {
@@ -158,8 +293,6 @@ export async function reconcilePendingClassifications(
         companyName: r.companyName,
         normalizedName: r.normalizedName,
         website: ctx?.website,
-        location: ctx?.location,
-        designationContext: ctx?.designation,
       };
     });
 
@@ -307,11 +440,12 @@ export function cascadeClassificationToContacts(
   let promotedCount = 0;
   const nowIso = new Date().toISOString();
 
-  // Find matching contacts in active batches
-  const matchingContacts = db
+  // Find candidate contacts in active batches where company name is present
+  const candidateContacts = db
     .select({
       id: contacts.id,
       batchId: contacts.batchId,
+      companyName: contacts.companyName,
       emailValid: contacts.emailValid,
       isDuplicate: contacts.isDuplicate,
       status: contacts.status,
@@ -320,24 +454,36 @@ export function cascadeClassificationToContacts(
     .innerJoin(batches, eq(contacts.batchId, batches.id))
     .where(
       and(
-        sql`LOWER(TRIM(contacts.company_name)) = ${result.normalizedName}`,
+        sql`contacts.company_name IS NOT NULL AND TRIM(contacts.company_name) != ''`,
         sql`batches.status NOT IN ('deleted', 'cancelled')`
       )
     )
     .all();
+
+  const matchingContacts = candidateContacts.filter((c) => {
+    if (!c.companyName) return false;
+    const norm = normalizeCompanyName(c.companyName);
+    const rawLower = c.companyName.trim().toLowerCase();
+    return norm === result.normalizedName || rawLower === result.normalizedName;
+  });
 
   for (const c of matchingContacts) {
     if (result.status === 'RELEVANT') {
       const isEligible = c.emailValid && !c.isDuplicate;
 
       if (isEligible) {
+        const targetStatus =
+          c.status === 'sent' || c.status === 'processing' || c.status === 'generating' || c.status === 'generated'
+            ? c.status
+            : 'queued';
+
         // Promote eligible contact to queued and schedule for generation if not already generated
         db.update(contacts)
           .set({
             isRelevant: true,
             relevanceConfidence: result.confidence,
             relevanceReason: result.reason,
-            status: 'queued',
+            status: targetStatus,
             generationStatus: sql`CASE WHEN generation_status = 'GENERATED' THEN 'GENERATED' ELSE 'PENDING_GENERATION' END`,
             updatedAt: nowIso,
           })
@@ -351,7 +497,7 @@ export function cascadeClassificationToContacts(
           .where(eq(outreachQueue.contactId, c.id))
           .get();
 
-        if (!existingQueue) {
+        if (!existingQueue && targetStatus !== 'sent') {
           db.insert(outreachQueue)
             .values({
               id: `queue_${ulid()}`,

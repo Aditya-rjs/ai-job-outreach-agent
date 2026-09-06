@@ -367,7 +367,7 @@ export default function DashboardPage() {
               <span className="font-semibold text-emerald-950">Authorized Account: {stats.gmailEmail}</span>
             </div>
             <p className="text-emerald-800 mt-1">
-              When the background worker (<code className="font-mono text-xs">npm run worker</code>) is active, eligible emails will be dispatched to recruiters via your connected Gmail account at 10:00 AM IST (max {stats.dailyLimit}/day, 3-minute minimum gap).
+              When the background worker (<code className="font-mono text-xs">npm run worker</code>) is active, eligible emails will be dispatched to recruiters via your connected Gmail account during the sending window: 10:00 AM–4:00 PM IST ({scheduler?.intervalMinutes || 3}-minute minimum gap).
             </p>
           </div>
         </div>
@@ -424,8 +424,8 @@ export default function DashboardPage() {
                   <Badge variant="destructive">Stopped</Badge>
                 ) : scheduler?.isPaused ? (
                   <Badge variant="warning">Paused</Badge>
-                ) : !stats?.isDryRun && scheduler?.todaySentCount && scheduler.todaySentCount >= (scheduler?.dailyLimit ?? 30) ? (
-                  <Badge variant="secondary">Daily Limit Reached (30/30)</Badge>
+                ) : scheduler?.schedulerStatus === 'waiting' ? (
+                  <Badge variant="secondary">Window Closed (10 AM–4 PM IST)</Badge>
                 ) : stats?.queueSize && stats.queueSize > 0 ? (
                   <Badge variant="success">Active Worker Ready</Badge>
                 ) : (
@@ -433,7 +433,7 @@ export default function DashboardPage() {
                 )}
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Sending Window Opens: 10:00 AM • 30 successful real emails/day • {scheduler?.intervalMinutes || 3}-min gap • Timezone: {scheduler?.timezone || 'Asia/Kolkata'}
+                Sending window: 10:00 AM–4:00 PM IST • 6-day cooldown per contact • {scheduler?.intervalMinutes || 3}-min gap • Timezone: {scheduler?.timezone || 'Asia/Kolkata'}
               </p>
             </div>
 
@@ -463,10 +463,11 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Daily Limit Reached Notice Banner */}
-          {!stats?.isDryRun && (stats?.todaySentCount ?? 0) >= (stats?.dailyLimit ?? 30) && (
-            <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-4 py-2.5 text-xs text-amber-800 font-medium">
-              Daily limit reached — remaining contacts will resume tomorrow at 10:00 AM.
+          {/* Sending Window Status Banner */}
+          {stats?.outreachStatus === 'waiting' && (
+            <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 px-4 py-2.5 text-xs text-blue-900 font-medium flex items-center justify-between">
+              <span>Sending window currently closed (10:00 AM–4:00 PM IST) — queued contacts are persistent and will automatically resume when the window opens.</span>
+              <span className="font-semibold">{stats.nextSendAt ? formatDateTime(stats.nextSendAt) : 'Opens at 10:00 AM IST'}</span>
             </div>
           )}
 
@@ -481,15 +482,11 @@ export default function DashboardPage() {
                   {stats?.isDryRun ? (stats?.todaySimulatedCount ?? 0) : (stats?.todaySentCount ?? 0)}
                 </span>
                 <span className="text-sm text-muted-foreground">
-                  {stats?.isDryRun ? 'simulated' : `/ ${stats?.dailyLimit ?? 30} real emails`}
+                  {stats?.isDryRun ? 'simulated' : 'real emails today'}
                 </span>
               </div>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                {stats?.isDryRun
-                  ? 'Simulated — no real emails sent.'
-                  : (stats?.todaySentCount ?? 0) >= (stats?.dailyLimit ?? 30)
-                    ? 'Daily limit reached — remaining contacts will resume tomorrow at 10:00 AM.'
-                    : `Remaining today: ${stats?.remainingToday ?? 30}`}
+                Sending window: 10:00 AM–4:00 PM IST
               </p>
             </div>
 
@@ -507,18 +504,16 @@ export default function DashboardPage() {
             <div>
               <p className="text-xs text-muted-foreground font-medium">Next Scheduled Send</p>
               <p className="text-sm font-semibold text-foreground mt-1">
-                {!stats?.isDryRun && (stats?.todaySentCount ?? 0) >= (stats?.dailyLimit ?? 30)
-                  ? 'Tomorrow at 10:00 AM'
-                  : stats?.nextSendAt
-                    ? formatDateTime(stats.nextSendAt)
-                    : 'Sending Window Opens: 10:00 AM'}
+                {stats?.nextSendAt
+                  ? formatDateTime(stats.nextSendAt)
+                  : stats?.outreachStatus === 'waiting'
+                    ? 'Tomorrow at 10:00 AM'
+                    : 'Sending Window: 10:00 AM–4:00 PM IST'}
               </p>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                {!stats?.isDryRun && (stats?.todaySentCount ?? 0) >= (stats?.dailyLimit ?? 30)
-                  ? 'Daily limit reached — remaining contacts will resume tomorrow at 10:00 AM.'
-                  : stats?.lastSendAt
-                    ? `Last sent: ${formatDateTime(stats.lastSendAt)}`
-                    : 'No real emails sent today'}
+                {stats?.lastSendAt
+                  ? `Last sent: ${formatDateTime(stats.lastSendAt)}`
+                  : 'No real emails sent today'}
               </p>
             </div>
 
