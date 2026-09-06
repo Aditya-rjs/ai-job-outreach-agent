@@ -27,6 +27,7 @@ import { formatDateTime } from '@/lib/utils';
 import type { DashboardStats, Batch, SchedulerConfig } from '@/types';
 import { DashboardDetailModal, type DashboardCardViewId } from '@/components/dashboard/dashboard-detail-modal';
 import { ProcessingPipelineSection } from '@/components/dashboard/processing-pipeline-section';
+import { AiProviderStatus } from '@/components/dashboard/ai-provider-status';
 
 const POLL_INTERVAL_MS = 6000; // 6 seconds automatic refresh
 
@@ -560,7 +561,9 @@ export default function DashboardPage() {
           </div>
         </CardContent>
       </Card>
-
+      
+      {/* AI Provider Status & Observability */}
+      <AiProviderStatus aiTelemetry={stats?.aiTelemetry} />
 
       {/* Stat Cards Grid */}
       <div className="grid gap-3.5 sm:gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7">
