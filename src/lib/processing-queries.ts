@@ -4,6 +4,7 @@ import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
 
 export interface ProcessingPipelineStats {
   classificationPendingCount: number;
+  classificationRetryWaitingCount: number;
   emailGenerationPendingCount: number;
   generationRetryCount: number;
   readyToSendCount: number;
@@ -17,6 +18,7 @@ export interface ClassificationPendingRecord {
   contactEmails: string[];
   representativeContacts: string[]; // e.g. ["Garima Mohan — gmohan@xebia.com"]
   classificationResult: string;
+  retryRound: number;
   retryCount: number;
   lastErrorCategory: string | null;
   nextRetryAt: string | null;
@@ -24,6 +26,7 @@ export interface ClassificationPendingRecord {
   confidence: number | null;
   reason: string | null;
   createdAt: string;
+  isWaitingForNextRound?: boolean;
 }
 
 export interface CompanyContactItem {
@@ -85,20 +88,36 @@ export interface ProcessingPaginationOptions {
 // 1. CANONICAL STATS FOR AI OUTREACH PROCESSING
 // ---------------------------------------------------------------------------
 
-export function getProcessingPipelineStats(): ProcessingPipelineStats {
+export function getProcessingPipelineStats(batchId?: string): ProcessingPipelineStats {
   const db = getDb();
   const nowIso = new Date().toISOString();
 
-  // 1. Classification Pending: Unique normalized companies in active batches with classification_result = 'PENDING'
+  const batchFilter = batchId ? sql`AND c.batch_id = ${batchId}` : sql``;
+
+  // 1. Classification Pending: Unique normalized companies in active batches with classification_result = 'PENDING' (active in current round only)
   const classPendingRow = db.get<{ count: number }>(sql`
     SELECT COUNT(DISTINCT LOWER(TRIM(c.company_name))) as count
     FROM contacts c
     INNER JOIN batches b ON c.batch_id = b.id
-    LEFT JOIN company_classifications cc ON cc.normalized_name = LOWER(TRIM(c.company_name))
+    LEFT JOIN company_classifications cc ON (cc.normalized_name = LOWER(TRIM(c.company_name)) OR cc.company_name = c.company_name OR cc.company_name = TRIM(c.company_name))
     WHERE b.status NOT IN ('deleted', 'cancelled')
       AND c.company_name IS NOT NULL
       AND TRIM(c.company_name) != ''
+      ${batchFilter}
       AND (cc.classification_result = 'PENDING' OR (cc.classification_result IS NULL AND c.is_relevant IS NULL))
+  `);
+
+  // 1b. Classification Retry Waiting: Companies that failed current round and are waiting for next retry round
+  const classRetryWaitingRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(DISTINCT LOWER(TRIM(c.company_name))) as count
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    INNER JOIN company_classifications cc ON (cc.normalized_name = LOWER(TRIM(c.company_name)) OR cc.company_name = c.company_name OR cc.company_name = TRIM(c.company_name))
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      ${batchFilter}
+      AND cc.classification_result = 'RETRY_WAITING'
   `);
 
   // 2. Email Generation Pending: Gemini-relevant contacts awaiting initial generation
@@ -111,6 +130,7 @@ export function getProcessingPipelineStats(): ProcessingPipelineStats {
       AND c.email_valid = 1
       AND c.is_duplicate = 0
       AND c.sent_at IS NULL
+      ${batchFilter}
       AND (
         c.generation_status IN ('PENDING_GENERATION', 'GENERATING')
         OR (
@@ -131,6 +151,7 @@ export function getProcessingPipelineStats(): ProcessingPipelineStats {
       AND c.email_valid = 1
       AND c.is_duplicate = 0
       AND c.sent_at IS NULL
+      ${batchFilter}
       AND c.generation_status = 'RETRY_PENDING'
   `);
 
@@ -142,6 +163,7 @@ export function getProcessingPipelineStats(): ProcessingPipelineStats {
     INNER JOIN batches b ON c.batch_id = b.id
     INNER JOIN outreach_queue oq ON oq.contact_id = c.id
     WHERE b.status NOT IN ('deleted', 'cancelled')
+      ${batchFilter}
       AND (
         oq.status = 'pending'
         OR (
@@ -171,6 +193,7 @@ export function getProcessingPipelineStats(): ProcessingPipelineStats {
 
   return {
     classificationPendingCount: classPendingRow?.count ?? 0,
+    classificationRetryWaitingCount: classRetryWaitingRow?.count ?? 0,
     emailGenerationPendingCount: genPendingRow?.count ?? 0,
     generationRetryCount: genRetryRow?.count ?? 0,
     readyToSendCount: readyToSendRow?.count ?? 0,
@@ -179,7 +202,7 @@ export function getProcessingPipelineStats(): ProcessingPipelineStats {
 }
 
 // ---------------------------------------------------------------------------
-// 2. CLASSIFICATION PENDING (Company-Level Grouping)
+// 2. CLASSIFICATION PENDING (Active PENDING in current round)
 // ---------------------------------------------------------------------------
 
 export function getClassificationPendingList(opts: ProcessingPaginationOptions = {}): {
@@ -200,7 +223,7 @@ export function getClassificationPendingList(opts: ProcessingPaginationOptions =
     SELECT COUNT(DISTINCT LOWER(TRIM(c.company_name))) as count
     FROM contacts c
     INNER JOIN batches b ON c.batch_id = b.id
-    LEFT JOIN company_classifications cc ON cc.normalized_name = LOWER(TRIM(c.company_name))
+    LEFT JOIN company_classifications cc ON (cc.normalized_name = LOWER(TRIM(c.company_name)) OR cc.company_name = c.company_name OR cc.company_name = TRIM(c.company_name))
     WHERE b.status NOT IN ('deleted', 'cancelled')
       AND c.company_name IS NOT NULL
       AND TRIM(c.company_name) != ''
@@ -216,6 +239,7 @@ export function getClassificationPendingList(opts: ProcessingPaginationOptions =
     contactEmailsStr: string | null;
     contactPairsStr: string | null;
     classificationResult: string;
+    retryRound: number;
     retryCount: number;
     lastErrorCategory: string | null;
     nextRetryAt: string | null;
@@ -231,6 +255,7 @@ export function getClassificationPendingList(opts: ProcessingPaginationOptions =
       GROUP_CONCAT(DISTINCT c.email) as contactEmailsStr,
       GROUP_CONCAT(DISTINCT CASE WHEN c.contact_name IS NOT NULL AND TRIM(c.contact_name) != '' THEN c.contact_name || ' — ' || c.email ELSE c.email END) as contactPairsStr,
       COALESCE(cc.classification_result, 'PENDING') as classificationResult,
+      COALESCE(cc.retry_round, 0) as retryRound,
       COALESCE(cc.retry_count, 0) as retryCount,
       cc.last_error_category as lastErrorCategory,
       cc.next_retry_at as nextRetryAt,
@@ -240,7 +265,7 @@ export function getClassificationPendingList(opts: ProcessingPaginationOptions =
       COALESCE(cc.created_at, MIN(c.created_at)) as createdAt
     FROM contacts c
     INNER JOIN batches b ON c.batch_id = b.id
-    LEFT JOIN company_classifications cc ON cc.normalized_name = LOWER(TRIM(c.company_name))
+    LEFT JOIN company_classifications cc ON (cc.normalized_name = LOWER(TRIM(c.company_name)) OR cc.company_name = c.company_name OR cc.company_name = TRIM(c.company_name))
     WHERE b.status NOT IN ('deleted', 'cancelled')
       AND c.company_name IS NOT NULL
       AND TRIM(c.company_name) != ''
@@ -262,6 +287,7 @@ export function getClassificationPendingList(opts: ProcessingPaginationOptions =
       contactEmails,
       representativeContacts,
       classificationResult: r.classificationResult,
+      retryRound: r.retryRound,
       retryCount: r.retryCount,
       lastErrorCategory: r.lastErrorCategory,
       nextRetryAt: r.nextRetryAt,
@@ -269,6 +295,108 @@ export function getClassificationPendingList(opts: ProcessingPaginationOptions =
       confidence: r.confidence,
       reason: r.reason,
       createdAt: r.createdAt,
+      isWaitingForNextRound: false,
+    };
+  });
+
+  return { records, total };
+}
+
+// ---------------------------------------------------------------------------
+// 2b. CLASSIFICATION RETRY WAITING (Waiting for current round to drain)
+// ---------------------------------------------------------------------------
+
+export function getClassificationRetryWaitingList(opts: ProcessingPaginationOptions = {}): {
+  records: ClassificationPendingRecord[];
+  total: number;
+} {
+  const db = getDb();
+  const search = (opts.search || '').trim().toLowerCase();
+  const page = Math.max(1, opts.page || 1);
+  const limit = Math.max(1, Math.min(opts.limit || 25, 200));
+  const offset = (page - 1) * limit;
+
+  const searchClause = search
+    ? sql`AND (LOWER(TRIM(c.company_name)) LIKE ${`%${search}%`} OR LOWER(c.contact_name) LIKE ${`%${search}%`} OR LOWER(c.email) LIKE ${`%${search}%`})`
+    : sql``;
+
+  const countRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(DISTINCT LOWER(TRIM(c.company_name))) as count
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    INNER JOIN company_classifications cc ON (cc.normalized_name = LOWER(TRIM(c.company_name)) OR cc.company_name = c.company_name OR cc.company_name = TRIM(c.company_name))
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      AND cc.classification_result = 'RETRY_WAITING'
+      ${searchClause}
+  `);
+  const total = countRow?.count ?? 0;
+
+  const rows = db.all<{
+    companyName: string;
+    normalizedName: string;
+    contactCount: number;
+    contactEmailsStr: string | null;
+    contactPairsStr: string | null;
+    classificationResult: string;
+    retryRound: number;
+    retryCount: number;
+    lastErrorCategory: string | null;
+    nextRetryAt: string | null;
+    geminiModel: string;
+    confidence: number | null;
+    reason: string | null;
+    createdAt: string;
+  }>(sql`
+    SELECT
+      COALESCE(cc.company_name, TRIM(c.company_name)) as companyName,
+      LOWER(TRIM(c.company_name)) as normalizedName,
+      COUNT(DISTINCT c.id) as contactCount,
+      GROUP_CONCAT(DISTINCT c.email) as contactEmailsStr,
+      GROUP_CONCAT(DISTINCT CASE WHEN c.contact_name IS NOT NULL AND TRIM(c.contact_name) != '' THEN c.contact_name || ' — ' || c.email ELSE c.email END) as contactPairsStr,
+      cc.classification_result as classificationResult,
+      COALESCE(cc.retry_round, 0) as retryRound,
+      COALESCE(cc.retry_count, 0) as retryCount,
+      cc.last_error_category as lastErrorCategory,
+      cc.next_retry_at as nextRetryAt,
+      COALESCE(cc.gemini_model, 'gemini-3.8-flash') as geminiModel,
+      cc.confidence,
+      cc.reason,
+      COALESCE(cc.created_at, MIN(c.created_at)) as createdAt
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    INNER JOIN company_classifications cc ON (cc.normalized_name = LOWER(TRIM(c.company_name)) OR cc.company_name = c.company_name OR cc.company_name = TRIM(c.company_name))
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      AND cc.classification_result = 'RETRY_WAITING'
+      ${searchClause}
+    GROUP BY LOWER(TRIM(c.company_name))
+    ORDER BY cc.retry_round ASC, cc.retry_count DESC, contactCount DESC, companyName ASC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  const records: ClassificationPendingRecord[] = rows.map((r) => {
+    const contactEmails = r.contactEmailsStr ? r.contactEmailsStr.split(',').filter(Boolean) : [];
+    const representativeContacts = r.contactPairsStr ? r.contactPairsStr.split(',').filter(Boolean) : [];
+
+    return {
+      companyName: r.companyName,
+      normalizedName: r.normalizedName,
+      contactCount: r.contactCount,
+      contactEmails,
+      representativeContacts,
+      classificationResult: r.classificationResult,
+      retryRound: r.retryRound,
+      retryCount: r.retryCount,
+      lastErrorCategory: r.lastErrorCategory,
+      nextRetryAt: r.nextRetryAt,
+      geminiModel: r.geminiModel,
+      confidence: r.confidence,
+      reason: r.reason,
+      createdAt: r.createdAt,
+      isWaitingForNextRound: true,
     };
   });
 

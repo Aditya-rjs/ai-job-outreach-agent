@@ -2,7 +2,6 @@ import fs from 'fs';
 import {
   classifyCompanies,
   resetClassificationMemoryCache,
-  computeNextRetryTime,
   type CompanyClassificationResult,
 } from '../../src/lib/ai/company-classifier';
 import { categorizeGeminiError, sanitizeSecretText } from '../../src/lib/ai/gemini-client';
@@ -17,10 +16,6 @@ const inputRaw = fs.readFileSync(0, 'utf-8');
 
 if (action === 'init') {
   console.log('OUTPUT:' + JSON.stringify({ success: true }));
-} else if (action === 'backoff') {
-  const { retryCount, fromDate } = JSON.parse(inputRaw);
-  const result = computeNextRetryTime(retryCount, fromDate ? new Date(fromDate) : new Date());
-  console.log('OUTPUT:' + JSON.stringify(result));
 } else if (action === 'diagnose') {
   const { errorString, apiKeyEnv } = JSON.parse(inputRaw);
   if (apiKeyEnv !== undefined) {

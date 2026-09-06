@@ -7,7 +7,7 @@ import { isOpenRouterConfigured } from './openrouter-client';
 
 import { normalizeCompanyName, formatCompanyDisplayName } from '@/lib/utils/company';
 
-export type ClassificationStatus = 'RELEVANT' | 'IRRELEVANT' | 'NEEDS_REVIEW' | 'PENDING' | 'FAILED';
+export type ClassificationStatus = 'RELEVANT' | 'IRRELEVANT' | 'NEEDS_REVIEW' | 'PENDING' | 'RETRY_WAITING' | 'FAILED';
 export type ClassificationSource = 'gemini' | 'openrouter';
 
 export interface CompanyEvaluationInput {
@@ -21,12 +21,13 @@ export interface CompanyEvaluationInput {
 export interface CompanyClassificationResult {
   companyName: string;
   normalizedName: string;
-  relevant: boolean | null; // true = RELEVANT, false = IRRELEVANT, null = NEEDS_REVIEW / PENDING
+  relevant: boolean | null; // true = RELEVANT, false = IRRELEVANT, null = NEEDS_REVIEW / PENDING / RETRY_WAITING
   confidence: number | null;
   reason: string;
   status: ClassificationStatus;
   source: ClassificationSource;
   geminiModel: string;
+  retryRound?: number;
   retryCount: number;
   lastErrorCategory?: string | null;
   nextRetryAt?: string | null;
@@ -39,27 +40,6 @@ export function resetClassificationMemoryCache(): void {
   memoryCache.clear();
 }
 
-/**
- * Computes exponential backoff retry time:
- * Failure 1: 2 minutes
- * Failure 2: 4 minutes
- * Failure 3: 8 minutes
- * Failure 4: 15 minutes
- * Failure 5+: 15 minutes
- */
-export function computeNextRetryTime(retryCount: number, fromDate: Date = new Date()): string {
-  let delayMinutes: number;
-  if (retryCount <= 1) {
-    delayMinutes = 2;
-  } else if (retryCount === 2) {
-    delayMinutes = 4;
-  } else if (retryCount === 3) {
-    delayMinutes = 8;
-  } else {
-    delayMinutes = 15;
-  }
-  return new Date(fromDate.getTime() + delayMinutes * 60 * 1000).toISOString();
-}
 
 /**
  * Loads cached classifications from SQLite database.
@@ -98,6 +78,7 @@ function getCachedFromDb(normalizedNames: string[]): Map<string, CompanyClassifi
         status: r.classificationResult as ClassificationStatus,
         source: 'gemini',
         geminiModel: r.geminiModel,
+        retryRound: r.retryRound ?? 0,
         retryCount: r.retryCount,
         lastErrorCategory: r.lastErrorCategory,
         nextRetryAt: r.nextRetryAt,
@@ -132,6 +113,7 @@ export function saveClassificationsToDb(results: CompanyClassificationResult[]):
           classificationSource: res.source || 'gemini',
           geminiModel: res.geminiModel,
           classificationResult: res.status,
+          retryRound: res.retryRound ?? 0,
           retryCount: res.retryCount,
           lastErrorCategory: res.lastErrorCategory || null,
           nextRetryAt: res.nextRetryAt || null,
@@ -148,6 +130,7 @@ export function saveClassificationsToDb(results: CompanyClassificationResult[]):
             classificationSource: res.source || 'gemini',
             geminiModel: res.geminiModel,
             classificationResult: res.status,
+            retryRound: res.retryRound ?? 0,
             retryCount: res.retryCount,
             lastErrorCategory: res.lastErrorCategory || null,
             nextRetryAt: res.nextRetryAt || null,
@@ -417,28 +400,28 @@ export async function classifyCompanies(
         if (isRateLimit) {
           globalGeminiLimiter.recordError(err);
 
-          // 1. Mark attempted chunk as PENDING with retryCount: 1
-          const nextRetryAt = computeNextRetryTime(1);
+          // 1. Mark attempted chunk as RETRY_WAITING with retryCount: 1, retryRound: 0 (waiting for current round to drain)
           for (const item of chunk) {
-            const pendingResult: CompanyClassificationResult = {
+            const waitingResult: CompanyClassificationResult = {
               companyName: item.companyName,
               normalizedName: item.normalizedName,
               relevant: null,
               confidence: null,
-              status: 'PENDING',
+              status: 'RETRY_WAITING',
               source: 'gemini',
               geminiModel: configuredModel,
+              retryRound: 0,
               retryCount: 1,
               lastErrorCategory: diag.code,
-              nextRetryAt,
-              reason: 'Classification Pending — Gemini temporarily unavailable. Will retry automatically.',
+              nextRetryAt: null,
+              reason: 'Classification Retry Waiting — Rate limit encountered. Waiting for current round to drain before next retry round.',
             };
-            finalMap.set(item.normalizedName, pendingResult);
-            memoryCache.set(item.normalizedName, pendingResult);
-            newlyClassified.push(pendingResult);
+            finalMap.set(item.normalizedName, waitingResult);
+            memoryCache.set(item.normalizedName, waitingResult);
+            newlyClassified.push(waitingResult);
           }
 
-          // 2. Mark remaining UNATTEMPTED companies as PENDING with retryCount: 0
+          // 2. Mark remaining UNATTEMPTED companies as PENDING with retryCount: 0, retryRound: 0
           const remainingCompanies = toClassify.slice(i + BATCH_SIZE);
           for (const item of remainingCompanies) {
             const unattemptedResult: CompanyClassificationResult = {
@@ -449,10 +432,11 @@ export async function classifyCompanies(
               status: 'PENDING',
               source: 'gemini',
               geminiModel: configuredModel,
+              retryRound: 0,
               retryCount: 0,
               lastErrorCategory: null,
-              nextRetryAt,
-              reason: 'Classification Pending — Queued for background classification.',
+              nextRetryAt: null,
+              reason: 'Classification Pending — Queued for First Pass classification.',
             };
             finalMap.set(item.normalizedName, unattemptedResult);
             memoryCache.set(item.normalizedName, unattemptedResult);
@@ -460,7 +444,7 @@ export async function classifyCompanies(
           }
 
           console.warn(
-            `[CompanyClassifier] Rate limit encountered. Marked ${chunk.length} attempted companies (retry #1) and ${remainingCompanies.length} unattempted companies (retry #0) as PENDING.`
+            `[CompanyClassifier] Rate limit encountered. Marked ${chunk.length} attempted companies as RETRY_WAITING (retry #1) and ${remainingCompanies.length} unattempted companies as PENDING (retry #0).`
           );
           // STOP chunk loop immediately to protect quota
           break;
@@ -469,25 +453,24 @@ export async function classifyCompanies(
         // Handle failure for non-429 error
         for (const item of chunk) {
           if (diag.isTransient) {
-            // Transient failure -> PENDING with 2-minute initial retry
-            const retryCount = 1;
-            const nextRetryAt = computeNextRetryTime(retryCount);
-            const pendingResult: CompanyClassificationResult = {
+            // Transient failure -> RETRY_WAITING (waiting for current round to drain)
+            const waitingResult: CompanyClassificationResult = {
               companyName: item.companyName,
               normalizedName: item.normalizedName,
               relevant: null,
               confidence: null,
-              status: 'PENDING',
+              status: 'RETRY_WAITING',
               source: 'gemini',
               geminiModel: configuredModel,
-              retryCount,
+              retryRound: 0,
+              retryCount: 1,
               lastErrorCategory: diag.code,
-              nextRetryAt,
-              reason: 'Classification Pending — Gemini temporarily unavailable. Will retry automatically.',
+              nextRetryAt: null,
+              reason: 'Classification Retry Waiting — Transient error encountered. Waiting for current round to drain before next retry round.',
             };
-            finalMap.set(item.normalizedName, pendingResult);
-            memoryCache.set(item.normalizedName, pendingResult);
-            newlyClassified.push(pendingResult);
+            finalMap.set(item.normalizedName, waitingResult);
+            memoryCache.set(item.normalizedName, waitingResult);
+            newlyClassified.push(waitingResult);
           } else {
             // Permanent configuration/auth/model error -> FAILED
             const failedResult: CompanyClassificationResult = {
@@ -498,6 +481,7 @@ export async function classifyCompanies(
               status: 'FAILED',
               source: 'gemini',
               geminiModel: configuredModel,
+              retryRound: 0,
               retryCount: 0,
               lastErrorCategory: diag.code,
               nextRetryAt: null,
@@ -522,6 +506,7 @@ export async function classifyCompanies(
           status: 'FAILED',
           source: 'gemini',
           geminiModel: configuredModel,
+          retryRound: 0,
           retryCount: 0,
           lastErrorCategory: diag.code,
           nextRetryAt: null,

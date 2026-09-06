@@ -8,7 +8,8 @@ export const companyClassifications = sqliteTable('company_classifications', {
   reason: text('reason').notNull(),
   classificationSource: text('classification_source').default('gemini').notNull(),
   geminiModel: text('gemini_model').default('gemini-3.8-flash').notNull(),
-  classificationResult: text('classification_result').default('PENDING').notNull(), // 'RELEVANT' | 'IRRELEVANT' | 'NEEDS_REVIEW' | 'PENDING' | 'FAILED'
+  classificationResult: text('classification_result').default('PENDING').notNull(), // 'RELEVANT' | 'IRRELEVANT' | 'NEEDS_REVIEW' | 'PENDING' | 'RETRY_WAITING' | 'FAILED'
+  retryRound: integer('retry_round').default(0).notNull(),
   retryCount: integer('retry_count').default(0).notNull(),
   lastErrorCategory: text('last_error_category'),
   nextRetryAt: text('next_retry_at'),

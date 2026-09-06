@@ -33,6 +33,7 @@ import type {
 
 export type ProcessingCategory =
   | 'classification-pending'
+  | 'classification-retry-waiting'
   | 'generation-pending'
   | 'generation-retry'
   | 'ready-to-send';
@@ -55,6 +56,7 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
 
   // Category records state
   const [classRecords, setClassRecords] = useState<ClassificationPendingRecord[]>([]);
+  const [classRetryWaitingRecords, setClassRetryWaitingRecords] = useState<ClassificationPendingRecord[]>([]);
   const [genPendingRecords, setGenPendingRecords] = useState<GenerationPendingRecord[]>([]);
   const [genRetryRecords, setGenRetryRecords] = useState<GenerationRetryRecord[]>([]);
   const [readyToSendRecords, setReadyToSendRecords] = useState<ReadyToSendRecord[]>([]);
@@ -98,6 +100,8 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
 
           if (targetCategory === 'classification-pending') {
             setClassRecords(json.data.records as ClassificationPendingRecord[]);
+          } else if (targetCategory === 'classification-retry-waiting') {
+            setClassRetryWaitingRecords(json.data.records as ClassificationPendingRecord[]);
           } else if (targetCategory === 'generation-pending') {
             setGenPendingRecords(json.data.records as GenerationPendingRecord[]);
           } else if (targetCategory === 'generation-retry') {
@@ -206,8 +210,8 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
         </div>
       </div>
 
-      {/* 4 Summary Processing Cards */}
-      <div className="grid gap-3.5 sm:gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+      {/* 5 Summary Processing Cards */}
+      <div className="grid gap-3 sm:gap-3.5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-5">
         {/* 1. Classification Pending */}
         <div
           role="button"
@@ -237,11 +241,48 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
               </p>
             </div>
             <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
-              Companies
+              Active Round
             </span>
           </div>
           <p className="text-[11px] text-muted-foreground mt-2 leading-tight">
-            Gemini evaluating company domain & job relevance. Auto-retries on rate limits.
+            Active in current round. Gemini evaluating domain & job relevance.
+          </p>
+        </div>
+
+        {/* 1b. Classification Retry Waiting */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => handleSelectCategory('classification-retry-waiting')}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleSelectCategory('classification-retry-waiting');
+            }
+          }}
+          className={cn(
+            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px]',
+            activeCategory === 'classification-retry-waiting'
+              ? 'border-yellow-500 bg-yellow-50/50 dark:bg-yellow-950/20 ring-2 ring-yellow-500/20'
+              : 'border-border bg-card hover:border-yellow-400/60 hover:bg-card/90'
+          )}
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="space-y-1 min-w-0">
+              <span className="text-xs font-semibold text-yellow-700 dark:text-yellow-400 flex items-center gap-1">
+                <RefreshCw className="h-3.5 w-3.5 shrink-0" />
+                Retry Waiting
+              </span>
+              <p className="text-2xl font-bold text-foreground">
+                {stats?.classificationRetryWaitingCount ?? 0}
+              </p>
+            </div>
+            <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-yellow-100 text-yellow-800 border border-yellow-300 shrink-0">
+              Waiting Round
+            </span>
+          </div>
+          <p className="text-[11px] text-muted-foreground mt-2 leading-tight">
+            Unresolved companies waiting for current round to completely drain.
           </p>
         </div>
 
@@ -389,6 +430,29 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
 
               <button
                 type="button"
+                onClick={() => handleSelectCategory('classification-retry-waiting')}
+                className={cn(
+                  'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 whitespace-nowrap',
+                  activeCategory === 'classification-retry-waiting'
+                    ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                )}
+              >
+                <span>Classification Retry Waiting</span>
+                <span
+                  className={cn(
+                    'rounded-full px-1.5 py-0.2 text-[10px]',
+                    activeCategory === 'classification-retry-waiting'
+                      ? 'bg-primary-foreground/20 text-primary-foreground'
+                      : 'bg-muted-foreground/15 text-muted-foreground'
+                  )}
+                >
+                  {stats?.classificationRetryWaitingCount ?? 0}
+                </span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => handleSelectCategory('generation-pending')}
                 className={cn(
                   'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 whitespace-nowrap',
@@ -485,7 +549,9 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
                 </p>
                 <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
                   {activeCategory === 'classification-pending' &&
-                    'All companies have completed Gemini classification! Check the dashboard cards for results.'}
+                    'All companies in the active round have completed Gemini classification! Check Retry Waiting or dashboard cards.'}
+                  {activeCategory === 'classification-retry-waiting' &&
+                    'Zero unresolved companies waiting for retry round. Pipeline is clear!'}
                   {activeCategory === 'generation-pending' &&
                     'No relevant contacts waiting for initial email generation.'}
                   {activeCategory === 'generation-retry' &&
@@ -496,17 +562,17 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
               </div>
             ) : (
               <div className="overflow-x-auto">
-                {/* 1. CLASSIFICATION PENDING VIEW (Company-level grouping + expandable contacts) */}
-                {activeCategory === 'classification-pending' && (
+                {/* 1. CLASSIFICATION PENDING & RETRY WAITING VIEW (Company-level grouping + expandable contacts) */}
+                {(activeCategory === 'classification-pending' || activeCategory === 'classification-retry-waiting') && (
                   <div className="divide-y divide-border/60">
                     <div className="grid grid-cols-12 gap-2 pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-2">
                       <div className="col-span-4 sm:col-span-3">Company</div>
                       <div className="col-span-3 sm:col-span-3">Representative Contacts</div>
-                      <div className="col-span-2 sm:col-span-2">Retry Attempt</div>
+                      <div className="col-span-2 sm:col-span-2">Round & Attempt</div>
                       <div className="col-span-3 sm:col-span-4 text-right">Classification Status</div>
                     </div>
 
-                    {classRecords.map((record) => {
+                    {(activeCategory === 'classification-pending' ? classRecords : classRetryWaitingRecords).map((record) => {
                       const isExpanded = Boolean(expandedCompanies[record.normalizedName]);
                       const contactsForCompany = companyContacts[record.normalizedName] || [];
                       const isLoadingContacts = Boolean(loadingCompanyContacts[record.normalizedName]);
@@ -523,7 +589,7 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
                                 title={isExpanded ? 'Collapse contacts' : 'Expand contacts'}
                               >
                                 {isExpanded ? (
-                                  <ChevronDown className="h-4 w-4 text-primary" />
+                                   <ChevronDown className="h-4 w-4 text-primary" />
                                 ) : (
                                   <ChevronRight className="h-4 w-4" />
                                 )}
@@ -547,10 +613,10 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
                               )}
                             </div>
 
-                            {/* Retry Attempt & Model */}
+                            {/* Round & Attempt */}
                             <div className="col-span-2 sm:col-span-2">
                               <span className="font-medium text-foreground text-xs">
-                                Retry #{record.retryCount}
+                                {record.retryRound > 0 ? `Round ${record.retryRound}` : 'Pass 1'} • #{record.retryCount}
                               </span>
                               {record.lastErrorCategory && (
                                 <p className="text-[10px] text-amber-700 dark:text-amber-400 font-mono truncate">
@@ -559,15 +625,22 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
                               )}
                             </div>
 
-                            {/* Status & Next Retry */}
+                            {/* Status */}
                             <div className="col-span-3 sm:col-span-4 flex flex-col items-end gap-0.5">
-                              <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-amber-100 text-amber-900 dark:bg-amber-950/50 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
-                                <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
-                                Classification Pending — Retrying automatically
-                              </span>
-                              {record.nextRetryAt && (
-                                <span className="text-[10px] text-muted-foreground font-mono">
-                                  Next retry: {new Date(record.nextRetryAt).toLocaleTimeString()}
+                              {record.isWaitingForNextRound || record.classificationResult === 'RETRY_WAITING' ? (
+                                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-yellow-100 text-yellow-900 dark:bg-yellow-950/50 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-800">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-yellow-500" />
+                                  Waiting for Round to Drain (Retry Round #{record.retryRound + 1})
+                                </span>
+                              ) : record.retryRound > 0 ? (
+                                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-blue-100 text-blue-900 dark:bg-blue-950/50 dark:text-blue-300 border border-blue-300 dark:border-blue-800">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+                                  Retry Round #{record.retryRound} in progress
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-amber-100 text-amber-900 dark:bg-amber-950/50 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                  First Pass in progress
                                 </span>
                               )}
                             </div>

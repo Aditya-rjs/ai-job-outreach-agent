@@ -120,8 +120,8 @@ assert(res3['cloud laundromat'].status === 'IRRELEVANT', 'Cloud Laundromat statu
 assert(res3['tech hardware scraps'].relevant === false, 'Tech Hardware Scraps is NOT marked relevant merely because of keyword "tech"');
 assert(res3['tech hardware scraps'].status === 'IRRELEVANT', 'Tech Hardware Scraps status is IRRELEVANT');
 
-// ── 4. Transient Gemini 503 / 429 / Timeout / 500-504 -> PENDING ──────
-console.log('\n--- Test 4: Transient Failures Produce PENDING with 2-Minute Delay ---');
+// ── 4. Transient Gemini 503 / 429 / Timeout / 500-504 -> RETRY_WAITING ──────
+console.log('\n--- Test 4: Transient Failures Produce RETRY_WAITING for Round Drain ---');
 
 const transientErrors = [
   { name: '503 Service Unavailable', err: '503 Service Unavailable - upstream connection failed' },
@@ -140,19 +140,14 @@ for (const te of transientErrors) {
   });
 
   const record = res[normName];
-  assert(record.status === 'PENDING', `${te.name} resulted in status PENDING`);
+  assert(record.status === 'RETRY_WAITING', `${te.name} resulted in status RETRY_WAITING`);
   assert(record.relevant === null, `${te.name} relevance is null (not guessed)`);
   assert(record.retryCount === 1, `${te.name} retryCount is 1`);
-  assert(Boolean(record.nextRetryAt), `${te.name} has nextRetryAt scheduled`);
-
-  // Verify nextRetryAt is scheduled ~2 minutes in the future
-  const diffMs = new Date(record.nextRetryAt).getTime() - Date.now();
-  assert(diffMs >= 100000 && diffMs <= 130000, `${te.name} scheduled for ~2 minutes (observed ${Math.round(diffMs / 1000)}s)`);
 
   // Verify SQLite persistence
   const row = db.prepare('SELECT * FROM company_classifications WHERE normalized_name = ?').get(normName);
   assert(row !== undefined, `${te.name} record exists in SQLite`);
-  assert(row.classification_result === 'PENDING', `${te.name} classification_result is PENDING in SQLite`);
+  assert(row.classification_result === 'RETRY_WAITING', `${te.name} classification_result is RETRY_WAITING in SQLite`);
   assert(row.gemini_model === 'gemini-3.8-flash', `${te.name} model is gemini-3.8-flash in SQLite`);
 }
 
@@ -191,23 +186,6 @@ assert(!sanitized.includes('ya29.'), 'Access token is redacted');
 assert(sanitized.includes('[REDACTED_API_KEY]'), 'Contains [REDACTED_API_KEY]');
 assert(sanitized.includes('[REDACTED_ACCESS_TOKEN]'), 'Contains [REDACTED_ACCESS_TOKEN]');
 
-// ── 7. Exponential Retry Schedule: 2m, 4m, 8m, 15m, 15m ────────────────
-function getNextRetry(retryCount, baseDate) {
-  return runClassifierHelper('backoff', { retryCount, fromDate: baseDate.toISOString() });
-}
-
-const base = new Date('2026-09-05T10:00:00.000Z');
-const r1 = new Date(getNextRetry(1, base));
-const r2 = new Date(getNextRetry(2, base));
-const r3 = new Date(getNextRetry(3, base));
-const r4 = new Date(getNextRetry(4, base));
-const r5 = new Date(getNextRetry(5, base));
-
-assert((r1.getTime() - base.getTime()) === 2 * 60 * 1000, 'Failure 1: 2 minutes');
-assert((r2.getTime() - base.getTime()) === 4 * 60 * 1000, 'Failure 2: 4 minutes');
-assert((r3.getTime() - base.getTime()) === 8 * 60 * 1000, 'Failure 3: 8 minutes');
-assert((r4.getTime() - base.getTime()) === 15 * 60 * 1000, 'Failure 4: 15 minutes');
-assert((r5.getTime() - base.getTime()) === 15 * 60 * 1000, 'Failure 5: 15 minutes');
 
 // ── 8. Background Reconciler Resolves PENDING and Promotes to Queue ─────
 console.log('\n--- Test 8: Worker Reconciler Resolves PENDING and Promotes Eligible Contacts ---');

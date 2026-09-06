@@ -238,7 +238,7 @@ async function runWorkerLoop() {
             .run();
         } else {
           console.log(`[Outreach Worker] Gmail send successful for ${contact.email}! Message ID: ${sendResult.messageId}`);
-          // Real send: increment todaySentCount toward the hard 30-email daily limit!
+          // Real send: increment todaySentCount for daily tracking and dashboard metrics (no hard daily send limit)
           db.update(schedulerState)
             .set({
               todaySentCount: sql`${schedulerState.todaySentCount} + 1`,

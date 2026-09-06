@@ -72,6 +72,10 @@ export function recoverStaleGeneratingContacts(): number {
   return staleRows.length;
 }
 
+export function resetGenerationActiveClaimsForTesting(): void {
+  // SQLite-based leases do not hold process-level memory state
+}
+
 /**
  * Periodically processes contacts pending AI email generation in the background.
  * Completely autonomous: runs independently of browser activity.
@@ -79,6 +83,7 @@ export function recoverStaleGeneratingContacts(): number {
 export async function reconcilePendingEmailGenerations(options: {
   batchSize?: number;
   claimWorkerId?: string;
+  aiCallerOverride?: (prompt: string) => Promise<string>;
 } = {}): Promise<GenerationReconcileResult> {
   const db = getDb();
   const now = new Date();
@@ -251,19 +256,39 @@ export async function reconcilePendingEmailGenerations(options: {
     const isRetry = contact.generationStatus === 'RETRY_PENDING' || (contact.generationAttemptCount || 0) > 0;
 
     try {
-      // 5. Generate personalized email with Gemini
-      const generated = await generatePersonalizedEmail({
-        profile,
-        companyName: contact.companyName || 'the company',
-        contactName: contact.contactName,
-        designation: contact.designation,
-        companyWebsite: contact.companyWebsite,
-        companyLocation: contact.companyLocation,
-        relevanceReason: contact.relevanceReason,
-        recentEmails: recentBodies,
-        isRetry,
-        strictGemini: true,
-      });
+      // 5. Generate personalized email with Gemini (or test caller override)
+      let generated: {
+        subject: string;
+        body: string;
+        strategy?: string;
+        personalization_points?: string[];
+      };
+
+      if (options.aiCallerOverride) {
+        const text = await options.aiCallerOverride(contact.companyName || '');
+        const subjectMatch = text.match(/Subject:\s*([^\n]+)/i);
+        const subject = subjectMatch ? subjectMatch[1].trim() : 'Engineering Opportunities';
+        const body = text.replace(/Subject:\s*[^\n]+\n*/i, '').trim();
+        generated = {
+          subject,
+          body,
+          strategy: 'direct',
+          personalization_points: ['Engineering skills'],
+        };
+      } else {
+        generated = await generatePersonalizedEmail({
+          profile,
+          companyName: contact.companyName || 'the company',
+          contactName: contact.contactName,
+          designation: contact.designation,
+          companyWebsite: contact.companyWebsite,
+          companyLocation: contact.companyLocation,
+          relevanceReason: contact.relevanceReason,
+          recentEmails: recentBodies,
+          isRetry,
+          strictGemini: true,
+        });
+      }
 
       const finishTimestamp = new Date().toISOString();
 

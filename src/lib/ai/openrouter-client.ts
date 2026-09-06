@@ -93,6 +93,16 @@ export function resetOpenRouterTelemetryForTesting(): void {
   lastFailureAt = null;
 }
 
+export function recordOpenRouterFailure(code: string, message: string): void {
+  requestsStarted++;
+  requestsFailed++;
+  lastFailureAt = new Date().toISOString();
+  lastError = sanitizeSecretText(message);
+  if (code === 'RATE_LIMIT_EXCEEDED' || /\b429\b/.test(message)) {
+    rateLimit429Count++;
+  }
+}
+
 /**
  * Calls OpenRouter chat completions API using native fetch.
  * Uses the free models router ('openrouter/free') by default.

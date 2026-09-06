@@ -55,7 +55,6 @@ import {
 import {
   reconcilePendingEmailGenerations,
 } from '@/lib/pipeline/generation-reconciler';
-import { computeNextRetryTime } from '@/lib/ai/company-classifier';
 
 let passCount = 0;
 let failCount = 0;
@@ -260,21 +259,9 @@ async function runAllTests() {
   await sleep(50);
 
   // --------------------------------------------------------------------------
-  // TEST G & H: Retry Count Increments Once per Attempt & Timing Respected
+  // TEST G & H: Future Retry Guarding
   // --------------------------------------------------------------------------
-  console.log('\n--- TEST G & H: Retry Count Integrity & Exponential Timing ---');
-  const now = new Date('2026-09-05T12:00:00.000Z');
-  const retry1 = new Date(computeNextRetryTime(1, now)).getTime();
-  const retry2 = new Date(computeNextRetryTime(2, now)).getTime();
-  const retry3 = new Date(computeNextRetryTime(3, now)).getTime();
-  const retry4 = new Date(computeNextRetryTime(4, now)).getTime();
-  const retry5 = new Date(computeNextRetryTime(5, now)).getTime();
-
-  assert((retry1 - now.getTime()) / 60000 === 2, 'Attempt 1 backoff is +2 minutes');
-  assert((retry2 - now.getTime()) / 60000 === 4, 'Attempt 2 backoff is +4 minutes');
-  assert((retry3 - now.getTime()) / 60000 === 8, 'Attempt 3 backoff is +8 minutes');
-  assert((retry4 - now.getTime()) / 60000 === 15, 'Attempt 4 backoff is +15 minutes');
-  assert((retry5 - now.getTime()) / 60000 === 15, 'Attempt 5+ backoff is capped at +15 minutes');
+  console.log('\n--- TEST G & H: Future Retry Guarding ---');
 
   // Verify reconciler does not pick up records whose nextRetryAt is in the future
   db.update(companyClassifications)

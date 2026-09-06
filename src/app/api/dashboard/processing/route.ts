@@ -3,6 +3,7 @@ import { initializeDatabase } from '@/db/migrate';
 import {
   getProcessingPipelineStats,
   getClassificationPendingList,
+  getClassificationRetryWaitingList,
   getCompanyContactsList,
   getEmailGenerationPendingList,
   getGenerationRetryList,
@@ -38,7 +39,7 @@ export async function GET(request: NextRequest) {
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
     const limit = Math.max(1, Math.min(parseInt(searchParams.get('limit') || '25', 10), 200));
 
-    // Always fetch latest counts for all 4 categories
+    // Always fetch latest counts for all categories
     const stats = getProcessingPipelineStats();
 
     let records: unknown[] = [];
@@ -47,6 +48,12 @@ export async function GET(request: NextRequest) {
     switch (category) {
       case 'classification-pending': {
         const res = getClassificationPendingList({ search, page, limit });
+        records = res.records;
+        total = res.total;
+        break;
+      }
+      case 'classification-retry-waiting': {
+        const res = getClassificationRetryWaitingList({ search, page, limit });
         records = res.records;
         total = res.total;
         break;

@@ -220,6 +220,7 @@ export function initializeDatabase() {
   try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN next_retry_at TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN claim_token TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN lease_expires_at TEXT`); } catch {}
+  try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN retry_round INTEGER NOT NULL DEFAULT 0`); } catch {}
 
   // Ensure is_relevant and confidence columns allow NULL for PENDING and NEEDS_REVIEW states
   try {
