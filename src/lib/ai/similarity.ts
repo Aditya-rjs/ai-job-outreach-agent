@@ -1,19 +1,39 @@
 /**
+ * Escapes all regular expression metacharacters in a string to safely use in dynamic RegExp construction.
+ * Characters escaped: . * + ? ^ $ { } ( ) [ ] | \
+ */
+export function escapeRegExp(str: string): string {
+  if (!str) return '';
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
  * Normalizes email text by stripping greetings, signatures, and variable proper nouns
  * to compare the underlying structural sentences and phrasing.
  */
-function normalizeForComparison(text: string, dynamicWords: string[] = []): string[] {
+export function normalizeForComparison(text: string, dynamicWords: string[] = []): string[] {
   let cleaned = text.toLowerCase();
 
   // Strip greetings and sign-offs
   cleaned = cleaned.replace(/^(dear|hello|hi|good morning|good afternoon)[^\n,]*,?/gi, '');
   cleaned = cleaned.replace(/(best regards|sincerely|warm regards|cheers|thanks|thank you)[^\n]*/gi, '');
 
-  // Strip known dynamic words like recipient name or company name
+  // Strip known dynamic words like recipient name or company name safely
   for (const word of dynamicWords) {
-    if (word && word.length > 2) {
-      const regex = new RegExp(`\\b${word.toLowerCase()}\\b`, 'g');
-      cleaned = cleaned.replace(regex, '');
+    if (typeof word === 'string') {
+      const trimmed = word.trim().toLowerCase();
+      if (trimmed.length > 2) {
+        const escaped = escapeRegExp(trimmed);
+        const prefix = /^\w/.test(trimmed) ? '\\b' : '';
+        const suffix = /\w$/.test(trimmed) ? '\\b' : '';
+        try {
+          const regex = new RegExp(`${prefix}${escaped}${suffix}`, 'gi');
+          cleaned = cleaned.replace(regex, ' ');
+        } catch {
+          // Absolute fallback if regex engine still rejects
+          cleaned = cleaned.split(trimmed).join(' ');
+        }
+      }
     }
   }
 

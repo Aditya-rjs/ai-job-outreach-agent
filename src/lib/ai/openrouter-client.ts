@@ -14,6 +14,30 @@ export interface OpenRouterCallResult {
   provider: 'openrouter';
 }
 
+export class OpenRouterError extends Error {
+  public readonly provider = 'openrouter' as const;
+  public readonly statusCode?: number;
+  public readonly isRateLimit: boolean;
+
+  constructor(message: string, statusCode?: number, isRateLimit: boolean = false) {
+    super(message);
+    this.name = 'OpenRouterError';
+    this.statusCode = statusCode;
+    this.isRateLimit = isRateLimit;
+    Object.setPrototypeOf(this, OpenRouterError.prototype);
+  }
+}
+
+export function isOpenRouterError(error: unknown): error is OpenRouterError {
+  return (
+    error instanceof OpenRouterError ||
+    (typeof error === 'object' &&
+      error !== null &&
+      'provider' in error &&
+      (error as { provider: unknown }).provider === 'openrouter')
+  );
+}
+
 export interface OpenRouterTelemetry {
   currentModel: string;
   isConfigured: boolean;
@@ -21,6 +45,7 @@ export interface OpenRouterTelemetry {
   requestsStarted: number;
   requestsSucceeded: number;
   requestsFailed: number;
+  rateLimit429Count: number;
   lastError: string | null;
   lastSuccessAt: string | null;
   lastFailureAt: string | null;
@@ -29,6 +54,7 @@ export interface OpenRouterTelemetry {
 let requestsStarted = 0;
 let requestsSucceeded = 0;
 let requestsFailed = 0;
+let rateLimit429Count = 0;
 let lastError: string | null = null;
 let lastSuccessAt: string | null = null;
 let lastFailureAt: string | null = null;
@@ -50,6 +76,7 @@ export function getOpenRouterTelemetry(): OpenRouterTelemetry {
     requestsStarted,
     requestsSucceeded,
     requestsFailed,
+    rateLimit429Count,
     lastError,
     lastSuccessAt,
     lastFailureAt,
@@ -60,6 +87,7 @@ export function resetOpenRouterTelemetryForTesting(): void {
   requestsStarted = 0;
   requestsSucceeded = 0;
   requestsFailed = 0;
+  rateLimit429Count = 0;
   lastError = null;
   lastSuccessAt = null;
   lastFailureAt = null;
@@ -125,22 +153,23 @@ export async function callOpenRouter(
 
         // Rate limit 429
         if (response.status === 429) {
-          throw new Error(`OpenRouter rate limit exceeded (429): ${sanitizedBody}`);
+          rateLimit429Count++;
+          throw new OpenRouterError(`OpenRouter rate limit exceeded (429): ${sanitizedBody}`, 429, true);
         }
 
         // Auth failure (permanent - do not retry)
         if (response.status === 401 || response.status === 403) {
-          throw new Error(`OpenRouter authentication rejected (${response.status}): ${sanitizedBody}`);
+          throw new OpenRouterError(`OpenRouter authentication rejected (${response.status}): ${sanitizedBody}`, response.status, false);
         }
 
-        throw new Error(msg);
+        throw new OpenRouterError(msg, response.status, false);
       }
 
       const json = await response.json();
       const content = json?.choices?.[0]?.message?.content;
 
       if (!content || typeof content !== 'string' || content.trim().length === 0) {
-        throw new Error('Empty response from OpenRouter');
+        throw new OpenRouterError('Empty response from OpenRouter');
       }
 
       requestsSucceeded++;
@@ -179,5 +208,11 @@ export async function callOpenRouter(
   const finalErrorMsg = currentError instanceof Error ? currentError.message : String(currentError || 'Unknown OpenRouter failure');
   lastError = sanitizeSecretText(finalErrorMsg);
 
-  throw new Error(`OpenRouter call failed: ${lastError}`);
+  if (currentError instanceof OpenRouterError) {
+    throw currentError;
+  }
+
+  const statusCode = (currentError as { statusCode?: number })?.statusCode;
+  const isRateLimit = statusCode === 429 || /\b429\b/.test(lastError);
+  throw new OpenRouterError(`OpenRouter call failed: ${lastError}`, statusCode, isRateLimit);
 }

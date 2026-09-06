@@ -4,11 +4,12 @@ import { eq, and, sql, asc, desc } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { generatePersonalizedEmail } from '@/lib/ai/email-generator';
 import { categorizeGeminiError, globalGeminiLimiter } from '@/lib/ai/gemini-client';
-import { isOpenRouterConfigured } from '@/lib/ai/openrouter-client';
+import { isOpenRouterConfigured, isOpenRouterError } from '@/lib/ai/openrouter-client';
 import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
 import type { StructuredResumeProfile, Contact } from '@/types';
 
 export const GENERATION_LEASE_MS = 90 * 1000; // 90-second lease per contact
+export const MAX_GENERATION_RETRIES = 5;
 
 export interface GenerationReconcileResult {
   processed: number;
@@ -212,9 +213,9 @@ export async function reconcilePendingEmailGenerations(options: {
   let failed = 0;
 
   for (const contact of candidates) {
-    if (globalGeminiLimiter.isCooldownActive()) {
+    if (globalGeminiLimiter.isCooldownActive() && !isOpenRouterConfigured()) {
       console.log(
-        `[GenerationReconciler] Global Gemini 429 cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()}. Stopping candidate generation loop.`
+        `[GenerationReconciler] Global Gemini 429 cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()} and OpenRouter not configured. Stopping candidate generation loop.`
       );
       break;
     }
@@ -317,6 +318,12 @@ export async function reconcilePendingEmailGenerations(options: {
       succeeded++;
       console.log(`[GenerationReconciler] Successfully generated email for ${contact.email} (${contact.companyName}). Ready for outreach sending.`);
     } catch (genErr: unknown) {
+      const isFromOpenRouter = isOpenRouterError(genErr);
+      const isLocalBug =
+        genErr instanceof SyntaxError ||
+        genErr instanceof TypeError ||
+        genErr instanceof RangeError;
+
       const diag = categorizeGeminiError(genErr);
       const attemptTimestamp = new Date().toISOString();
       const currentAttempts = (contact.generationAttemptCount || 0) + 1;
@@ -324,14 +331,23 @@ export async function reconcilePendingEmailGenerations(options: {
       const isRateLimit =
         diag.code === 'RATE_LIMIT_EXCEEDED' ||
         /\b429\b/.test(diag.safeDetail) ||
-        /RESOURCE_EXHAUSTED/i.test(diag.safeDetail);
+        /RESOURCE_EXHAUSTED/i.test(diag.safeDetail) ||
+        Boolean((genErr as { isRateLimit?: boolean })?.isRateLimit);
 
-      if (isRateLimit) {
+      // ONLY record Gemini limiter cooldown if the error originated from Gemini
+      if (isRateLimit && !isFromOpenRouter) {
         globalGeminiLimiter.recordError(genErr);
       }
 
-      if (diag.isTransient) {
+      // If it's a local programming bug (SyntaxError, TypeError), or exceeded max retries, mark as GENERATION_FAILED
+      const shouldRetry =
+        diag.isTransient &&
+        !isLocalBug &&
+        currentAttempts < MAX_GENERATION_RETRIES;
+
+      if (shouldRetry) {
         const nextRetry = computeGenerationRetryTime(currentAttempts, new Date());
+        const providerPrefix = isFromOpenRouter ? 'OpenRouter' : 'AI';
         db.update(contacts)
           .set({
             generationStatus: 'RETRY_PENDING',
@@ -341,37 +357,43 @@ export async function reconcilePendingEmailGenerations(options: {
             generationClaimToken: null,
             generationLeaseExpiresAt: null,
             status: 'queued',
-            errorMessage: `Transient error (${diag.code}): ${diag.safeDetail}`,
+            errorMessage: `${providerPrefix} transient error (${diag.code}, attempt ${currentAttempts}/${MAX_GENERATION_RETRIES}): ${diag.safeDetail}`,
             updatedAt: attemptTimestamp,
           })
           .where(eq(contacts.id, contact.id))
           .run();
 
         retryPending++;
-        console.warn(`[GenerationReconciler] Transient generation failure for ${contact.email} (${diag.code}). Next retry at ${nextRetry}.`);
+        console.warn(`[GenerationReconciler] Transient generation failure for ${contact.email} (${diag.code}, attempt ${currentAttempts}/${MAX_GENERATION_RETRIES}). Next retry at ${nextRetry}.`);
       } else {
-        // Permanent error
+        // Permanent error or exceeded max retries or local programming bug
+        const failReason = isLocalBug
+          ? `Deterministic local error (${genErr instanceof Error ? genErr.name : 'Bug'}): ${diag.safeDetail}`
+          : currentAttempts >= MAX_GENERATION_RETRIES
+            ? `Max retries (${MAX_GENERATION_RETRIES}) exceeded: ${diag.safeDetail}`
+            : `Permanent error (${diag.code}): ${diag.safeDetail}`;
+
         db.update(contacts)
           .set({
             generationStatus: 'GENERATION_FAILED',
             generationAttemptCount: currentAttempts,
-            lastGenerationErrorCategory: diag.code,
+            lastGenerationErrorCategory: isLocalBug ? 'LOCAL_BUG' : diag.code,
             generationClaimToken: null,
             generationLeaseExpiresAt: null,
             status: 'failed',
-            errorMessage: `Permanent error (${diag.code}): ${diag.safeDetail}`,
+            errorMessage: failReason,
             updatedAt: attemptTimestamp,
           })
           .where(eq(contacts.id, contact.id))
           .run();
 
         failed++;
-        console.error(`[GenerationReconciler] Permanent generation failure for ${contact.email} (${diag.code}): ${diag.safeDetail}`);
+        console.error(`[GenerationReconciler] Permanent generation failure for ${contact.email}: ${failReason}`);
       }
 
-      if (isRateLimit) {
+      if (isRateLimit && !isOpenRouterConfigured()) {
         console.warn(
-          `[GenerationReconciler] 429 Rate limit encountered for ${contact.email}. Stopping generation loop immediately.`
+          `[GenerationReconciler] 429 Rate limit encountered for ${contact.email} and OpenRouter not available. Stopping generation loop immediately.`
         );
         break;
       }
@@ -385,5 +407,49 @@ export async function reconcilePendingEmailGenerations(options: {
     failed,
     recovered,
   };
+}
 
+/**
+ * Resets a stuck or failed contact's generation state to PENDING_GENERATION.
+ * Useful for recovering specific contacts after code fixes (e.g. regex escaping fix).
+ */
+export function resetStuckGenerationContact(contactId: string): boolean {
+  const db = getDb();
+  const nowIso = new Date().toISOString();
+
+  const result = db.run(sql`
+    UPDATE contacts
+    SET generation_status = 'PENDING_GENERATION',
+        generation_attempt_count = 0,
+        generation_claim_token = NULL,
+        generation_lease_expires_at = NULL,
+        next_generation_retry_at = NULL,
+        last_generation_error_category = NULL,
+        error_message = NULL,
+        status = 'queued',
+        updated_at = ${nowIso}
+    WHERE id = ${contactId}
+      AND (generation_status != 'GENERATED' OR generation_status IS NULL)
+  `);
+
+  return result.changes > 0;
+}
+
+/**
+ * Resets multiple stuck or failed contacts by their IDs.
+ */
+export function recoverStuckGenerationContacts(contactIds: string[]): { resetCount: number; notFoundOrSkipped: string[] } {
+  let resetCount = 0;
+  const notFoundOrSkipped: string[] = [];
+
+  for (const id of contactIds) {
+    const success = resetStuckGenerationContact(id);
+    if (success) {
+      resetCount++;
+    } else {
+      notFoundOrSkipped.push(id);
+    }
+  }
+
+  return { resetCount, notFoundOrSkipped };
 }
