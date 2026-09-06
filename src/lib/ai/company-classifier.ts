@@ -2,11 +2,13 @@ import { getDb } from '@/db';
 import { companyClassifications } from '@/db/schema';
 import { inArray, eq } from 'drizzle-orm';
 import { callGemini, getGeminiClient, categorizeGeminiError, sanitizeSecretText, GEMINI_PRIORITIES, globalGeminiLimiter, type CategorizedGeminiError } from './gemini-client';
+import { callAi, type AiCallResult } from './ai-dispatcher';
+import { isOpenRouterConfigured } from './openrouter-client';
 
 import { normalizeCompanyName, formatCompanyDisplayName } from '@/lib/utils/company';
 
 export type ClassificationStatus = 'RELEVANT' | 'IRRELEVANT' | 'NEEDS_REVIEW' | 'PENDING' | 'FAILED';
-export type ClassificationSource = 'gemini';
+export type ClassificationSource = 'gemini' | 'openrouter';
 
 export interface CompanyEvaluationInput {
   companyName: string;
@@ -127,7 +129,7 @@ export function saveClassificationsToDb(results: CompanyClassificationResult[]):
           isRelevant: res.relevant,
           confidence: res.confidence,
           reason: res.reason,
-          classificationSource: 'gemini',
+          classificationSource: res.source || 'gemini',
           geminiModel: res.geminiModel,
           classificationResult: res.status,
           retryCount: res.retryCount,
@@ -143,7 +145,7 @@ export function saveClassificationsToDb(results: CompanyClassificationResult[]):
             isRelevant: res.relevant,
             confidence: res.confidence,
             reason: res.reason,
-            classificationSource: 'gemini',
+            classificationSource: res.source || 'gemini',
             geminiModel: res.geminiModel,
             classificationResult: res.status,
             retryCount: res.retryCount,
@@ -208,7 +210,7 @@ Do not include markdown code fences or any explanatory text outside the JSON arr
  */
 export async function classifyWithGeminiBatch(
   companies: CompanyEvaluationInput[],
-  geminiCaller?: (prompt: string) => Promise<string>,
+  geminiCaller?: ((prompt: string) => Promise<string | AiCallResult>) | ((prompt: string) => Promise<string>),
   options?: { isRetry?: boolean }
 ): Promise<CompanyClassificationResult[]> {
   const configuredModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
@@ -217,15 +219,29 @@ export async function classifyWithGeminiBatch(
     ? GEMINI_PRIORITIES.CLASSIFICATION_RETRY
     : GEMINI_PRIORITIES.COMPANY_CLASSIFICATION;
 
-  const responseText = typeof geminiCaller === 'function'
-    ? await geminiCaller(prompt)
-    : await callGemini(prompt, {
-        model: configuredModel,
-        temperature: 0.1,
-        priority,
-        taskName: `company-classification-${companies.length}`,
-      });
+  let responseText: string;
+  let activeProvider: ClassificationSource = 'gemini';
+  let activeModel: string = configuredModel;
 
+  if (typeof geminiCaller === 'function') {
+    const raw = await geminiCaller(prompt);
+    if (typeof raw === 'object' && raw !== null && 'text' in raw) {
+      responseText = raw.text;
+      activeProvider = (raw.provider as ClassificationSource) || 'gemini';
+      activeModel = raw.model || configuredModel;
+    } else {
+      responseText = String(raw);
+    }
+  } else {
+    const aiRes = await callAi(prompt, {
+      priority,
+      temperature: 0.1,
+      taskName: `company-classification-${companies.length}`,
+    });
+    responseText = aiRes.text;
+    activeProvider = aiRes.provider;
+    activeModel = aiRes.model;
+  }
 
   const cleaned = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
   const parsed = JSON.parse(cleaned);
@@ -251,6 +267,8 @@ export async function classifyWithGeminiBatch(
   }
 
   const results: CompanyClassificationResult[] = [];
+  const providerLabel = activeProvider === 'openrouter' ? 'OpenRouter' : 'Gemini';
+
   for (const c of companies) {
     const ai = resultMap.get(c.normalizedName) || resultMap.get(normalizeCompanyName(c.companyName));
 
@@ -262,10 +280,10 @@ export async function classifyWithGeminiBatch(
           relevant: true,
           confidence: ai.confidence,
           status: 'RELEVANT',
-          source: 'gemini',
-          geminiModel: configuredModel,
+          source: activeProvider,
+          geminiModel: activeModel,
           retryCount: 0,
-          reason: ai.reason ? `Relevant — Gemini: ${ai.reason}` : 'Relevant — Gemini',
+          reason: ai.reason ? `Relevant — ${providerLabel}: ${ai.reason}` : `Relevant — ${providerLabel}`,
         });
       } else if (ai.relevant === false) {
         results.push({
@@ -274,25 +292,25 @@ export async function classifyWithGeminiBatch(
           relevant: false,
           confidence: ai.confidence,
           status: 'IRRELEVANT',
-          source: 'gemini',
-          geminiModel: configuredModel,
+          source: activeProvider,
+          geminiModel: activeModel,
           retryCount: 0,
-          reason: ai.reason ? `Not Relevant — Gemini: ${ai.reason}` : 'Not Relevant — Gemini',
+          reason: ai.reason ? `Not Relevant — ${providerLabel}: ${ai.reason}` : `Not Relevant — ${providerLabel}`,
         });
       } else {
-        // Genuine ambiguity from Gemini
+        // Genuine ambiguity from AI
         results.push({
           companyName: c.companyName,
           normalizedName: c.normalizedName,
           relevant: null,
           confidence: ai.confidence,
           status: 'NEEDS_REVIEW',
-          source: 'gemini',
-          geminiModel: configuredModel,
+          source: activeProvider,
+          geminiModel: activeModel,
           retryCount: 0,
           reason: ai.reason
-            ? `Needs Review — Gemini could not confidently determine relevance: ${ai.reason}`
-            : 'Needs Review — Gemini could not confidently determine relevance.',
+            ? `Needs Review — ${providerLabel} could not confidently determine relevance: ${ai.reason}`
+            : `Needs Review — ${providerLabel} could not confidently determine relevance.`,
         });
       }
     } else {
@@ -303,10 +321,10 @@ export async function classifyWithGeminiBatch(
         relevant: null,
         confidence: 0.5,
         status: 'NEEDS_REVIEW',
-        source: 'gemini',
-        geminiModel: configuredModel,
+        source: activeProvider,
+        geminiModel: activeModel,
         retryCount: 0,
-        reason: 'Needs Review — Gemini could not confidently determine relevance.',
+        reason: `Needs Review — ${providerLabel} could not confidently determine relevance.`,
       });
     }
   }
@@ -373,17 +391,17 @@ export async function classifyCompanies(
     return finalMap;
   }
 
-  // 3. Classify uncached companies via Gemini in controlled batches
+  // 3. Classify uncached companies via Gemini/OpenRouter in controlled batches
   const configuredModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
-  const hasGemini = Boolean(geminiClientOverride !== null && (geminiClientOverride !== undefined || getGeminiClient()));
+  const hasAi = Boolean(geminiClientOverride !== null && (geminiClientOverride !== undefined || getGeminiClient() || isOpenRouterConfigured()));
 
-  // Controlled batch size of 10 to respect Gemini rate limits
+  // Controlled batch size of 10 to respect AI rate limits
   const BATCH_SIZE = 10;
 
   for (let i = 0; i < toClassify.length; i += BATCH_SIZE) {
     const chunk = toClassify.slice(i, i + BATCH_SIZE);
 
-    if (hasGemini) {
+    if (hasAi) {
       try {
         const aiResults = await classifyWithGeminiBatch(chunk, geminiClientOverride || undefined);
         for (const res of aiResults) {

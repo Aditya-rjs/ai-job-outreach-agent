@@ -4,6 +4,7 @@ import { eq, and, sql, asc, desc } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { generatePersonalizedEmail } from '@/lib/ai/email-generator';
 import { categorizeGeminiError, globalGeminiLimiter } from '@/lib/ai/gemini-client';
+import { isOpenRouterConfigured } from '@/lib/ai/openrouter-client';
 import type { StructuredResumeProfile, Contact } from '@/types';
 
 export const GENERATION_LEASE_MS = 90 * 1000; // 90-second lease per contact
@@ -83,23 +84,23 @@ export async function reconcilePendingEmailGenerations(options: {
   const workerId = options.claimWorkerId || `gen_worker_${process.pid}`;
   const batchLimit = options.batchSize || parseInt(process.env.EMAIL_GEN_BATCH_SIZE || '4', 10);
 
-  // 1. Check if global Gemini 429 cooldown is active
-  if (globalGeminiLimiter.isCooldownActive()) {
+  // 1. Recover any expired generation leases from crashed workers
+  const recovered = recoverStaleGeneratingContacts();
+
+  // 2. Check if global Gemini 429 cooldown is active and OpenRouter is not available
+  if (globalGeminiLimiter.isCooldownActive() && !isOpenRouterConfigured()) {
     console.log(
-      `[GenerationReconciler] Global Gemini 429 cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()}. Skipping generation run.`
+      `[GenerationReconciler] Global Gemini 429 cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()} and OpenRouter not configured. Skipping generation run.`
     );
     return {
       processed: 0,
       succeeded: 0,
       retryPending: 0,
       failed: 0,
-      recovered: 0,
+      recovered,
       skippedReason: 'GEMINI_COOLDOWN_ACTIVE',
     };
   }
-
-  // 2. Recover any expired generation leases from crashed workers
-  const recovered = recoverStaleGeneratingContacts();
 
   // 3. Verify active verified resume exists as source of truth
   const resumeRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();

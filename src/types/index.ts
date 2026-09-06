@@ -47,6 +47,23 @@ export interface DashboardStats {
     last429At?: string | null;
     lastTransientErrorAt?: string | null;
   };
+  aiTelemetry?: {
+    currentActiveProvider: 'gemini' | 'openrouter';
+    geminiCooldownActive: boolean;
+    geminiCooldownUntil: string | null;
+    geminiCooldownRemainingSeconds: number;
+    openRouterConfigured: boolean;
+    openRouterModel: string;
+    totalDispatches: number;
+    geminiSuccesses: number;
+    geminiFailures: number;
+    gemini429Count: number;
+    openRouterDispatches: number;
+    openRouterSuccesses: number;
+    openRouterFailures: number;
+    fallbackCount: number;
+    lastFallbackAt: string | null;
+  };
 
   outreachStatus: 'idle' | 'running' | 'sending' | 'paused' | 'stopped' | 'waiting' | 'completed' | 'quota_reached';
 }

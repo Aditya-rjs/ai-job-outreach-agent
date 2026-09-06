@@ -45,11 +45,24 @@ export function reconcileDailyQuota(date: Date = new Date()): {
   const dailyLimit = state?.dailyLimit ?? 30;
 
   if (!state || state.todayDate !== currentLocalDate) {
-    // Midnight rolled over in Asia/Kolkata timezone: reset daily counters
+    // Midnight rolled over in Asia/Kolkata timezone: reset daily counters and audit existing sends for today
+    const sentRows = db
+      .select({ sentAt: contacts.sentAt })
+      .from(contacts)
+      .where(and(eq(contacts.status, 'sent'), sql`sent_at IS NOT NULL`))
+      .all();
+
+    let verifiedRealCount = 0;
+    for (const row of sentRows) {
+      if (row.sentAt && getLocalDateString(new Date(row.sentAt), tz) === currentLocalDate) {
+        verifiedRealCount++;
+      }
+    }
+
     db.update(schedulerState)
       .set({
         todayDate: currentLocalDate,
-        todaySentCount: 0,
+        todaySentCount: verifiedRealCount,
         todaySimulatedCount: 0,
       })
       .where(eq(schedulerState.id, 'singleton'))
@@ -57,10 +70,10 @@ export function reconcileDailyQuota(date: Date = new Date()): {
 
     return {
       todayDate: currentLocalDate,
-      todaySentCount: 0,
+      todaySentCount: verifiedRealCount,
       todaySimulatedCount: 0,
       dailyLimit,
-      isQuotaReached: false,
+      isQuotaReached: verifiedRealCount >= dailyLimit,
     };
   }
 

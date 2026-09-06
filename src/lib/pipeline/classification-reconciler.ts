@@ -9,6 +9,7 @@ import {
   type CompanyClassificationResult,
 } from '@/lib/ai/company-classifier';
 import { categorizeGeminiError, globalGeminiLimiter } from '@/lib/ai/gemini-client';
+import { isOpenRouterConfigured } from '@/lib/ai/openrouter-client';
 
 export interface ReconcileResult {
   processed: number;
@@ -36,10 +37,10 @@ export function resetActiveClassificationClaimsForTesting(): void {
 export async function reconcilePendingClassifications(
   geminiCallerOverride?: (prompt: string) => Promise<string>
 ): Promise<ReconcileResult> {
-  // Check if global Gemini 429 cooldown is currently active
-  if (globalGeminiLimiter.isCooldownActive()) {
+  // Check if global Gemini 429 cooldown is currently active and OpenRouter is not available
+  if (globalGeminiLimiter.isCooldownActive() && !isOpenRouterConfigured()) {
     console.log(
-      `[ClassificationReconciler] Global Gemini 429 cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()}. Skipping reconciliation run.`
+      `[ClassificationReconciler] Global Gemini 429 cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()} and OpenRouter not configured. Skipping reconciliation run.`
     );
     return { processed: 0, succeeded: 0, promotedToQueue: 0, stillPending: 0, failed: 0 };
   }
@@ -109,10 +110,10 @@ export async function reconcilePendingClassifications(
   // 3. Process in controlled batches of 10
   const BATCH_SIZE = 10;
   for (let i = 0; i < pendingRecords.length; i += BATCH_SIZE) {
-    // Check if cooldown became active during execution of earlier chunks
-    if (globalGeminiLimiter.isCooldownActive()) {
+    // Check if cooldown became active during execution of earlier chunks and OpenRouter is not configured
+    if (globalGeminiLimiter.isCooldownActive() && !isOpenRouterConfigured()) {
       console.log(
-        `[ClassificationReconciler] Global Gemini cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()}. Stopping chunk loop.`
+        `[ClassificationReconciler] Global Gemini cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()} and OpenRouter not configured. Stopping chunk loop.`
       );
       break;
     }
@@ -174,7 +175,7 @@ export async function reconcilePendingClassifications(
             isRelevant: res.relevant,
             confidence: res.confidence,
             reason: res.reason,
-            classificationSource: 'gemini',
+            classificationSource: res.source || 'gemini',
             geminiModel: res.geminiModel,
             classificationResult: res.status,
             lastErrorCategory: null,

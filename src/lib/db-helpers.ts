@@ -11,6 +11,7 @@ import {
   getConfiguredTimezone,
 } from '@/lib/scheduler/time-utils';
 import { getGeminiTelemetry } from '@/lib/ai/gemini-client';
+import { getAiDispatcherTelemetry } from '@/lib/ai/ai-dispatcher';
 
 import {
   getTotalCompaniesCount,
@@ -138,6 +139,7 @@ export function getDashboardStats(): DashboardStats {
     gmailConnected: gmailConnected?.value === 'true',
     gmailEmail: gmailEmail?.value ?? null,
     geminiTelemetry: getGeminiTelemetry(),
+    aiTelemetry: getAiDispatcherTelemetry(),
     outreachStatus,
   };
 

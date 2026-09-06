@@ -1,4 +1,6 @@
 import { callGemini, getGeminiClient, GEMINI_PRIORITIES, categorizeGeminiError } from './gemini-client';
+import { callAi } from './ai-dispatcher';
+import { isOpenRouterConfigured } from './openrouter-client';
 import { checkEmailSimilarity } from './similarity';
 import type { StructuredResumeProfile, GeneratedEmailResult } from '@/types';
 
@@ -224,8 +226,8 @@ export async function generatePersonalizedEmail(
     input.preferredStrategy ||
     availableStrategies[Math.floor(Math.random() * availableStrategies.length)];
 
-  if (!getGeminiClient()) {
-    // If Gemini API is not configured, generate via diversified heuristic engine
+  if (!getGeminiClient() && !isOpenRouterConfigured()) {
+    // If neither AI API is configured, generate via diversified heuristic engine
     const stratIdx = availableStrategies.indexOf(selectedStrategy as (typeof STRATEGIES)[number]);
     return heuristicGenerateEmail(input, stratIdx >= 0 ? stratIdx : 0);
   }
@@ -244,11 +246,12 @@ export async function generatePersonalizedEmail(
         ? GEMINI_PRIORITIES.GENERATION_RETRY
         : GEMINI_PRIORITIES.EMAIL_GENERATION;
 
-      const responseText = await callGemini(prompt, {
+      const aiRes = await callAi(prompt, {
         temperature: 0.3 + attempt * 0.1,
         priority,
         taskName: `email-gen-${input.companyName}`,
       });
+      const responseText = aiRes.text;
       const cleaned = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleaned);
 
@@ -287,7 +290,7 @@ export async function generatePersonalizedEmail(
         return generatedResult;
       }
     } catch (err) {
-      console.warn(`Gemini email generation attempt ${attempt} failed:`, err);
+      console.warn(`AI email generation attempt ${attempt} failed:`, err);
       if (input.strictGemini) {
         throw err;
       }
@@ -295,7 +298,7 @@ export async function generatePersonalizedEmail(
   }
 
   if (input.strictGemini) {
-    throw new Error(`Failed to generate email for ${input.companyName} via Gemini after ${maxAttempts} attempts.`);
+    throw new Error(`Failed to generate email for ${input.companyName} via AI after ${maxAttempts} attempts.`);
   }
 
   // Safe fallback if all AI attempts fail and not strictGemini
