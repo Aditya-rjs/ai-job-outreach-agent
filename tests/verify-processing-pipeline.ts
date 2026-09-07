@@ -52,6 +52,7 @@ import {
   getCompanyContactsList,
   getEmailGenerationPendingList,
   getGenerationRetryList,
+  getGenerationFailedList,
   getReadyToSendList,
 } from '@/lib/processing-queries';
 
@@ -464,7 +465,12 @@ async function runTests() {
   assert(stats.classificationPendingCount === 1, `Classification Pending count is exactly 1 (found ${stats.classificationPendingCount})`);
   assert(stats.emailGenerationPendingCount === 2, `Email Generation Pending count is exactly 2 (found ${stats.emailGenerationPendingCount})`);
   assert(stats.generationRetryCount === 1, `Generation Retry count is exactly 1 (found ${stats.generationRetryCount})`);
+  assert(stats.generationFailedCount === 0, `Generation Failed count is initially 0 (found ${stats.generationFailedCount})`);
   assert(stats.readyToSendCount === 1, `Ready to Send count is exactly 1 (found ${stats.readyToSendCount})`);
+
+  const initialFailedList = getGenerationFailedList();
+  assert(initialFailedList.total === 0, `Initial getGenerationFailedList total is 0 (found ${initialFailedList.total})`);
+  assert(initialFailedList.records.length === 0, 'Initial getGenerationFailedList records is empty');
 
   // =========================================================================
   // TEST 2: Classification Pending Grouped by Company (Not per contact)
@@ -551,9 +557,143 @@ async function runTests() {
   assert(!readyIds.includes('c_missing_body_01'), 'Contacts missing email body are excluded');
 
   // =========================================================================
-  // TEST 8: Strict Read-Only Outreach Safety
+  // TEST 8: Generation Failure Observability (10 Required Checks)
   // =========================================================================
-  console.log('\n--- Test 8: Read-Only Safety Invariants ---');
+  console.log('\n--- Test 8: Generation Failure Observability (10 Required Checks) ---');
+
+  // Check 1: 0 failures initially verified above (passCount recorded)
+  assert(initialFailedList.total === 0, 'Check 1: Zero generation failures reports 0 in API/query');
+
+  // Check 2: Insert one terminal generation failure
+  db.insert(contacts)
+    .values({
+      id: 'c_failed_01',
+      batchId: activeBatchId,
+      companyName: 'Planet Spark',
+      contactName: 'Ananya Sharma',
+      email: 'ananya@planetspark.in',
+      isRelevant: true,
+      emailValid: true,
+      isDuplicate: false,
+      status: 'failed',
+      generationStatus: 'GENERATION_FAILED',
+      generationAttemptCount: 5,
+      lastGenerationErrorCategory: 'RATE_LIMIT_EXCEEDED',
+      errorMessage: 'OpenRouter 429 rate limit exceeded after 5 retries',
+      lastGenerationAttemptAt: nowIso,
+      updatedAt: nowIso,
+    })
+    .run();
+
+  const singleFailureStats = getProcessingPipelineStats();
+  assert(singleFailureStats.generationFailedCount === 1, 'Check 2a: stats.generationFailedCount is 1 with 1 failure');
+  const singleFailureList = getGenerationFailedList();
+  assert(singleFailureList.total === 1, 'Check 2b: exactly 1 failure appears in getGenerationFailedList');
+  assert(singleFailureList.records[0].id === 'c_failed_01', 'Check 2c: record ID matches c_failed_01');
+
+  // Check 3: Insert multiple terminal generation failures
+  db.insert(contacts)
+    .values([
+      {
+        id: 'c_failed_02',
+        batchId: activeBatchId,
+        companyName: 'Infosys',
+        contactName: 'Rajesh Nair',
+        email: 'rajesh.n@infosys.com',
+        isRelevant: true,
+        emailValid: true,
+        isDuplicate: false,
+        status: 'failed',
+        generationStatus: 'GENERATION_FAILED',
+        generationAttemptCount: 3,
+        lastGenerationErrorCategory: 'LOCAL_BUG',
+        errorMessage: 'Deterministic local error: SyntaxError in prompt builder',
+        lastGenerationAttemptAt: nowIso,
+        updatedAt: nowIso,
+      },
+      {
+        id: 'c_failed_03',
+        batchId: activeBatchId,
+        companyName: 'Tredence Analytics',
+        contactName: 'Pooja Hegde',
+        email: 'pooja.h@tredence.com',
+        isRelevant: true,
+        emailValid: true,
+        isDuplicate: false,
+        status: 'failed',
+        generationStatus: 'GENERATION_FAILED',
+        generationAttemptCount: 5,
+        lastGenerationErrorCategory: 'MAX_RETRIES_EXCEEDED',
+        errorMessage: 'Deterministic local error with very long trace: '.repeat(200),
+        lastGenerationAttemptAt: nowIso,
+        updatedAt: nowIso,
+      },
+    ])
+    .run();
+
+  const multipleFailureStats = getProcessingPipelineStats();
+  assert(multipleFailureStats.generationFailedCount === 3, 'Check 3a: stats.generationFailedCount is 3 with 3 failures');
+  const multipleFailureList = getGenerationFailedList();
+  assert(multipleFailureList.total === 3, 'Check 3b: all 3 failures appear in list');
+
+  // Check 4: Transient generation retry appears under Generation Retry, NOT Generation Failed
+  const currentGenRetryList = getGenerationRetryList();
+  assert(currentGenRetryList.total === 1, 'Check 4a: Generation Retry still has exactly 1 item');
+  assert(currentGenRetryList.records[0].id === 'c_retry_01', 'Check 4b: Retry item is c_retry_01');
+  const failedIds = multipleFailureList.records.map((r) => r.id);
+  assert(!failedIds.includes('c_retry_01'), 'Check 4c: Transient c_retry_01 is strictly absent from Generation Failed list');
+
+  // Check 5: Terminal generation failure appears under Generation Failed, NOT Generation Retry or Generation Pending
+  const currentGenPendingList = getEmailGenerationPendingList();
+  const pendingIds = currentGenPendingList.records.map((r) => r.id);
+  const retryIds = currentGenRetryList.records.map((r) => r.id);
+  assert(!pendingIds.includes('c_failed_01'), 'Check 5a: c_failed_01 strictly absent from Generation Pending');
+  assert(!retryIds.includes('c_failed_01'), 'Check 5b: c_failed_01 strictly absent from Generation Retry');
+  assert(!pendingIds.includes('c_failed_02'), 'Check 5c: c_failed_02 strictly absent from Generation Pending');
+  assert(!retryIds.includes('c_failed_02'), 'Check 5d: c_failed_02 strictly absent from Generation Retry');
+
+  // Check 6: Classification information is correctly associated with the contact
+  const infosysFailure = multipleFailureList.records.find((r) => r.id === 'c_failed_02');
+  assert(infosysFailure !== undefined, 'Check 6a: Found c_failed_02 record');
+  assert(infosysFailure?.companyName === 'Infosys', 'Check 6b: Company name is Infosys');
+  assert(infosysFailure?.classificationResult === 'RELEVANT', 'Check 6c: Associated classification is RELEVANT');
+  assert(infosysFailure?.classificationSource === 'gemini', 'Check 6d: Associated classification source is gemini');
+  assert(infosysFailure?.geminiModel === 'gemini-3.8-flash', 'Check 6e: Associated gemini model is gemini-3.8-flash');
+
+  // Check 7: Provider information is displayed correctly when available
+  const openRouterFailure = multipleFailureList.records.find((r) => r.id === 'c_failed_01');
+  assert(openRouterFailure?.generationProvider === 'OpenRouter', `Check 7a: Provider correctly detected as OpenRouter (got ${openRouterFailure?.generationProvider})`);
+  assert(infosysFailure?.generationProvider === 'Not recorded', `Check 7b: Provider without explicit mention is "Not recorded" (got ${infosysFailure?.generationProvider})`);
+
+  // Check 8: Long error messages do not break query or result structure
+  const longErrorFailure = multipleFailureList.records.find((r) => r.id === 'c_failed_03');
+  assert((longErrorFailure?.errorMessage?.length ?? 0) > 2000, 'Check 8a: Long error message (>2000 chars) preserved intact');
+  assert(longErrorFailure?.isRetryable === false, 'Check 8b: Failure is explicitly marked isRetryable = false');
+
+  // Check 9: Viewing failures performs no state mutation
+  const contactBefore = db.select().from(contacts).where(eq(contacts.id, 'c_failed_01')).get();
+  // Execute queries with search and pagination
+  getGenerationFailedList({ search: 'Sharma', page: 1, limit: 10 });
+  getGenerationFailedList({ search: '429', page: 1, limit: 10 });
+  getProcessingPipelineStats();
+  const contactAfter = db.select().from(contacts).where(eq(contacts.id, 'c_failed_01')).get();
+
+  assert(contactBefore?.status === contactAfter?.status, 'Check 9a: contact status unmodified by read');
+  assert(contactBefore?.generationStatus === contactAfter?.generationStatus, 'Check 9b: generationStatus unmodified by read');
+  assert(contactBefore?.generationAttemptCount === contactAfter?.generationAttemptCount, 'Check 9c: attempt count unmodified by read');
+  assert(contactBefore?.errorMessage === contactAfter?.errorMessage, 'Check 9d: error message unmodified by read');
+  assert(contactBefore?.updatedAt === contactAfter?.updatedAt, 'Check 9e: updatedAt unmodified by read');
+
+  // Check 10: Existing pipeline behavior remains unchanged
+  const finalPending = getEmailGenerationPendingList();
+  assert(finalPending.total === 2, `Check 10a: Generation Pending unchanged at 2 (got ${finalPending.total})`);
+  const finalReady = getReadyToSendList();
+  assert(finalReady.total === 1, `Check 10b: Ready to Send unchanged at 1 (got ${finalReady.total})`);
+
+  // =========================================================================
+  // TEST 9: Strict Read-Only Outreach Safety
+  // =========================================================================
+  console.log('\n--- Test 9: Read-Only Safety Invariants ---');
   const finalSchedulerState = db.select().from(schedulerState).where(eq(schedulerState.id, 'singleton')).get();
   assert(
     (finalSchedulerState?.todaySentCount ?? 0) === initialSentCount,

@@ -18,6 +18,7 @@ import {
   Square,
   Zap,
   Sparkles,
+  AlertTriangle,
 } from 'lucide-react';
 import { StatCard } from '@/components/ui/stat-card';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -26,7 +27,7 @@ import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/lib/utils';
 import type { DashboardStats, Batch, SchedulerConfig } from '@/types';
 import { DashboardDetailModal, type DashboardCardViewId } from '@/components/dashboard/dashboard-detail-modal';
-import { ProcessingPipelineSection } from '@/components/dashboard/processing-pipeline-section';
+import { ProcessingPipelineSection, type ProcessingCategory } from '@/components/dashboard/processing-pipeline-section';
 import { AiProviderStatus } from '@/components/dashboard/ai-provider-status';
 
 const POLL_INTERVAL_MS = 6000; // 6 seconds automatic refresh
@@ -43,6 +44,15 @@ export default function DashboardPage() {
 
   // Active detail view for clickable dashboard cards
   const [activeModalView, setActiveModalView] = useState<DashboardCardViewId | null>(null);
+  const [selectedProcessingCategory, setSelectedProcessingCategory] = useState<ProcessingCategory | undefined>(undefined);
+
+  const handleViewGenerationFailures = () => {
+    setSelectedProcessingCategory('generation-failed');
+    const el = document.getElementById('processing-pipeline-section');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
 
   // Read initial ?view= parameter from URL if available
   useEffect(() => {
@@ -543,6 +553,17 @@ export default function DashboardPage() {
                 {(stats?.emailsGenerationRetryPending ?? 0) > 0 ? ` • ${stats?.emailsGenerationRetryPending} Retry Pending` : ''}
                 {(stats?.emailsGenerationFailed ?? 0) > 0 ? ` • ${stats?.emailsGenerationFailed} Failed` : ''}
               </span>
+              {(stats?.emailsGenerationFailed ?? 0) > 0 && (
+                <button
+                  type="button"
+                  onClick={handleViewGenerationFailures}
+                  className="inline-flex items-center gap-1 ml-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-red-100 text-red-700 hover:bg-red-200 border border-red-300 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800 transition-colors cursor-pointer"
+                  title="Inspect failed email generation contacts in the live pipeline"
+                >
+                  <AlertTriangle className="h-3 w-3 text-red-600 dark:text-red-400" />
+                  View failures ({stats?.emailsGenerationFailed})
+                </button>
+              )}
             </div>
             {stats?.geminiTelemetry && (
               <div className="flex items-center gap-3 text-[11px] text-muted-foreground shrink-0">
@@ -615,7 +636,13 @@ export default function DashboardPage() {
       </div>
 
       {/* AI Outreach Processing Pipeline Section */}
-      <ProcessingPipelineSection refreshTrigger={lastSyncTime?.getTime()} />
+      <div id="processing-pipeline-section">
+        <ProcessingPipelineSection
+          refreshTrigger={lastSyncTime?.getTime()}
+          selectedCategory={selectedProcessingCategory}
+          onCategoryChange={(cat) => setSelectedProcessingCategory(cat)}
+        />
+      </div>
 
       {/* Two-column layout for recent batches and activity */}
       <div className="grid gap-6 lg:grid-cols-2">

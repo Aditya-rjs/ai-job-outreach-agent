@@ -7,6 +7,7 @@ export interface ProcessingPipelineStats {
   classificationRetryWaitingCount: number;
   emailGenerationPendingCount: number;
   generationRetryCount: number;
+  generationFailedCount: number;
   readyToSendCount: number;
   lastUpdated: string;
 }
@@ -59,6 +60,26 @@ export interface GenerationRetryRecord {
   generationAttemptCount: number;
   lastGenerationErrorCategory: string | null;
   nextGenerationRetryAt: string | null;
+  batchFilename: string;
+  createdAt: string;
+}
+
+export interface GenerationFailedRecord {
+  id: string;
+  contactName: string | null;
+  companyName: string | null;
+  email: string;
+  classificationResult: string;
+  classificationSource: string;
+  geminiModel: string | null;
+  generationStatus: 'GENERATION_FAILED';
+  generationProvider: string;
+  generationAttemptCount: number;
+  lastGenerationErrorCategory: string | null;
+  errorMessage: string | null;
+  failureTimestamp: string | null;
+  isRetryable: boolean;
+  status: string;
   batchFilename: string;
   createdAt: string;
 }
@@ -155,6 +176,16 @@ export function getProcessingPipelineStats(batchId?: string): ProcessingPipeline
       AND c.generation_status = 'RETRY_PENDING'
   `);
 
+  // 3b. Generation Failed: Contacts in active batches with generation_status = 'GENERATION_FAILED'
+  const genFailedRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(c.id) as count
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.generation_status = 'GENERATION_FAILED'
+      ${batchFilter}
+  `);
+
   // 4. Ready to Send: Exact scheduler eligibility predicate
   const cooldownCutoffIso = getCooldownCutoffIso();
   const readyToSendRow = db.get<{ count: number }>(sql`
@@ -196,6 +227,7 @@ export function getProcessingPipelineStats(batchId?: string): ProcessingPipeline
     classificationRetryWaitingCount: classRetryWaitingRow?.count ?? 0,
     emailGenerationPendingCount: genPendingRow?.count ?? 0,
     generationRetryCount: genRetryRow?.count ?? 0,
+    generationFailedCount: genFailedRow?.count ?? 0,
     readyToSendCount: readyToSendRow?.count ?? 0,
     lastUpdated: new Date().toISOString(),
   };
@@ -604,6 +636,116 @@ export function getGenerationRetryList(opts: ProcessingPaginationOptions = {}): 
     batchFilename: r.batchFilename,
     createdAt: r.createdAt,
   }));
+
+  return { records, total };
+}
+
+// ---------------------------------------------------------------------------
+// 5b. GENERATION FAILED (Terminal Failures Requiring Inspection)
+// ---------------------------------------------------------------------------
+
+export function getGenerationFailedList(opts: ProcessingPaginationOptions = {}): {
+  records: GenerationFailedRecord[];
+  total: number;
+} {
+  const db = getDb();
+  const search = (opts.search || '').trim().toLowerCase();
+  const page = Math.max(1, opts.page || 1);
+  const limit = Math.max(1, Math.min(opts.limit || 25, 200));
+  const offset = (page - 1) * limit;
+
+  const searchClause = search
+    ? sql`AND (
+        LOWER(c.contact_name) LIKE ${`%${search}%`}
+        OR LOWER(c.email) LIKE ${`%${search}%`}
+        OR LOWER(c.company_name) LIKE ${`%${search}%`}
+        OR LOWER(COALESCE(c.error_message, '')) LIKE ${`%${search}%`}
+      )`
+    : sql``;
+
+  const countRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(c.id) as count
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.generation_status = 'GENERATION_FAILED'
+      ${searchClause}
+  `);
+  const total = countRow?.count ?? 0;
+
+  const rows = db.all<{
+    id: string;
+    contactName: string | null;
+    companyName: string | null;
+    email: string;
+    status: string;
+    generationStatus: string;
+    generationAttemptCount: number;
+    lastGenerationErrorCategory: string | null;
+    errorMessage: string | null;
+    failureTimestamp: string | null;
+    batchFilename: string;
+    createdAt: string;
+    classificationResult: string | null;
+    classificationSource: string | null;
+    geminiModel: string | null;
+  }>(sql`
+    SELECT
+      c.id,
+      c.contact_name as contactName,
+      c.company_name as companyName,
+      c.email,
+      c.status,
+      c.generation_status as generationStatus,
+      COALESCE(c.generation_attempt_count, 0) as generationAttemptCount,
+      c.last_generation_error_category as lastGenerationErrorCategory,
+      c.error_message as errorMessage,
+      COALESCE(c.last_generation_attempt_at, c.updated_at) as failureTimestamp,
+      b.filename as batchFilename,
+      c.created_at as createdAt,
+      COALESCE(cc.classification_result, CASE WHEN c.is_relevant = 1 THEN 'RELEVANT' WHEN c.is_relevant = 0 THEN 'IRRELEVANT' ELSE 'UNKNOWN' END) as classificationResult,
+      COALESCE(cc.classification_source, 'Not recorded') as classificationSource,
+      cc.gemini_model as geminiModel
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    LEFT JOIN company_classifications cc ON (cc.normalized_name = LOWER(TRIM(c.company_name)) OR cc.company_name = c.company_name OR cc.company_name = TRIM(c.company_name))
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND c.generation_status = 'GENERATION_FAILED'
+      ${searchClause}
+    ORDER BY COALESCE(c.last_generation_attempt_at, c.updated_at) DESC, c.generation_attempt_count DESC, c.id ASC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  const records: GenerationFailedRecord[] = rows.map((r) => {
+    let generationProvider = 'Not recorded';
+    if (r.errorMessage) {
+      if (/openrouter/i.test(r.errorMessage)) {
+        generationProvider = 'OpenRouter';
+      } else if (/gemini/i.test(r.errorMessage)) {
+        generationProvider = 'Gemini';
+      }
+    }
+
+    return {
+      id: r.id,
+      contactName: r.contactName,
+      companyName: r.companyName,
+      email: r.email,
+      classificationResult: r.classificationResult || 'Not recorded',
+      classificationSource: r.classificationSource || 'Not recorded',
+      geminiModel: r.geminiModel || null,
+      generationStatus: 'GENERATION_FAILED',
+      generationProvider,
+      generationAttemptCount: r.generationAttemptCount,
+      lastGenerationErrorCategory: r.lastGenerationErrorCategory,
+      errorMessage: r.errorMessage,
+      failureTimestamp: r.failureTimestamp,
+      isRetryable: false,
+      status: r.status,
+      batchFilename: r.batchFilename,
+      createdAt: r.createdAt,
+    };
+  });
 
   return { records, total };
 }

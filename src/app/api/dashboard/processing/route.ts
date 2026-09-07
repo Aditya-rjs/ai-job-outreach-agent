@@ -7,6 +7,7 @@ import {
   getCompanyContactsList,
   getEmailGenerationPendingList,
   getGenerationRetryList,
+  getGenerationFailedList,
   getReadyToSendList,
 } from '@/lib/processing-queries';
 
@@ -66,6 +67,12 @@ export async function GET(request: NextRequest) {
       }
       case 'generation-retry': {
         const res = getGenerationRetryList({ search, page, limit });
+        records = res.records;
+        total = res.total;
+        break;
+      }
+      case 'generation-failed': {
+        const res = getGenerationFailedList({ search, page, limit });
         records = res.records;
         total = res.total;
         break;

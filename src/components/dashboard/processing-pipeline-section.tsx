@@ -28,6 +28,7 @@ import type {
   CompanyContactItem,
   GenerationPendingRecord,
   GenerationRetryRecord,
+  GenerationFailedRecord,
   ReadyToSendRecord,
 } from '@/lib/processing-queries';
 
@@ -36,15 +37,24 @@ export type ProcessingCategory =
   | 'classification-retry-waiting'
   | 'generation-pending'
   | 'generation-retry'
+  | 'generation-failed'
   | 'ready-to-send';
 
 interface ProcessingPipelineSectionProps {
   // Can be called to trigger a parent sync or refresh trigger
   refreshTrigger?: number;
+  selectedCategory?: ProcessingCategory;
+  onCategoryChange?: (category: ProcessingCategory) => void;
 }
 
-export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipelineSectionProps) {
-  const [activeCategory, setActiveCategory] = useState<ProcessingCategory>('classification-pending');
+export function ProcessingPipelineSection({
+  refreshTrigger,
+  selectedCategory,
+  onCategoryChange,
+}: ProcessingPipelineSectionProps) {
+  const [activeCategory, setActiveCategory] = useState<ProcessingCategory>(
+    selectedCategory || 'classification-pending'
+  );
   const [stats, setStats] = useState<ProcessingPipelineStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -59,6 +69,7 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
   const [classRetryWaitingRecords, setClassRetryWaitingRecords] = useState<ClassificationPendingRecord[]>([]);
   const [genPendingRecords, setGenPendingRecords] = useState<GenerationPendingRecord[]>([]);
   const [genRetryRecords, setGenRetryRecords] = useState<GenerationRetryRecord[]>([]);
+  const [genFailedRecords, setGenFailedRecords] = useState<GenerationFailedRecord[]>([]);
   const [readyToSendRecords, setReadyToSendRecords] = useState<ReadyToSendRecord[]>([]);
 
   // Expanded company state for Classification Pending
@@ -68,6 +79,9 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
 
   // Read-only email preview modal for Ready to Send
   const [previewEmail, setPreviewEmail] = useState<ReadyToSendRecord | null>(null);
+
+  // Read-only generation failure detail modal
+  const [inspectFailure, setInspectFailure] = useState<GenerationFailedRecord | null>(null);
 
   // Fetch processing data
   const fetchData = useCallback(
@@ -106,6 +120,8 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
             setGenPendingRecords(json.data.records as GenerationPendingRecord[]);
           } else if (targetCategory === 'generation-retry') {
             setGenRetryRecords(json.data.records as GenerationRetryRecord[]);
+          } else if (targetCategory === 'generation-failed') {
+            setGenFailedRecords(json.data.records as GenerationFailedRecord[]);
           } else if (targetCategory === 'ready-to-send') {
             setReadyToSendRecords(json.data.records as ReadyToSendRecord[]);
           }
@@ -119,6 +135,15 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
     },
     [activeCategory, page, search]
   );
+
+  // Synchronize when selectedCategory prop changes from parent
+  useEffect(() => {
+    if (selectedCategory && selectedCategory !== activeCategory) {
+      setActiveCategory(selectedCategory);
+      setPage(1);
+      setSearch('');
+    }
+  }, [selectedCategory, activeCategory]);
 
   // Re-fetch whenever activeCategory or page changes
   useEffect(() => {
@@ -137,6 +162,7 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
     setActiveCategory(cat);
     setPage(1);
     setSearch('');
+    onCategoryChange?.(cat);
   };
 
   // Handle search submission / change
@@ -210,8 +236,8 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
         </div>
       </div>
 
-      {/* 5 Summary Processing Cards */}
-      <div className="grid gap-3 sm:gap-3.5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-5">
+      {/* 6 Summary Processing Cards */}
+      <div className="grid gap-3 sm:gap-3.5 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
         {/* 1. Classification Pending */}
         <div
           role="button"
@@ -360,6 +386,50 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
           </p>
         </div>
 
+        {/* 3b. Generation Failed */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => handleSelectCategory('generation-failed')}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleSelectCategory('generation-failed');
+            }
+          }}
+          className={cn(
+            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px]',
+            activeCategory === 'generation-failed'
+              ? 'border-red-500 bg-red-50/50 dark:bg-red-950/20 ring-2 ring-red-500/20'
+              : 'border-border bg-card hover:border-red-400/60 hover:bg-card/90'
+          )}
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="space-y-1 min-w-0">
+              <span className="text-xs font-semibold text-red-700 dark:text-red-400 flex items-center gap-1">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                Generation Failed
+              </span>
+              <p className="text-2xl font-bold text-foreground">
+                {stats?.generationFailedCount ?? 0}
+              </p>
+            </div>
+            <span
+              className={cn(
+                'rounded-full px-2 py-0.5 text-[10px] font-bold border shrink-0',
+                (stats?.generationFailedCount ?? 0) > 0
+                  ? 'bg-red-100 text-red-800 border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800'
+                  : 'bg-muted text-muted-foreground border-border'
+              )}
+            >
+              Terminal
+            </span>
+          </div>
+          <p className="text-[11px] text-muted-foreground mt-2 leading-tight">
+            Exceeded retry limit or permanent error. Terminal failure state.
+          </p>
+        </div>
+
         {/* 4. Ready to Send */}
         <div
           role="button"
@@ -494,6 +564,31 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
                   )}
                 >
                   {stats?.generationRetryCount ?? 0}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSelectCategory('generation-failed')}
+                className={cn(
+                  'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 whitespace-nowrap',
+                  activeCategory === 'generation-failed'
+                    ? 'bg-red-600 text-white font-semibold shadow-xs'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                )}
+              >
+                <span>Generation Failed</span>
+                <span
+                  className={cn(
+                    'rounded-full px-1.5 py-0.2 text-[10px]',
+                    activeCategory === 'generation-failed'
+                      ? 'bg-white/20 text-white'
+                      : (stats?.generationFailedCount ?? 0) > 0
+                        ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 font-bold'
+                        : 'bg-muted-foreground/15 text-muted-foreground'
+                  )}
+                >
+                  {stats?.generationFailedCount ?? 0}
                 </span>
               </button>
 
@@ -785,6 +880,82 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
                   </table>
                 )}
 
+                {/* 3b. GENERATION FAILED VIEW */}
+                {activeCategory === 'generation-failed' && (
+                  <table className="w-full text-xs text-left">
+                    <thead>
+                      <tr className="border-b border-border/70 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                        <th className="py-2.5 px-3">Recipient & Company</th>
+                        <th className="py-2.5 px-3">Email</th>
+                        <th className="py-2.5 px-3">Classification</th>
+                        <th className="py-2.5 px-3">Gen Provider</th>
+                        <th className="py-2.5 px-3">Attempts</th>
+                        <th className="py-2.5 px-3">Failure Reason</th>
+                        <th className="py-2.5 px-3">Retryable?</th>
+                        <th className="py-2.5 px-3 text-right">Details</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/60">
+                      {genFailedRecords.map((r) => (
+                        <tr key={r.id} className="hover:bg-muted/30 transition-colors">
+                          <td className="py-2.5 px-3">
+                            <p className="font-medium text-foreground">{r.contactName || 'Unknown Recipient'}</p>
+                            <span className="text-[11px] text-muted-foreground">{r.companyName || '—'}</span>
+                          </td>
+                          <td className="py-2.5 px-3 font-mono text-[11px] text-muted-foreground">{r.email}</td>
+                          <td className="py-2.5 px-3">
+                            <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700">
+                              {r.classificationResult}
+                            </span>
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
+                              {r.classificationSource !== 'Not recorded' ? `${r.classificationSource}${r.geminiModel ? ` (${r.geminiModel})` : ''}` : 'Not recorded'}
+                            </p>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <span className="font-mono text-[11px] text-foreground font-medium">
+                              {r.generationProvider}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-muted-foreground font-medium">
+                            <span className="text-red-700 dark:text-red-400 font-semibold">{r.generationAttemptCount}</span> / 5
+                          </td>
+                          <td className="py-2.5 px-3 max-w-[280px]">
+                            {r.lastGenerationErrorCategory && (
+                              <span className="font-mono text-[10px] font-semibold text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/40 px-1 py-0.2 rounded border border-red-200 dark:border-red-900 block mb-0.5 w-fit">
+                                {r.lastGenerationErrorCategory}
+                              </span>
+                            )}
+                            <p className="text-[11px] text-muted-foreground truncate" title={r.errorMessage || ''}>
+                              {r.errorMessage || 'No error message recorded'}
+                            </p>
+                            <span className="text-[10px] text-muted-foreground/70 block mt-0.5">
+                              {r.failureTimestamp ? formatDateTime(r.failureTimestamp) : 'Timestamp not recorded'}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold bg-red-100 text-red-800 dark:bg-red-950/50 dark:text-red-300 border border-red-300 dark:border-red-800">
+                              <AlertTriangle className="h-3 w-3 shrink-0" />
+                              No — Terminal
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-right">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setInspectFailure(r)}
+                              className="h-7 px-2.5 text-[11px] gap-1 border-red-200 hover:bg-red-50 text-red-700 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/30"
+                              title="Inspect full failure details"
+                            >
+                              <Info className="h-3 w-3" />
+                              Inspect
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+
                 {/* 4. READY TO SEND VIEW */}
                 {activeCategory === 'ready-to-send' && (
                   <table className="w-full text-xs text-left">
@@ -908,6 +1079,111 @@ export function ProcessingPipelineSection({ refreshTrigger }: ProcessingPipeline
                 Informational only. This dialog does not send emails.
               </span>
               <Button size="sm" variant="outline" onClick={() => setPreviewEmail(null)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Read-Only Generation Failure Detail Modal */}
+      {inspectFailure && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-2xl space-y-4 max-h-[85vh] flex flex-col">
+            <div className="flex items-start justify-between border-b border-border pb-3">
+              <div>
+                <span className="text-xs font-semibold text-red-600 dark:text-red-400 uppercase tracking-wider flex items-center gap-1">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  Generation Failure • Read-Only Inspection
+                </span>
+                <h4 className="text-lg font-bold text-foreground mt-0.5">
+                  {inspectFailure.contactName || 'Unknown Contact'}
+                </h4>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {inspectFailure.companyName || 'No Company'} • {inspectFailure.email}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectFailure(null)}
+                className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-3 text-xs leading-relaxed">
+              <div className="grid grid-cols-2 gap-2 bg-muted/40 p-3 rounded-lg border border-border/50 text-xs">
+                <div>
+                  <span className="text-muted-foreground block text-[11px]">Company:</span>
+                  <span className="font-semibold text-foreground">{inspectFailure.companyName || 'Not recorded'}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[11px]">Contact:</span>
+                  <span className="font-semibold text-foreground">{inspectFailure.contactName || 'Not recorded'}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[11px]">Email:</span>
+                  <span className="font-mono text-foreground">{inspectFailure.email}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[11px]">Classification:</span>
+                  <span className="font-semibold text-foreground">
+                    {inspectFailure.classificationResult}
+                    {inspectFailure.classificationSource !== 'Not recorded' ? ` — ${inspectFailure.classificationSource}` : ''}
+                    {inspectFailure.geminiModel ? ` (${inspectFailure.geminiModel})` : ''}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[11px]">Generation Status:</span>
+                  <span className="inline-flex items-center gap-1 font-bold text-red-600 dark:text-red-400">
+                    FAILED
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[11px]">Generation Provider:</span>
+                  <span className="font-semibold text-foreground">{inspectFailure.generationProvider}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[11px]">Generation Attempts:</span>
+                  <span className="font-semibold text-foreground">{inspectFailure.generationAttemptCount} of 5</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[11px]">Failure Timestamp:</span>
+                  <span className="font-mono text-foreground">
+                    {inspectFailure.failureTimestamp ? formatDateTime(inspectFailure.failureTimestamp) : 'Not recorded'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[11px]">Retryable:</span>
+                  <span className="font-semibold text-red-600 dark:text-red-400">No — Terminal</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[11px]">Contact / Queue Status:</span>
+                  <span className="font-mono text-foreground">{inspectFailure.status}</span>
+                </div>
+                {inspectFailure.batchFilename && (
+                  <div className="col-span-2">
+                    <span className="text-muted-foreground block text-[11px]">Source Batch:</span>
+                    <span className="font-mono text-foreground">{inspectFailure.batchFilename}</span>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <span className="font-semibold text-foreground block mb-1">Exact Persisted Error Reason:</span>
+                <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 p-3 rounded-lg text-red-900 dark:text-red-300 font-mono text-[11px] whitespace-pre-wrap break-words max-h-48 overflow-y-auto">
+                  {inspectFailure.errorMessage || 'No specific error message recorded in database.'}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between border-t border-border pt-3 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1.5 text-[11px]">
+                <Info className="h-3.5 w-3.5 text-primary" />
+                Read-only inspection. No state mutations or retries performed.
+              </span>
+              <Button size="sm" variant="outline" onClick={() => setInspectFailure(null)}>
                 Close
               </Button>
             </div>
