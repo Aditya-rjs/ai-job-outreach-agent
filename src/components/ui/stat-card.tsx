@@ -41,7 +41,7 @@ export function StatCard({
           : undefined
       }
       className={cn(
-        'rounded-xl border border-border bg-card p-4 sm:p-5 shadow-sm transition-all duration-150 flex flex-col justify-between h-full min-h-[116px]',
+        'rounded-xl border border-border bg-card p-4 sm:p-5 shadow-sm transition-all duration-150 flex flex-col justify-between h-full min-h-[116px] min-w-0',
         isClickable &&
           'cursor-pointer hover:border-primary/60 hover:shadow-md hover:bg-card/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 group select-none',
         active && 'border-primary ring-2 ring-primary/20 bg-primary/5',

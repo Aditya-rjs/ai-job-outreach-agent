@@ -201,7 +201,7 @@ export function ProcessingPipelineSection({
   };
 
   return (
-    <section className="space-y-4 pt-2">
+    <section className="space-y-4 pt-2 min-w-0 w-full max-w-full">
       {/* Section Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-border/70 pb-3">
         <div>
@@ -237,7 +237,7 @@ export function ProcessingPipelineSection({
       </div>
 
       {/* 6 Summary Processing Cards */}
-      <div className="grid gap-3 sm:gap-3.5 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
+      <div className="grid gap-3 sm:gap-3.5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-6">
         {/* 1. Classification Pending */}
         <div
           role="button"
@@ -250,7 +250,7 @@ export function ProcessingPipelineSection({
             }
           }}
           className={cn(
-            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px]',
+            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px] min-w-0',
             activeCategory === 'classification-pending'
               ? 'border-amber-500 bg-amber-50/50 dark:bg-amber-950/20 ring-2 ring-amber-500/20'
               : 'border-border bg-card hover:border-amber-400/60 hover:bg-card/90'
@@ -287,7 +287,7 @@ export function ProcessingPipelineSection({
             }
           }}
           className={cn(
-            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px]',
+            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px] min-w-0',
             activeCategory === 'classification-retry-waiting'
               ? 'border-yellow-500 bg-yellow-50/50 dark:bg-yellow-950/20 ring-2 ring-yellow-500/20'
               : 'border-border bg-card hover:border-yellow-400/60 hover:bg-card/90'
@@ -324,7 +324,7 @@ export function ProcessingPipelineSection({
             }
           }}
           className={cn(
-            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px]',
+            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px] min-w-0',
             activeCategory === 'generation-pending'
               ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/20 ring-2 ring-blue-500/20'
               : 'border-border bg-card hover:border-blue-400/60 hover:bg-card/90'
@@ -361,7 +361,7 @@ export function ProcessingPipelineSection({
             }
           }}
           className={cn(
-            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px]',
+            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px] min-w-0',
             activeCategory === 'generation-retry'
               ? 'border-orange-500 bg-orange-50/50 dark:bg-orange-950/20 ring-2 ring-orange-500/20'
               : 'border-border bg-card hover:border-orange-400/60 hover:bg-card/90'
@@ -398,7 +398,7 @@ export function ProcessingPipelineSection({
             }
           }}
           className={cn(
-            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px]',
+            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px] min-w-0',
             activeCategory === 'generation-failed'
               ? 'border-red-500 bg-red-50/50 dark:bg-red-950/20 ring-2 ring-red-500/20'
               : 'border-border bg-card hover:border-red-400/60 hover:bg-card/90'
@@ -442,7 +442,7 @@ export function ProcessingPipelineSection({
             }
           }}
           className={cn(
-            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px]',
+            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px] min-w-0',
             activeCategory === 'ready-to-send'
               ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 ring-2 ring-emerald-500/20'
               : 'border-border bg-card hover:border-emerald-400/60 hover:bg-card/90'
@@ -469,12 +469,12 @@ export function ProcessingPipelineSection({
       </div>
 
       {/* Detailed Workbench Card */}
-      <Card className="border border-border bg-card shadow-sm">
-        <CardContent className="p-4 sm:p-5 space-y-4">
+      <Card className="border border-border bg-card shadow-sm min-w-0 w-full max-w-full">
+        <CardContent className="p-4 sm:p-5 space-y-4 min-w-0 w-full max-w-full">
           {/* Controls Bar: Category Tabs + Search */}
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 border-b border-border pb-3">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 border-b border-border pb-3 min-w-0 w-full max-w-full">
             {/* Category Navigation Tabs */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 min-w-0 max-w-full">
               <button
                 type="button"
                 onClick={() => handleSelectCategory('classification-pending')}
@@ -617,7 +617,7 @@ export function ProcessingPipelineSection({
             </div>
 
             {/* Instant Search Bar */}
-            <div className="relative w-full md:w-64">
+            <div className="relative w-full md:w-64 shrink-0">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
               <input
                 type="text"
@@ -630,7 +630,7 @@ export function ProcessingPipelineSection({
           </div>
 
           {/* TABLE CONTENT AREA */}
-          <div className="min-h-[220px]">
+          <div className="min-h-[220px] min-w-0 w-full max-w-full">
             {loading ? (
               <div className="py-12 flex flex-col items-center justify-center text-muted-foreground gap-2">
                 <RefreshCw className="h-6 w-6 animate-spin text-primary" />
@@ -656,10 +656,10 @@ export function ProcessingPipelineSection({
                 </p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto w-full min-w-0 max-w-full">
                 {/* 1. CLASSIFICATION PENDING & RETRY WAITING VIEW (Company-level grouping + expandable contacts) */}
                 {(activeCategory === 'classification-pending' || activeCategory === 'classification-retry-waiting') && (
-                  <div className="divide-y divide-border/60">
+                  <div className="min-w-[620px] divide-y divide-border/60">
                     <div className="grid grid-cols-12 gap-2 pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider px-2">
                       <div className="col-span-4 sm:col-span-3">Company</div>
                       <div className="col-span-3 sm:col-span-3">Representative Contacts</div>
@@ -791,7 +791,7 @@ export function ProcessingPipelineSection({
 
                 {/* 2. EMAIL GENERATION PENDING VIEW */}
                 {activeCategory === 'generation-pending' && (
-                  <table className="w-full text-xs text-left">
+                  <table className="w-full text-xs text-left min-w-[550px]">
                     <thead>
                       <tr className="border-b border-border/70 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                         <th className="py-2.5 px-3">Recipient</th>
@@ -837,7 +837,7 @@ export function ProcessingPipelineSection({
 
                 {/* 3. GENERATION RETRY VIEW */}
                 {activeCategory === 'generation-retry' && (
-                  <table className="w-full text-xs text-left">
+                  <table className="w-full text-xs text-left min-w-[650px]">
                     <thead>
                       <tr className="border-b border-border/70 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                         <th className="py-2.5 px-3">Recipient</th>
@@ -882,7 +882,7 @@ export function ProcessingPipelineSection({
 
                 {/* 3b. GENERATION FAILED VIEW */}
                 {activeCategory === 'generation-failed' && (
-                  <table className="w-full text-xs text-left">
+                  <table className="w-full text-xs text-left min-w-[850px]">
                     <thead>
                       <tr className="border-b border-border/70 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                         <th className="py-2.5 px-3">Recipient & Company</th>
@@ -958,7 +958,7 @@ export function ProcessingPipelineSection({
 
                 {/* 4. READY TO SEND VIEW */}
                 {activeCategory === 'ready-to-send' && (
-                  <table className="w-full text-xs text-left">
+                  <table className="w-full text-xs text-left min-w-[600px]">
                     <thead>
                       <tr className="border-b border-border/70 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                         <th className="py-2.5 px-3">Recipient & Company</th>

@@ -295,7 +295,7 @@ export default function DashboardPage() {
   const completedBatch = recentBatches.find((b) => b.status === 'completed');
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-w-0 w-full max-w-full">
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -475,9 +475,9 @@ export default function DashboardPage() {
 
           {/* Sending Window Status Banner */}
           {stats?.outreachStatus === 'waiting' && (
-            <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 px-4 py-2.5 text-xs text-blue-900 font-medium flex items-center justify-between">
+            <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 px-4 py-2.5 text-xs text-blue-900 font-medium flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <span>Sending window currently closed (10:00 AM–4:00 PM IST) — queued contacts are persistent and will automatically resume when the window opens.</span>
-              <span className="font-semibold">{stats.nextSendAt ? formatDateTime(stats.nextSendAt) : 'Opens at 10:00 AM IST'}</span>
+              <span className="font-semibold shrink-0">{stats.nextSendAt ? formatDateTime(stats.nextSendAt) : 'Opens at 10:00 AM IST'}</span>
             </div>
           )}
 
@@ -544,8 +544,8 @@ export default function DashboardPage() {
           </div>
 
           {/* Autonomous AI Email Generation & Gemini Observability */}
-          <div className="rounded-lg bg-secondary/50 p-3 text-xs border border-border/50 flex flex-col md:flex-row md:items-center justify-between gap-3">
-            <div className="flex items-center gap-2 flex-wrap">
+          <div className="rounded-lg bg-secondary/50 p-3 text-xs border border-border/50 flex flex-col lg:flex-row lg:items-center justify-between gap-3 min-w-0 w-full">
+            <div className="flex items-center gap-2 flex-wrap min-w-0">
               <Sparkles className="h-4 w-4 text-primary shrink-0" />
               <span className="font-semibold text-foreground">Autonomous AI Email Generation:</span>
               <span className="text-muted-foreground">
@@ -557,7 +557,7 @@ export default function DashboardPage() {
                 <button
                   type="button"
                   onClick={handleViewGenerationFailures}
-                  className="inline-flex items-center gap-1 ml-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-red-100 text-red-700 hover:bg-red-200 border border-red-300 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800 transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1 ml-1.5 px-2 py-0.5 rounded text-[11px] font-semibold bg-red-100 text-red-700 hover:bg-red-200 border border-red-300 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800 transition-colors cursor-pointer shrink-0"
                   title="Inspect failed email generation contacts in the live pipeline"
                 >
                   <AlertTriangle className="h-3 w-3 text-red-600 dark:text-red-400" />
@@ -566,7 +566,7 @@ export default function DashboardPage() {
               )}
             </div>
             {stats?.geminiTelemetry && (
-              <div className="flex items-center gap-3 text-[11px] text-muted-foreground shrink-0">
+              <div className="flex items-center gap-3 text-[11px] text-muted-foreground flex-wrap shrink-0">
                 <span>Model: <code className="font-mono font-medium text-foreground">{stats.geminiTelemetry.currentModel}</code></span>
                 <span>In-Flight: <code className="font-mono text-foreground">{stats.geminiTelemetry.inFlightRequests}/{stats.geminiTelemetry.maxConcurrency}</code></span>
                 {stats.geminiTelemetry.recent429Count > 0 ? (

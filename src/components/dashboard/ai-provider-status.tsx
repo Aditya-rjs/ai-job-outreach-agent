@@ -98,16 +98,16 @@ export function AiProviderStatus({ aiTelemetry }: AiProviderStatusProps) {
         ) : null}
 
         {/* Status Grid */}
-        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9">
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-5 2xl:grid-cols-9">
           {/* 1. Primary Provider */}
-          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1">
+          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1 min-w-0">
             <p className="text-[11px] font-medium text-muted-foreground">Primary Provider</p>
             <p className="text-sm font-bold text-foreground">Gemini</p>
             <p className="text-[10px] text-muted-foreground font-mono truncate">gemini-3.8-flash</p>
           </div>
 
           {/* 2. Current Active Provider */}
-          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1">
+          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1 min-w-0">
             <p className="text-[11px] font-medium text-muted-foreground">Current Active</p>
             <div className="flex items-center gap-1.5">
               <span className={`text-sm font-bold ${currentProvider === 'openrouter' ? 'text-amber-600' : 'text-emerald-600'}`}>
@@ -120,7 +120,7 @@ export function AiProviderStatus({ aiTelemetry }: AiProviderStatusProps) {
           </div>
 
           {/* 3. Gemini 429 Count */}
-          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1">
+          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1 min-w-0">
             <p className="text-[11px] font-medium text-muted-foreground">Gemini 429 Count</p>
             <p className={`text-sm font-bold ${gemini429Count > 0 ? 'text-amber-600' : 'text-foreground'}`}>
               {gemini429Count}
@@ -129,7 +129,7 @@ export function AiProviderStatus({ aiTelemetry }: AiProviderStatusProps) {
           </div>
 
           {/* 4. Gemini Cooldown */}
-          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1">
+          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1 min-w-0">
             <p className="text-[11px] font-medium text-muted-foreground">Gemini Cooldown</p>
             <div className="flex items-center gap-1">
               <span className={`h-2 w-2 rounded-full ${isCooldownActive ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
@@ -145,21 +145,21 @@ export function AiProviderStatus({ aiTelemetry }: AiProviderStatusProps) {
           </div>
 
           {/* 5. OpenRouter Requests */}
-          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1">
+          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1 min-w-0">
             <p className="text-[11px] font-medium text-muted-foreground">OpenRouter Requests</p>
             <p className="text-sm font-bold text-foreground">{openRouterRequests}</p>
             <p className="text-[10px] text-muted-foreground">Total fallback dispatches</p>
           </div>
 
           {/* 6. OpenRouter Successes */}
-          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1">
+          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1 min-w-0">
             <p className="text-[11px] font-medium text-muted-foreground">OpenRouter Successes</p>
             <p className="text-sm font-bold text-emerald-600">{openRouterSuccesses}</p>
             <p className="text-[10px] text-muted-foreground">Completed fallbacks</p>
           </div>
 
           {/* 7. OpenRouter Failures */}
-          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1">
+          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1 min-w-0">
             <p className="text-[11px] font-medium text-muted-foreground">OpenRouter Failures</p>
             <p className={`text-sm font-bold ${openRouterFailures > 0 ? 'text-red-600' : 'text-foreground'}`}>
               {openRouterFailures}
@@ -168,7 +168,7 @@ export function AiProviderStatus({ aiTelemetry }: AiProviderStatusProps) {
           </div>
 
           {/* 8. Fallbacks Triggered */}
-          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1">
+          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1 min-w-0">
             <p className="text-[11px] font-medium text-muted-foreground">Fallbacks Triggered</p>
             <p className={`text-sm font-bold ${fallbackCount > 0 ? 'text-amber-600' : 'text-foreground'}`}>
               {fallbackCount}
@@ -177,7 +177,7 @@ export function AiProviderStatus({ aiTelemetry }: AiProviderStatusProps) {
           </div>
 
           {/* 9. Last Fallback */}
-          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1">
+          <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1 min-w-0">
             <p className="text-[11px] font-medium text-muted-foreground">Last Fallback</p>
             <p className="text-xs font-semibold text-foreground truncate" title={lastFallbackText}>
               {lastFallbackText}
