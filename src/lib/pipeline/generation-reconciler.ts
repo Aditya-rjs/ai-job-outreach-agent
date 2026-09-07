@@ -5,6 +5,7 @@ import { ulid } from 'ulid';
 import { generatePersonalizedEmail } from '@/lib/ai/email-generator';
 import { categorizeGeminiError, globalGeminiLimiter } from '@/lib/ai/gemini-client';
 import { isOpenRouterConfigured, isOpenRouterError } from '@/lib/ai/openrouter-client';
+import { isAiProviderUnavailableError } from '@/lib/ai/ai-dispatcher';
 import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
 import type { StructuredResumeProfile, Contact } from '@/types';
 
@@ -351,6 +352,24 @@ export async function reconcilePendingEmailGenerations(options: {
       succeeded++;
       console.log(`[GenerationReconciler] Successfully generated email for ${contact.email} (${contact.companyName}). Ready for outreach sending.`);
     } catch (genErr: unknown) {
+      // If both providers are in WAITING state, DO NOT mark GENERATION_FAILED or burn attempts
+      if (isAiProviderUnavailableError(genErr)) {
+        console.warn(
+          `[GenerationReconciler] AI providers temporarily in WAITING state (${Math.ceil(
+            genErr.waitRemainingMs / 1000
+          )}s). Releasing contact ${contact.email} claim without burning attempt count.`
+        );
+        db.update(contacts)
+          .set({
+            generationClaimToken: null,
+            generationLeaseExpiresAt: null,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(contacts.id, contact.id))
+          .run();
+        break;
+      }
+
       const isFromOpenRouter = isOpenRouterError(genErr);
       const isLocalBug =
         genErr instanceof SyntaxError ||

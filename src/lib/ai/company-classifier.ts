@@ -3,7 +3,7 @@ import { companyClassifications } from '@/db/schema';
 import { inArray, eq } from 'drizzle-orm';
 import { callGemini, getGeminiClient, categorizeGeminiError, sanitizeSecretText, GEMINI_PRIORITIES, globalGeminiLimiter, type CategorizedGeminiError } from './gemini-client';
 import { callAi, type AiCallResult } from './ai-dispatcher';
-import { isOpenRouterConfigured } from './openrouter-client';
+import { isOpenRouterConfigured, isOpenRouterError } from './openrouter-client';
 
 import { normalizeCompanyName, formatCompanyDisplayName } from '@/lib/utils/company';
 
@@ -392,13 +392,17 @@ export async function classifyCompanies(
         const diag = categorizeGeminiError(err);
         console.warn(`[CompanyClassifier] Gemini batch classification failed (${diag.code}): ${diag.safeDetail}`);
 
+        const isFromOpenRouter = isOpenRouterError(err);
         const isRateLimit =
           diag.code === 'RATE_LIMIT_EXCEEDED' ||
           /\b429\b/.test(diag.safeDetail) ||
-          /RESOURCE_EXHAUSTED/i.test(diag.safeDetail);
+          /RESOURCE_EXHAUSTED/i.test(diag.safeDetail) ||
+          Boolean((err as { isRateLimit?: boolean })?.isRateLimit);
 
         if (isRateLimit) {
-          globalGeminiLimiter.recordError(err);
+          if (!isFromOpenRouter) {
+            globalGeminiLimiter.recordError(err);
+          }
 
           // 1. Mark attempted chunk as RETRY_WAITING with retryCount: 1, retryRound: 0 (waiting for current round to drain)
           for (const item of chunk) {

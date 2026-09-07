@@ -359,6 +359,10 @@ export class GlobalGeminiRateLimiter {
     return Math.max(0, this.cooldownUntil - Date.now());
   }
 
+  public getCooldownUntilMs(): number {
+    return this.cooldownUntil;
+  }
+
   public getCooldownUntilIso(): string | null {
     return this.cooldownUntil > 0 ? new Date(this.cooldownUntil).toISOString() : null;
   }
@@ -370,6 +374,10 @@ export class GlobalGeminiRateLimiter {
     }
     this.cooldownUntil = 0;
     this.consecutive429Count = 0;
+  }
+
+  public setCooldownUntilForTesting(cooldownUntilMs: number): void {
+    this.cooldownUntil = cooldownUntilMs;
   }
 
   public resetForTesting(): void {

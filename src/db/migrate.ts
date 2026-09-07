@@ -194,6 +194,27 @@ export function initializeDatabase() {
   `);
 
   db.run(sql`
+    CREATE TABLE IF NOT EXISTS ai_provider_state (
+      id TEXT PRIMARY KEY DEFAULT 'singleton',
+      active_provider TEXT NOT NULL DEFAULT 'gemini',
+      gemini_cooldown_until TEXT,
+      gemini_last_error TEXT,
+      openrouter_cooldown_until TEXT,
+      openrouter_last_error TEXT,
+      total_dispatches INTEGER NOT NULL DEFAULT 0,
+      gemini_successes INTEGER NOT NULL DEFAULT 0,
+      gemini_failures INTEGER NOT NULL DEFAULT 0,
+      gemini_429_count INTEGER NOT NULL DEFAULT 0,
+      openrouter_dispatches INTEGER NOT NULL DEFAULT 0,
+      openrouter_successes INTEGER NOT NULL DEFAULT 0,
+      openrouter_failures INTEGER NOT NULL DEFAULT 0,
+      fallback_count INTEGER NOT NULL DEFAULT 0,
+      last_fallback_at TEXT,
+      updated_at TEXT NOT NULL
+    )
+  `);
+
+  db.run(sql`
     CREATE TABLE IF NOT EXISTS company_classifications (
       normalized_name TEXT PRIMARY KEY,
       company_name TEXT NOT NULL,

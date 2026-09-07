@@ -4,7 +4,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { formatDateTime } from '@/lib/utils';
 import type { DashboardStats } from '@/types';
-import { Cpu, AlertTriangle, CheckCircle2, ArrowRightLeft, ShieldAlert } from 'lucide-react';
+import { Cpu, AlertTriangle, CheckCircle2, ArrowRightLeft, ShieldAlert, Clock } from 'lucide-react';
 
 interface AiProviderStatusProps {
   aiTelemetry?: DashboardStats['aiTelemetry'];
@@ -12,7 +12,8 @@ interface AiProviderStatusProps {
 
 export function AiProviderStatus({ aiTelemetry }: AiProviderStatusProps) {
   const currentProvider = aiTelemetry?.currentActiveProvider || 'gemini';
-  const isCooldownActive = Boolean(aiTelemetry?.geminiCooldownActive);
+  const isGeminiCooldownActive = Boolean(aiTelemetry?.geminiCooldownActive);
+  const isOpenRouterCooldownActive = Boolean(aiTelemetry?.openRouterCooldownActive);
   const fallbackCount = aiTelemetry?.fallbackCount ?? 0;
   const gemini429Count = aiTelemetry?.gemini429Count ?? 0;
   const openRouterRequests = aiTelemetry?.openRouterDispatches ?? 0;
@@ -20,7 +21,9 @@ export function AiProviderStatus({ aiTelemetry }: AiProviderStatusProps) {
   const openRouterFailures = aiTelemetry?.openRouterFailures ?? 0;
   const lastFallbackText = aiTelemetry?.lastFallbackAt ? formatDateTime(aiTelemetry.lastFallbackAt) : 'Never';
   const openRouterModel = aiTelemetry?.openRouterModel || 'openrouter/free';
-  const isFallbackCurrentlyEngaged = currentProvider === 'openrouter' || isCooldownActive;
+
+  const isWaiting = currentProvider === 'waiting' || (isGeminiCooldownActive && isOpenRouterCooldownActive);
+  const isOpenRouterActive = currentProvider === 'openrouter' && !isWaiting;
 
   return (
     <Card className="border-border/80 shadow-xs">
@@ -38,7 +41,17 @@ export function AiProviderStatus({ aiTelemetry }: AiProviderStatusProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {isCooldownActive ? (
+            {isWaiting ? (
+              <Badge variant="destructive" className="gap-1.5 animate-pulse bg-red-600 text-white">
+                <Clock className="h-3 w-3" />
+                Waiting (Both Providers In Cooldown)
+              </Badge>
+            ) : isOpenRouterActive ? (
+              <Badge variant="warning" className="gap-1.5 animate-pulse">
+                <AlertTriangle className="h-3 w-3" />
+                OpenRouter Active (Gemini Cooldown)
+              </Badge>
+            ) : isGeminiCooldownActive ? (
               <Badge variant="warning" className="gap-1.5 animate-pulse">
                 <AlertTriangle className="h-3 w-3" />
                 Gemini Cooldown Active
@@ -59,19 +72,35 @@ export function AiProviderStatus({ aiTelemetry }: AiProviderStatusProps) {
       </CardHeader>
 
       <CardContent className="pt-4 space-y-4">
-        {/* Prominent Fallback Notification Banner when Fallback is Active or Observed */}
-        {isFallbackCurrentlyEngaged ? (
+        {/* Prominent Notification Banner based on state */}
+        {isWaiting ? (
+          <div className="rounded-xl border border-red-300 bg-red-50/90 p-3.5 text-xs text-red-950 flex items-start gap-3 shadow-xs">
+            <div className="rounded-lg bg-red-200/80 p-1.5 text-red-900 shrink-0 mt-0.5">
+              <Clock className="h-4 w-4" />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-bold text-red-950">WAITING: Both AI Providers Temporarily Rate-Limited</span>
+                <Badge variant="destructive" className="text-[10px] uppercase font-bold py-0">Paused For Recovery</Badge>
+              </div>
+              <p className="text-red-900 mt-1">
+                Gemini and OpenRouter both encountered HTTP 429 rate limits. Worker is safely pausing queue tasks to avoid burning contact attempts.
+                The system will automatically resume as soon as either provider becomes available (OpenRouter fallback or Gemini primary).
+              </p>
+            </div>
+          </div>
+        ) : isOpenRouterActive ? (
           <div className="rounded-xl border border-amber-300 bg-amber-50/90 p-3.5 text-xs text-amber-950 flex items-start gap-3 shadow-xs">
             <div className="rounded-lg bg-amber-200/80 p-1.5 text-amber-900 shrink-0 mt-0.5">
               <ShieldAlert className="h-4 w-4" />
             </div>
             <div className="flex-1">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-bold text-amber-950">FALLBACK ENGAGED: OpenRouter is Handling Requests</span>
+                <span className="font-bold text-amber-950">OPENROUTER ACTIVE: Handling AI Requests</span>
                 <Badge variant="warning" className="text-[10px] uppercase font-bold py-0">Active Routing</Badge>
               </div>
               <p className="text-amber-900 mt-1">
-                Gemini encountered HTTP 429 rate limit. Requests are routing to{' '}
+                Gemini encountered an HTTP 429 rate limit. Requests are routing to{' '}
                 <code className="font-mono font-semibold text-amber-950">{openRouterModel}</code>.
                 {aiTelemetry?.geminiCooldownRemainingSeconds && aiTelemetry.geminiCooldownRemainingSeconds > 0
                   ? ` Gemini cooldown expires in ~${aiTelemetry.geminiCooldownRemainingSeconds}s, after which Gemini will automatically become primary again.`
@@ -110,12 +139,20 @@ export function AiProviderStatus({ aiTelemetry }: AiProviderStatusProps) {
           <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1 min-w-0">
             <p className="text-[11px] font-medium text-muted-foreground">Current Active</p>
             <div className="flex items-center gap-1.5">
-              <span className={`text-sm font-bold ${currentProvider === 'openrouter' ? 'text-amber-600' : 'text-emerald-600'}`}>
-                {currentProvider === 'openrouter' ? 'OpenRouter' : 'Gemini'}
+              <span
+                className={`text-sm font-bold ${
+                  isWaiting
+                    ? 'text-red-600'
+                    : isOpenRouterActive
+                    ? 'text-amber-600'
+                    : 'text-emerald-600'
+                }`}
+              >
+                {isWaiting ? 'Waiting' : isOpenRouterActive ? 'OpenRouter' : 'Gemini'}
               </span>
             </div>
             <p className="text-[10px] text-muted-foreground">
-              {currentProvider === 'openrouter' ? 'Fallback Active' : 'Normal Primary'}
+              {isWaiting ? 'Both In Cooldown' : isOpenRouterActive ? 'Fallback Active' : 'Normal Primary'}
             </p>
           </div>
 
@@ -132,13 +169,13 @@ export function AiProviderStatus({ aiTelemetry }: AiProviderStatusProps) {
           <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1 min-w-0">
             <p className="text-[11px] font-medium text-muted-foreground">Gemini Cooldown</p>
             <div className="flex items-center gap-1">
-              <span className={`h-2 w-2 rounded-full ${isCooldownActive ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
-              <span className={`text-sm font-bold ${isCooldownActive ? 'text-amber-600' : 'text-foreground'}`}>
-                {isCooldownActive ? 'Active' : 'Inactive'}
+              <span className={`h-2 w-2 rounded-full ${isGeminiCooldownActive ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
+              <span className={`text-sm font-bold ${isGeminiCooldownActive ? 'text-amber-600' : 'text-foreground'}`}>
+                {isGeminiCooldownActive ? 'Active' : 'Inactive'}
               </span>
             </div>
             <p className="text-[10px] text-muted-foreground truncate">
-              {isCooldownActive && aiTelemetry?.geminiCooldownRemainingSeconds
+              {isGeminiCooldownActive && aiTelemetry?.geminiCooldownRemainingSeconds
                 ? `${aiTelemetry.geminiCooldownRemainingSeconds}s remaining`
                 : 'Ready for traffic'}
             </p>
@@ -164,7 +201,11 @@ export function AiProviderStatus({ aiTelemetry }: AiProviderStatusProps) {
             <p className={`text-sm font-bold ${openRouterFailures > 0 ? 'text-red-600' : 'text-foreground'}`}>
               {openRouterFailures}
             </p>
-            <p className="text-[10px] text-muted-foreground">Fallback errors</p>
+            <p className="text-[10px] text-muted-foreground">
+              {isOpenRouterCooldownActive
+                ? `Cooldown active (${aiTelemetry?.openRouterCooldownRemainingSeconds || 0}s)`
+                : 'Fallback errors'}
+            </p>
           </div>
 
           {/* 8. Fallbacks Triggered */}

@@ -48,10 +48,13 @@ export interface DashboardStats {
     lastTransientErrorAt?: string | null;
   };
   aiTelemetry?: {
-    currentActiveProvider: 'gemini' | 'openrouter';
+    currentActiveProvider: 'gemini' | 'openrouter' | 'waiting';
     geminiCooldownActive: boolean;
     geminiCooldownUntil: string | null;
     geminiCooldownRemainingSeconds: number;
+    openRouterCooldownActive?: boolean;
+    openRouterCooldownUntil?: string | null;
+    openRouterCooldownRemainingSeconds?: number;
     openRouterConfigured: boolean;
     openRouterModel: string;
     totalDispatches: number;

@@ -10,7 +10,8 @@ import {
   type ClassificationSource,
 } from '@/lib/ai/company-classifier';
 import { categorizeGeminiError, globalGeminiLimiter } from '@/lib/ai/gemini-client';
-import { isOpenRouterConfigured } from '@/lib/ai/openrouter-client';
+import { isOpenRouterConfigured, isOpenRouterError } from '@/lib/ai/openrouter-client';
+import { isAiProviderUnavailableError } from '@/lib/ai/ai-dispatcher';
 import { normalizeCompanyName, formatCompanyDisplayName } from '@/lib/utils/company';
 
 export interface ReconcileResult {
@@ -666,13 +667,39 @@ async function reconcileSingleBatch(
         activeClassificationOperations.delete(r.normalizedName);
       }
 
+      // If both providers are temporarily unavailable in WAITING state, DO NOT burn retries or mark FAILED
+      if (isAiProviderUnavailableError(err)) {
+        console.warn(
+          `[ClassificationReconciler] AI providers temporarily in WAITING state (${Math.ceil(
+            err.waitRemainingMs / 1000
+          )}s). Keeping ${claimedChunk.length} companies in current state without burning retry rounds.`
+        );
+        for (const r of claimedChunk) {
+          db.update(companyClassifications)
+            .set({
+              claimToken: null,
+              leaseExpiresAt: null,
+              updatedAt: new Date().toISOString(),
+            })
+            .where(eq(companyClassifications.normalizedName, r.normalizedName))
+            .run();
+        }
+        rateLimitEncountered = true;
+        break;
+      }
+
+      const isFromOpenRouter = isOpenRouterError(err);
       const isRateLimit =
         diag.code === 'RATE_LIMIT_EXCEEDED' ||
         /\b429\b/.test(diag.safeDetail) ||
-        /RESOURCE_EXHAUSTED/i.test(diag.safeDetail);
+        /RESOURCE_EXHAUSTED/i.test(diag.safeDetail) ||
+        Boolean((err as { isRateLimit?: boolean })?.isRateLimit);
 
       if (isRateLimit) {
-        globalGeminiLimiter.recordError(err);
+        // ONLY update Gemini limiter cooldown if the 429 originated from Gemini
+        if (!isFromOpenRouter) {
+          globalGeminiLimiter.recordError(err);
+        }
 
         for (const r of claimedChunk) {
           const newRetryCount = r.retryCount + 1;
@@ -925,18 +952,41 @@ async function reconcileGlobalClassifications(
         succeeded++;
       }
     } catch (err: unknown) {
+      if (isAiProviderUnavailableError(err)) {
+        console.warn(
+          `[ClassificationReconciler] AI providers temporarily in WAITING state (${Math.ceil(
+            err.waitRemainingMs / 1000
+          )}s). Keeping ${claimedChunk.length} retry-round companies in current state.`
+        );
+        for (const r of claimedChunk) {
+          db.update(companyClassifications)
+            .set({
+              claimToken: null,
+              leaseExpiresAt: null,
+              updatedAt: new Date().toISOString(),
+            })
+            .where(eq(companyClassifications.normalizedName, r.normalizedName))
+            .run();
+        }
+        break;
+      }
+
       const diag = categorizeGeminiError(err);
       for (const r of claimedChunk) {
         activeClassificationOperations.delete(r.normalizedName);
       }
 
+      const isFromOpenRouter = isOpenRouterError(err);
       const isRateLimit =
         diag.code === 'RATE_LIMIT_EXCEEDED' ||
         /\b429\b/.test(diag.safeDetail) ||
-        /RESOURCE_EXHAUSTED/i.test(diag.safeDetail);
+        /RESOURCE_EXHAUSTED/i.test(diag.safeDetail) ||
+        Boolean((err as { isRateLimit?: boolean })?.isRateLimit);
 
       if (isRateLimit) {
-        globalGeminiLimiter.recordError(err);
+        if (!isFromOpenRouter) {
+          globalGeminiLimiter.recordError(err);
+        }
         for (const r of claimedChunk) {
           const newRetryCount = r.retryCount + 1;
           if (newRetryCount >= MAX_CLASSIFICATION_ROUNDS) {

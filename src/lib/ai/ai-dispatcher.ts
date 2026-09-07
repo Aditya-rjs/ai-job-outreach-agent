@@ -8,7 +8,34 @@ import {
   callOpenRouter,
   isOpenRouterConfigured,
   getOpenRouterModel,
+  isOpenRouterError,
+  type OpenRouterCallResult,
 } from './openrouter-client';
+import {
+  getPersistentAiProviderState,
+  isOpenRouterCooldownActive,
+  getOpenRouterCooldownRemainingMs,
+  isGeminiCooldownActive,
+  getGeminiCooldownRemainingMs,
+  computeEffectiveActiveProvider,
+  recordOpenRouter429,
+  recordGemini429,
+  recordGeminiFailure,
+  recordGeminiSuccess,
+  recordOpenRouterSuccess,
+  recordOpenRouterNon429Failure,
+  setPersistentActiveProvider,
+  resetPersistentAiProviderStateForTesting,
+  AiProviderUnavailableError,
+  isAiProviderUnavailableError,
+  type AiProviderStatusType,
+} from './ai-provider-service';
+
+export {
+  AiProviderUnavailableError,
+  isAiProviderUnavailableError,
+  type AiProviderStatusType,
+};
 
 export type AiProvider = 'gemini' | 'openrouter';
 
@@ -28,10 +55,13 @@ export interface AiCallResult {
 }
 
 export interface AiDispatcherTelemetry {
-  currentActiveProvider: AiProvider;
+  currentActiveProvider: 'gemini' | 'openrouter' | 'waiting';
   geminiCooldownActive: boolean;
   geminiCooldownUntil: string | null;
   geminiCooldownRemainingSeconds: number;
+  openRouterCooldownActive: boolean;
+  openRouterCooldownUntil: string | null;
+  openRouterCooldownRemainingSeconds: number;
   openRouterConfigured: boolean;
   openRouterModel: string;
   totalDispatches: number;
@@ -45,16 +75,6 @@ export interface AiDispatcherTelemetry {
   lastFallbackAt: string | null;
 }
 
-let totalDispatches = 0;
-let geminiSuccesses = 0;
-let geminiFailures = 0;
-let gemini429Count = 0;
-let openRouterDispatches = 0;
-let openRouterSuccesses = 0;
-let openRouterFailures = 0;
-let fallbackCount = 0;
-let lastFallbackAt: string | null = null;
-
 let customDispatcherOverride:
   | ((prompt: string, options?: AiCallOptions) => Promise<AiCallResult>)
   | null = null;
@@ -66,57 +86,209 @@ export function setDispatcherOverrideForTesting(
 }
 
 export function resetAiDispatcherTelemetryForTesting(): void {
-  totalDispatches = 0;
-  geminiSuccesses = 0;
-  geminiFailures = 0;
-  gemini429Count = 0;
-  openRouterDispatches = 0;
-  openRouterSuccesses = 0;
-  openRouterFailures = 0;
-  fallbackCount = 0;
-  lastFallbackAt = null;
   customDispatcherOverride = null;
+  try {
+    resetPersistentAiProviderStateForTesting();
+  } catch {
+    // DB might be uninitialized in isolated unit test
+  }
 }
 
 /**
- * Returns current provider status and dispatch statistics.
- * Never logs or exposes API keys.
+ * Returns current authoritative provider status and dispatch statistics.
+ * Reads directly from persistent SQLite storage to ensure sync between worker and web processes.
  */
-export function getAiDispatcherTelemetry(): AiDispatcherTelemetry {
-  const isCooldown = globalGeminiLimiter.isCooldownActive();
+export function getAiDispatcherTelemetry(nowMs: number = Date.now()): AiDispatcherTelemetry {
+  let pState;
+  try {
+    pState = getPersistentAiProviderState();
+  } catch {
+    pState = {
+      activeProvider: 'gemini' as const,
+      geminiCooldownUntil: null,
+      geminiLastError: null,
+      openrouterCooldownUntil: null,
+      openrouterLastError: null,
+      totalDispatches: 0,
+      geminiSuccesses: 0,
+      geminiFailures: 0,
+      gemini429Count: 0,
+      openrouterDispatches: 0,
+      openrouterSuccesses: 0,
+      openrouterFailures: 0,
+      fallbackCount: 0,
+      lastFallbackAt: null,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  const geminiCooldownActive = isGeminiCooldownActive(pState, nowMs);
+  const openRouterCooldownActive = isOpenRouterCooldownActive(pState, nowMs);
   const openRouterReady = isOpenRouterConfigured();
-  const currentProvider: AiProvider = isCooldown && openRouterReady ? 'openrouter' : 'gemini';
+
+  // Reconcile effective current provider strictly based on priority
+  const currentActive = computeEffectiveActiveProvider(pState, nowMs);
+
+  // Synchronize persisted SQLite state if drifted from live cooldown reality
+  if (pState.activeProvider !== currentActive) {
+    try {
+      setPersistentActiveProvider(currentActive);
+    } catch {}
+  }
+
+  const geminiRemainingMs = getGeminiCooldownRemainingMs(pState, nowMs);
+  const openRouterRemainingMs = getOpenRouterCooldownRemainingMs(pState, nowMs);
 
   return {
-    currentActiveProvider: currentProvider,
-    geminiCooldownActive: isCooldown,
-    geminiCooldownUntil: globalGeminiLimiter.getCooldownUntilIso(),
-    geminiCooldownRemainingSeconds: Math.ceil(globalGeminiLimiter.getCooldownRemainingMs() / 1000),
+    currentActiveProvider: currentActive,
+    geminiCooldownActive,
+    geminiCooldownUntil: globalGeminiLimiter.getCooldownUntilIso() || pState.geminiCooldownUntil,
+    geminiCooldownRemainingSeconds: Math.ceil(geminiRemainingMs / 1000),
+    openRouterCooldownActive,
+    openRouterCooldownUntil: pState.openrouterCooldownUntil,
+    openRouterCooldownRemainingSeconds: Math.ceil(openRouterRemainingMs / 1000),
     openRouterConfigured: openRouterReady,
     openRouterModel: getOpenRouterModel(),
-    totalDispatches,
-    geminiSuccesses,
-    geminiFailures,
-    gemini429Count,
-    openRouterDispatches,
-    openRouterSuccesses,
-    openRouterFailures,
-    fallbackCount,
-    lastFallbackAt,
+    totalDispatches: pState.totalDispatches,
+    geminiSuccesses: pState.geminiSuccesses,
+    geminiFailures: pState.geminiFailures,
+    gemini429Count: pState.gemini429Count,
+    openRouterDispatches: pState.openrouterDispatches,
+    openRouterSuccesses: pState.openrouterSuccesses,
+    openRouterFailures: pState.openrouterFailures,
+    fallbackCount: pState.fallbackCount,
+    lastFallbackAt: pState.lastFallbackAt,
   };
+}
+
+/**
+ * Executes a call to OpenRouter with rate-limit tracking and recovery checking.
+ */
+async function executeOpenRouterDispatch(
+  prompt: string,
+  options: AiCallOptions
+): Promise<AiCallResult> {
+  const openRouterModel = getOpenRouterModel();
+  try {
+    const openRouterRes: OpenRouterCallResult = await callOpenRouter(prompt, {
+      temperature: options.temperature,
+      timeoutMs: options.timeoutMs,
+      taskName: options.taskName,
+    });
+
+    try {
+      recordOpenRouterSuccess();
+    } catch {}
+
+    return {
+      text: openRouterRes.text,
+      provider: 'openrouter',
+      model: openRouterRes.model,
+    };
+  } catch (openRouterErr: unknown) {
+    const isOr429 =
+      (isOpenRouterError(openRouterErr) && openRouterErr.isRateLimit) ||
+      (openRouterErr as { statusCode?: number })?.statusCode === 429 ||
+      /\b429\b/.test((openRouterErr as Error)?.message || '');
+
+    if (isOr429) {
+      console.warn(
+        `[AiDispatcher] OpenRouter returned HTTP 429 rate limit. Recording OpenRouter cooldown.`
+      );
+      try {
+        recordOpenRouter429((openRouterErr as Error)?.message || 'OpenRouter rate limit 429', 60000);
+      } catch {}
+
+      // Refresh persistent state
+      const freshPState = getPersistentAiProviderState();
+
+      // Check if Gemini has recovered in the meantime
+      if (!isGeminiCooldownActive(freshPState)) {
+        console.log(
+          `[AiDispatcher] OpenRouter rate limited, but Gemini cooldown has expired. Immediately returning to Gemini as primary.`
+        );
+        try {
+          setPersistentActiveProvider('gemini');
+        } catch {}
+
+        const configuredGeminiModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
+        const text = await callGemini(prompt, {
+          model: configuredGeminiModel,
+          temperature: options.temperature,
+          priority: options.priority ?? GEMINI_PRIORITIES.EMAIL_GENERATION,
+          taskName: options.taskName,
+          timeoutMs: options.timeoutMs,
+          maxRetries: options.maxRetries,
+        });
+
+        try {
+          recordGeminiSuccess();
+        } catch {}
+
+        return {
+          text,
+          provider: 'gemini',
+          model: configuredGeminiModel,
+        };
+      }
+
+      // Gemini is still in cooldown -> Transition to WAITING state
+      try {
+        setPersistentActiveProvider('waiting');
+      } catch {}
+
+      const geminiWaitMs = getGeminiCooldownRemainingMs(freshPState);
+      const orWaitMs = getOpenRouterCooldownRemainingMs(freshPState);
+      let waitRemainingMs: number;
+      if (geminiWaitMs > 0 && orWaitMs > 0) {
+        waitRemainingMs = Math.min(geminiWaitMs, orWaitMs);
+      } else if (geminiWaitMs > 0) {
+        waitRemainingMs = geminiWaitMs;
+      } else if (orWaitMs > 0) {
+        waitRemainingMs = orWaitMs;
+      } else {
+        waitRemainingMs = 5000;
+      }
+      waitRemainingMs = Math.max(1000, waitRemainingMs);
+
+      const nextToRecover = (orWaitMs > 0 && (geminiWaitMs <= 0 || orWaitMs < geminiWaitMs))
+        ? 'OpenRouter'
+        : 'Gemini';
+
+      console.warn(
+        `[AiDispatcher] Both Gemini and OpenRouter are rate-limited. Entering WAITING state (${Math.ceil(
+          waitRemainingMs / 1000
+        )}s until ${nextToRecover} recovery).`
+      );
+
+      throw new AiProviderUnavailableError(
+        `Both Gemini and OpenRouter are temporarily rate-limited. Waiting for ${nextToRecover} recovery in ${Math.ceil(
+          waitRemainingMs / 1000
+        )}s.`,
+        waitRemainingMs
+      );
+    }
+
+    // Non-429 OpenRouter failure
+    try {
+      recordOpenRouterNon429Failure((openRouterErr as Error)?.message || 'OpenRouter error');
+    } catch {}
+
+    throw openRouterErr;
+  }
 }
 
 /**
  * Primary AI Dispatcher.
  * 
- * Rules:
- * 1. Gemini is always primary.
- * 2. If Gemini succeeds, returns Gemini result.
- * 3. If Gemini is in an active 429 cooldown, immediately routes to OpenRouter (if configured).
- * 4. If Gemini returns 429 / RATE_LIMIT_EXCEEDED, records Gemini 429 cooldown and immediately
- *    falls back to OpenRouter (Free Models Router 'openrouter/free').
- * 5. When Gemini cooldown expires, Gemini automatically becomes primary again.
- * 6. If OpenRouter is not configured or fails, Gemini error handling semantics are preserved.
+ * Strict State Machine:
+ * 1. GEMINI ACTIVE: Gemini is always primary. When healthy, all tasks use Gemini.
+ * 2. GEMINI RATE LIMITED: On Gemini HTTP 429, records cooldown, immediately falls back to OpenRouter.
+ * 3. OPENROUTER ACTIVE: Handles AI tasks while Gemini is in cooldown.
+ * 4. OPENROUTER RATE LIMITED: On OpenRouter HTTP 429, records OpenRouter cooldown (does NOT touch Gemini cooldown).
+ *    Checks if Gemini recovered. If recovered -> GEMINI ACTIVE. If not -> WAITING.
+ * 5. WAITING: Both providers in cooldown. Reconcilers pause without burning contact retries.
+ * 6. RECOVERY: When Gemini cooldown expires, Gemini automatically resumes as primary.
  */
 export async function callAi(
   prompt: string,
@@ -126,98 +298,169 @@ export async function callAi(
     return customDispatcherOverride(prompt, options);
   }
 
-  totalDispatches++;
-
   const configuredGeminiModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
   const openRouterConfigured = isOpenRouterConfigured();
 
-  // If Gemini is already in an active 429 cooldown and OpenRouter is available, route directly to OpenRouter
-  if (globalGeminiLimiter.isCooldownActive() && openRouterConfigured) {
-    console.log(
-      `[AiDispatcher] Gemini is in 429 cooldown (until ${globalGeminiLimiter.getCooldownUntilIso()}). Routing directly to OpenRouter (${getOpenRouterModel()}).`
-    );
-    openRouterDispatches++;
-    try {
-      const openRouterRes = await callOpenRouter(prompt, {
-        temperature: options.temperature,
-        timeoutMs: options.timeoutMs,
-        taskName: options.taskName,
-      });
-      openRouterSuccesses++;
-      return {
-        text: openRouterRes.text,
-        provider: 'openrouter',
-        model: openRouterRes.model,
-      };
-    } catch (openRouterErr) {
-      openRouterFailures++;
-      console.warn('[AiDispatcher] Direct OpenRouter call failed during Gemini cooldown:', openRouterErr);
-      throw openRouterErr;
-    }
-  }
-
-  // Otherwise, attempt Gemini as primary
+  let pState;
   try {
-    const text = await callGemini(prompt, {
-      model: configuredGeminiModel,
-      temperature: options.temperature,
-      priority: options.priority ?? GEMINI_PRIORITIES.EMAIL_GENERATION,
-      taskName: options.taskName,
-      timeoutMs: options.timeoutMs,
-      maxRetries: options.maxRetries,
-    });
-
-    geminiSuccesses++;
-    return {
-      text,
-      provider: 'gemini',
-      model: configuredGeminiModel,
-    };
-  } catch (geminiErr: unknown) {
-    geminiFailures++;
-    const diag = categorizeGeminiError(geminiErr);
-
-    const isRateLimit =
-      diag.code === 'RATE_LIMIT_EXCEEDED' ||
-      /\b429\b/.test(diag.safeDetail) ||
-      /RESOURCE_EXHAUSTED/i.test(diag.safeDetail);
-
-    if (isRateLimit) {
-      gemini429Count++;
-      // Ensure global limiter records 429 cooldown
-      if (!globalGeminiLimiter.isCooldownActive()) {
-        globalGeminiLimiter.handle429(geminiErr);
-      }
-
-      if (openRouterConfigured) {
-        fallbackCount++;
-        lastFallbackAt = new Date().toISOString();
-        console.warn(
-          `[AiDispatcher] Gemini rate limit exceeded (429). Falling back immediately to OpenRouter Free Models Router (${getOpenRouterModel()}).`
-        );
-
-        openRouterDispatches++;
-        try {
-          const openRouterRes = await callOpenRouter(prompt, {
-            temperature: options.temperature,
-            timeoutMs: options.timeoutMs,
-            taskName: options.taskName,
-          });
-          openRouterSuccesses++;
-          return {
-            text: openRouterRes.text,
-            provider: 'openrouter',
-            model: openRouterRes.model,
-          };
-        } catch (openRouterErr) {
-          openRouterFailures++;
-          console.error('[AiDispatcher] OpenRouter fallback also failed:', openRouterErr);
-          throw openRouterErr;
-        }
-      }
-    }
-
-    // Rethrow Gemini error if not rate-limited or OpenRouter is not configured
-    throw geminiErr;
+    pState = getPersistentAiProviderState();
+  } catch {
+    pState = null;
   }
+
+  const now = Date.now();
+  const geminiCooldownActive = isGeminiCooldownActive(pState || undefined, now);
+  const openRouterCooldownActive = isOpenRouterCooldownActive(pState || undefined, now);
+
+  // ---------------------------------------------------------------------------
+  // Case 1: Gemini is Available (GEMINI ACTIVE) - Primary Provider
+  // ---------------------------------------------------------------------------
+  if (!geminiCooldownActive) {
+    try {
+      setPersistentActiveProvider('gemini');
+    } catch {}
+
+    try {
+      const text = await callGemini(prompt, {
+        model: configuredGeminiModel,
+        temperature: options.temperature,
+        priority: options.priority ?? GEMINI_PRIORITIES.EMAIL_GENERATION,
+        taskName: options.taskName,
+        timeoutMs: options.timeoutMs,
+        maxRetries: options.maxRetries,
+      });
+
+      try {
+        recordGeminiSuccess();
+      } catch {}
+
+      return {
+        text,
+        provider: 'gemini',
+        model: configuredGeminiModel,
+      };
+    } catch (geminiErr: unknown) {
+      const diag = categorizeGeminiError(geminiErr);
+
+      const isRateLimit =
+        diag.code === 'RATE_LIMIT_EXCEEDED' ||
+        /\b429\b/.test(diag.safeDetail) ||
+        /RESOURCE_EXHAUSTED/i.test(diag.safeDetail);
+
+      // If rate limit (429), transition to OPENROUTER ACTIVE and fall back
+      if (isRateLimit) {
+        if (!globalGeminiLimiter.isCooldownActive()) {
+          globalGeminiLimiter.handle429(geminiErr);
+        }
+
+        const cooldownIso = globalGeminiLimiter.getCooldownUntilIso() || new Date(Date.now() + 60000).toISOString();
+        try {
+          recordGemini429(cooldownIso, diag.safeDetail);
+        } catch {}
+
+        const freshState = getPersistentAiProviderState();
+        const orCooled = isOpenRouterCooldownActive(freshState);
+
+        if (openRouterConfigured && !orCooled) {
+          console.warn(
+            `[AiDispatcher] Gemini rate limit exceeded (429). Falling back immediately to OpenRouter (${getOpenRouterModel()}).`
+          );
+          try {
+            setPersistentActiveProvider('openrouter');
+          } catch {}
+          return executeOpenRouterDispatch(prompt, options);
+        }
+
+        // Both are in cooldown or OpenRouter not configured -> WAITING
+        try {
+          setPersistentActiveProvider('waiting');
+        } catch {}
+
+        const geminiWaitMs = getGeminiCooldownRemainingMs(freshState);
+        const orWaitMs = getOpenRouterCooldownRemainingMs(freshState);
+        let waitRemainingMs: number;
+        if (geminiWaitMs > 0 && orWaitMs > 0) {
+          waitRemainingMs = Math.min(geminiWaitMs, orWaitMs);
+        } else if (geminiWaitMs > 0) {
+          waitRemainingMs = geminiWaitMs;
+        } else if (orWaitMs > 0) {
+          waitRemainingMs = orWaitMs;
+        } else {
+          waitRemainingMs = 5000;
+        }
+        waitRemainingMs = Math.max(1000, waitRemainingMs);
+
+        const nextToRecover = (orWaitMs > 0 && (geminiWaitMs <= 0 || orWaitMs < geminiWaitMs))
+          ? 'OpenRouter'
+          : 'Gemini';
+
+        throw new AiProviderUnavailableError(
+          `Gemini rate limit exceeded and OpenRouter is ${
+            orCooled ? 'rate limited' : 'not configured'
+          }. State: WAITING (${Math.ceil(waitRemainingMs / 1000)}s until ${nextToRecover} recovery).`,
+          waitRemainingMs
+        );
+      }
+
+      // Non-429 Gemini error: record error, do NOT cooldown, do NOT fallback
+      try {
+        recordGeminiFailure(diag.safeDetail);
+      } catch {}
+
+      throw geminiErr;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Case 2: Gemini is in Cooldown, but OpenRouter is Available -> OPENROUTER ACTIVE
+  // ---------------------------------------------------------------------------
+  if (openRouterConfigured && !openRouterCooldownActive) {
+    console.log(
+      `[AiDispatcher] Gemini is in 429 cooldown. Routing to OpenRouter (${getOpenRouterModel()}).`
+    );
+    try {
+      setPersistentActiveProvider('openrouter');
+    } catch {}
+    return executeOpenRouterDispatch(prompt, options);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Case 3: Both Providers are Unavailable -> WAITING
+  // ---------------------------------------------------------------------------
+  try {
+    setPersistentActiveProvider('waiting');
+  } catch {}
+
+  const geminiWaitMs = getGeminiCooldownRemainingMs(pState || undefined);
+  const orWaitMs = getOpenRouterCooldownRemainingMs(pState || undefined);
+
+  // Wait duration is until whichever provider recovers FIRST!
+  let waitRemainingMs: number;
+  if (geminiWaitMs > 0 && orWaitMs > 0) {
+    waitRemainingMs = Math.min(geminiWaitMs, orWaitMs);
+  } else if (geminiWaitMs > 0) {
+    waitRemainingMs = geminiWaitMs;
+  } else if (orWaitMs > 0) {
+    waitRemainingMs = orWaitMs;
+  } else {
+    waitRemainingMs = 5000;
+  }
+  waitRemainingMs = Math.max(1000, waitRemainingMs);
+
+  const nextToRecover = (orWaitMs > 0 && (geminiWaitMs <= 0 || orWaitMs < geminiWaitMs))
+    ? 'OpenRouter'
+    : 'Gemini';
+
+  console.warn(
+    `[AiDispatcher] Both AI providers unavailable (Gemini cooldown active; OpenRouter ${
+      openRouterCooldownActive ? 'cooldown active' : 'not configured'
+    }). State: WAITING (${Math.ceil(waitRemainingMs / 1000)}s until ${nextToRecover} recovery).`
+  );
+
+  throw new AiProviderUnavailableError(
+    `Both AI providers are temporarily unavailable. Waiting for ${nextToRecover} recovery in ${Math.ceil(
+      waitRemainingMs / 1000
+    )}s.`,
+    waitRemainingMs
+  );
 }
