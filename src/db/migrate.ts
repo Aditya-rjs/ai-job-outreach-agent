@@ -80,6 +80,9 @@ export function initializeDatabase() {
       last_generation_error_category TEXT,
       next_generation_retry_at TEXT,
       last_generation_attempt_at TEXT,
+      retry_queue_enqueued_at TEXT,
+      retry_turn_started_at TEXT,
+      retry_turn_consumed_ms INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
@@ -93,12 +96,16 @@ export function initializeDatabase() {
   try { db.run(sql`ALTER TABLE contacts ADD COLUMN last_generation_error_category TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE contacts ADD COLUMN next_generation_retry_at TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE contacts ADD COLUMN last_generation_attempt_at TEXT`); } catch {}
+  try { db.run(sql`ALTER TABLE contacts ADD COLUMN retry_queue_enqueued_at TEXT`); } catch {}
+  try { db.run(sql`ALTER TABLE contacts ADD COLUMN retry_turn_started_at TEXT`); } catch {}
+  try { db.run(sql`ALTER TABLE contacts ADD COLUMN retry_turn_consumed_ms INTEGER NOT NULL DEFAULT 0`); } catch {}
 
   db.run(sql`CREATE INDEX IF NOT EXISTS idx_contacts_batch_id ON contacts(batch_id)`);
   db.run(sql`CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email)`);
   db.run(sql`CREATE INDEX IF NOT EXISTS idx_contacts_status ON contacts(status)`);
   db.run(sql`CREATE INDEX IF NOT EXISTS idx_contacts_gen_status ON contacts(generation_status)`);
   db.run(sql`CREATE INDEX IF NOT EXISTS idx_contacts_next_gen_retry ON contacts(next_generation_retry_at)`);
+  db.run(sql`CREATE INDEX IF NOT EXISTS idx_contacts_retry_queue_enqueued ON contacts(retry_queue_enqueued_at)`);
 
 
   // Backfill generation status for existing records

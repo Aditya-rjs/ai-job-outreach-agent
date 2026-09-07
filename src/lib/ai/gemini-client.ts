@@ -208,7 +208,10 @@ export function categorizeGeminiError(err: unknown): CategorizedGeminiError {
     /Empty response from Gemini/i.test(errStr) ||
     /Unexpected token/i.test(errStr) ||
     /JSON at position/i.test(errStr) ||
-    /SyntaxError/i.test(errStr)
+    /SyntaxError/i.test(errStr) ||
+    /INVALID_OUTPUT/i.test(errStr) ||
+    /invalid output/i.test(errStr) ||
+    /AiOutputInvalidError/i.test(errStr)
   ) {
     return {
       code: 'INVALID_OUTPUT',

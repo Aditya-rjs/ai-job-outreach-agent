@@ -25,10 +25,7 @@ import fs from 'fs';
 import assert from 'assert';
 
 // Use isolated test directory
-const TEST_DIR = path.join(process.cwd(), 'data', 'test-generation-retry-rounds');
-if (fs.existsSync(TEST_DIR)) {
-  fs.rmSync(TEST_DIR, { recursive: true, force: true });
-}
+const TEST_DIR = path.join(process.cwd(), 'data', `test-gen-rounds-${Date.now()}`);
 fs.mkdirSync(TEST_DIR, { recursive: true });
 
 process.env.DATA_DIR = TEST_DIR;
@@ -370,14 +367,14 @@ async function runAllTests() {
   markPass(9, 'Retry success → Ready to Send');
 
   // -------------------------------------------------------------------------
-  // Scenario 10: Retry failure → existing retry/terminal-failure behavior remains unchanged
+  // Scenario 10: Retry failure → circular queue rotation (transient) vs terminal bug isolation
   // -------------------------------------------------------------------------
-  console.log('\n--- Scenario 10: Retry failure behavior and max retries capping ---');
+  console.log('\n--- Scenario 10: Retry failure behavior (circular rotation vs terminal bug) ---');
 
   const b10 = 'batch_scenario_10';
   db.insert(batches).values({ id: b10, filename: 's10.csv', uploadDate: nowIso, status: 'processing' }).run();
 
-  // Contact with attempt count = 4 (one below MAX_GENERATION_RETRIES = 5)
+  // 1. Transient failure contact: attempt count 4 -> turn budget expires -> rotates to back, remains RETRY_PENDING
   const cTransientId = 'c10_transient';
   db.insert(contacts).values({
     id: cTransientId,
@@ -393,22 +390,52 @@ async function runAllTests() {
     updatedAt: nowIso,
   }).run();
 
-  // Fails with transient error -> reaches attempt 5 -> transitions terminally to GENERATION_FAILED
   await reconcilePendingEmailGenerations({
     batchId: b10,
+    turnBudgetMs: 50,
+    backoffMsOverride: 100,
     aiCallerOverride: async () => {
-      const err = new Error('429 Rate limit / resource exhausted');
-      (err as unknown as { isRateLimit: boolean }).isRateLimit = true;
-      throw err;
+      throw new Error('503 Service Unavailable / Network Glitch');
     },
   });
 
   const cTransAfter = db.select().from(contacts).where(eq(contacts.id, cTransientId)).get();
-  assert.strictEqual(cTransAfter?.generationStatus, 'GENERATION_FAILED', 'Must transition to GENERATION_FAILED after max retries');
-  assert.strictEqual(cTransAfter?.generationAttemptCount, 5, 'Attempt count must be capped at 5');
-  assert.strictEqual(cTransAfter?.status, 'failed');
+  assert.strictEqual(cTransAfter?.generationStatus, 'RETRY_PENDING', 'Transient error must rotate to RETRY_PENDING, not GENERATION_FAILED');
+  assert.strictEqual(cTransAfter?.generationAttemptCount, 5, 'Attempt count must increment to 5');
+  assert.strictEqual(cTransAfter?.status, 'queued', 'Status must remain queued for circular retry');
+  assert.strictEqual(cTransAfter?.retryTurnConsumedMs, 0, 'Consumed ms must reset to 0 after budget exhaustion');
+  assert.ok(cTransAfter?.retryQueueEnqueuedAt, 'retryQueueEnqueuedAt must be updated to rotate to back');
 
-  markPass(10, 'Retry failure → existing retry/terminal-failure behavior remains unchanged');
+  // 2. Genuine local programming bug -> isolated immediately as terminal GENERATION_FAILED
+  const cBugId = 'c10_local_bug';
+  db.insert(contacts).values({
+    id: cBugId,
+    batchId: b10,
+    email: 'bug@s10.com',
+    isRelevant: true,
+    emailValid: true,
+    isDuplicate: false,
+    generationStatus: 'RETRY_PENDING',
+    generationAttemptCount: 1,
+    status: 'queued',
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  }).run();
+
+  await reconcilePendingEmailGenerations({
+    batchId: b10,
+    turnBudgetMs: 50,
+    aiCallerOverride: async () => {
+      throw new TypeError('Cannot read property of undefined in local formatter');
+    },
+  });
+
+  const cBugAfter = db.select().from(contacts).where(eq(contacts.id, cBugId)).get();
+  assert.strictEqual(cBugAfter?.generationStatus, 'GENERATION_FAILED', 'Local programming bug must fail terminally');
+  assert.strictEqual(cBugAfter?.lastGenerationErrorCategory, 'LOCAL_BUG', 'Must be categorized as LOCAL_BUG');
+  assert.strictEqual(cBugAfter?.status, 'failed', 'Status must be set to failed');
+
+  markPass(10, 'Retry failure → circular queue rotation (transient) vs terminal bug isolation');
 
   // -------------------------------------------------------------------------
   // Scenario 11: Provider WAITING while retry pass is active does not burn generation attempts

@@ -128,6 +128,9 @@ export interface Contact {
   lastGenerationErrorCategory?: string | null;
   nextGenerationRetryAt?: string | null;
   lastGenerationAttemptAt?: string | null;
+  retryQueueEnqueuedAt?: string | null;
+  retryTurnStartedAt?: string | null;
+  retryTurnConsumedMs?: number;
   createdAt: string;
   updatedAt: string;
 }

@@ -393,7 +393,7 @@ export function ProcessingPipelineSection({
           <p className="text-[11px] text-muted-foreground mt-2 leading-tight">
             {(stats?.emailGenerationPendingCount ?? 0) > 0 && (stats?.generationRetryCount ?? 0) > 0
               ? `Waiting for active generation pass to drain (${stats?.emailGenerationPendingCount} pending).`
-              : 'Active generation pass drained. Retrying failures automatically with backoff.'}
+              : 'Active generation pass drained. Retrying failures in a continuous circular queue (2-min turns).'}
           </p>
         </div>
 
@@ -945,7 +945,7 @@ export function ProcessingPipelineSection({
                             </span>
                           </td>
                           <td className="py-2.5 px-3 text-muted-foreground font-medium">
-                            <span className="text-red-700 dark:text-red-400 font-semibold">{r.generationAttemptCount}</span> / 5
+                            <span className="text-red-700 dark:text-red-400 font-semibold">#{r.generationAttemptCount}</span>
                           </td>
                           <td className="py-2.5 px-3 max-w-[280px]">
                             {r.lastGenerationErrorCategory && (
@@ -1174,7 +1174,7 @@ export function ProcessingPipelineSection({
                 </div>
                 <div>
                   <span className="text-muted-foreground block text-[11px]">Generation Attempts:</span>
-                  <span className="font-semibold text-foreground">{inspectFailure.generationAttemptCount} of 5</span>
+                  <span className="font-semibold text-foreground">Attempt #{inspectFailure.generationAttemptCount} (Terminal)</span>
                 </div>
                 <div>
                   <span className="text-muted-foreground block text-[11px]">Failure Timestamp:</span>

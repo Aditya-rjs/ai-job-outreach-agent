@@ -33,6 +33,9 @@ export const contacts = sqliteTable('contacts', {
   lastGenerationErrorCategory: text('last_generation_error_category'),
   nextGenerationRetryAt: text('next_generation_retry_at'),
   lastGenerationAttemptAt: text('last_generation_attempt_at'),
+  retryQueueEnqueuedAt: text('retry_queue_enqueued_at'),
+  retryTurnStartedAt: text('retry_turn_started_at'),
+  retryTurnConsumedMs: integer('retry_turn_consumed_ms').default(0).notNull(),
   createdAt: text('created_at').notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
 }, (table) => ([
@@ -41,5 +44,6 @@ export const contacts = sqliteTable('contacts', {
   index('idx_contacts_status').on(table.status),
   index('idx_contacts_gen_status').on(table.generationStatus),
   index('idx_contacts_next_gen_retry').on(table.nextGenerationRetryAt),
+  index('idx_contacts_retry_queue_enqueued').on(table.retryQueueEnqueuedAt),
 ]));
 

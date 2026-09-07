@@ -2,7 +2,15 @@ import { callGemini, getGeminiClient, GEMINI_PRIORITIES, categorizeGeminiError }
 import { callAi } from './ai-dispatcher';
 import { isOpenRouterConfigured } from './openrouter-client';
 import { checkEmailSimilarity } from './similarity';
+import {
+  extractAndParseEmailJson,
+  AiOutputInvalidError,
+  isAiOutputInvalidError,
+  type ParsedEmailOutput,
+} from './json-parser';
 import type { StructuredResumeProfile, GeneratedEmailResult } from '@/types';
+
+export { AiOutputInvalidError, isAiOutputInvalidError, extractAndParseEmailJson, type ParsedEmailOutput };
 
 export interface EmailGenerationInput {
   profile: StructuredResumeProfile;
@@ -252,43 +260,38 @@ export async function generatePersonalizedEmail(
         taskName: `email-gen-${input.companyName}`,
       });
       const responseText = aiRes.text;
-      const cleaned = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
-      const parsed = JSON.parse(cleaned);
+      const parsed = extractAndParseEmailJson(responseText, { provider: aiRes.provider });
 
-      if (
-        parsed &&
-        typeof parsed.subject === 'string' &&
-        typeof parsed.body === 'string' &&
-        parsed.subject.trim().length > 0 &&
-        parsed.body.trim().length > 0
-      ) {
-        const generatedResult: GeneratedEmailResult = {
-          subject: parsed.subject.trim(),
-          body: parsed.body.trim(),
-          strategy: typeof parsed.strategy === 'string' ? parsed.strategy : currentStrategy,
-          personalization_points: Array.isArray(parsed.personalization_points)
-            ? parsed.personalization_points.map(String)
+      const generatedResult: GeneratedEmailResult = {
+        subject: parsed.subject,
+        body: parsed.body,
+        strategy: parsed.strategy || currentStrategy,
+        personalization_points:
+          parsed.personalization_points && parsed.personalization_points.length > 0
+            ? parsed.personalization_points
             : [`Personalized for ${input.companyName}`],
-        };
+      };
 
-        // Check similarity against recent emails
-        if (input.recentEmails && input.recentEmails.length > 0) {
-          const { isTooSimilar, maxSimilarity } = checkEmailSimilarity(
-            generatedResult.body,
-            input.recentEmails,
-            dynamicWordsToIgnore,
-            0.65
+      // Check similarity against recent emails
+      if (input.recentEmails && input.recentEmails.length > 0) {
+        const { isTooSimilar, maxSimilarity } = checkEmailSimilarity(
+          generatedResult.body,
+          input.recentEmails,
+          dynamicWordsToIgnore,
+          0.65
+        );
+
+        if (isTooSimilar && attempt < maxAttempts) {
+          console.log(
+            `Generated email was ${(maxSimilarity * 100).toFixed(1)}% similar to recent emails. Regenerating with different strategy...`
           );
-
-          if (isTooSimilar && attempt < maxAttempts) {
-            console.log(`Generated email was ${(maxSimilarity * 100).toFixed(1)}% similar to recent emails. Regenerating with different strategy...`);
-            avoidGuidance = 'The previous draft was structurally too similar to another email. Vary the sentence structure, paragraph order, and opening phrasing significantly.';
-            continue;
-          }
+          avoidGuidance =
+            'The previous draft was structurally too similar to another email. Vary the sentence structure, paragraph order, and opening phrasing significantly.';
+          continue;
         }
-
-        return generatedResult;
       }
+
+      return generatedResult;
     } catch (err) {
       console.warn(`AI email generation attempt ${attempt} failed:`, err);
       if (input.strictGemini) {
