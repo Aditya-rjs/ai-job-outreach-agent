@@ -332,7 +332,15 @@ export async function reconcilePendingEmailGenerations(options: {
           .run();
       } else {
         db.update(outreachQueue)
-          .set({ status: 'pending', updatedAt: finishTimestamp })
+          .set({
+            status: 'pending',
+            attempts: 0,
+            workerId: null,
+            leaseExpiresAt: null,
+            lastAttemptAt: null,
+            errorMessage: null,
+            updatedAt: finishTimestamp,
+          })
           .where(eq(outreachQueue.id, existingQueue.id))
           .run();
       }

@@ -8,6 +8,7 @@ import type { ApiResponse, ResumeData, StructuredResumeProfile } from '@/types';
 import fs from 'fs';
 import path from 'path';
 import { getResumesDir } from '@/lib/config/paths';
+import { invalidateStaleResumeContacts } from '@/lib/scheduler/queue-manager';
 
 let initialized = false;
 function ensureInitialized() {
@@ -128,6 +129,12 @@ export async function POST(
         set: recordData,
       })
       .run();
+
+    // Immediately invalidate contacts generated with prior resume versions so they can be regenerated autonomously
+    const invalidatedCount = invalidateStaleResumeContacts(version);
+    if (invalidatedCount > 0) {
+      console.log(`[Resume Upload] Invalidated ${invalidatedCount} contacts with stale resume versions for autonomous regeneration.`);
+    }
 
     return NextResponse.json({
       success: true,

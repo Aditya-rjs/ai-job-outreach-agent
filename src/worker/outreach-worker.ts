@@ -212,15 +212,6 @@ async function runWorkerLoop() {
       console.log(`[Outreach Worker] Processing queue item ${queueItem.id} for: ${contact.email} (${contact.companyName || 'Unknown Company'})`);
       console.log(`[Outreach Worker] Attempt count: ${queueItem.attempts + 1}`);
 
-      // Record send attempt timestamp in persistent scheduler state immediately
-      db.update(schedulerState)
-        .set({
-          lastSendAttemptAt: attemptTimestamp,
-          nextSendAt: new Date(Date.now() + intervalMinutes * 60 * 1000).toISOString(),
-        })
-        .where(eq(schedulerState.id, 'singleton'))
-        .run();
-
       const sendResult = await sendOutreachEmail(contact.id);
 
       if (sendResult.success) {
@@ -249,17 +240,51 @@ async function runWorkerLoop() {
             .where(eq(schedulerState.id, 'singleton'))
             .run();
         }
+
+        // Check if this send completed a batch
+        checkBatchCompletions();
+
+        // Enforce the 3-minute gap
+        console.log(`[Outreach Worker] Send complete. Sleeping for ${intervalMinutes} minutes before next eligible send attempt...`);
+        await sleep(intervalMinutes * 60 * 1000);
       } else {
         console.warn(`[Outreach Worker] Send failed for ${contact.email}: ${sendResult.error} (${sendResult.errorCategory})`);
-        // Failed attempt still respects 3-minute interval before next attempt
+        checkBatchCompletions();
+
+        if (sendResult.errorCategory === 'validation' || sendResult.errorCategory === 'duplicate') {
+          // Validation/duplicate checks failed prior to Gmail dispatch.
+          // No send was attempted. Do NOT advance 3-minute send pacing; proceed immediately to next eligible send.
+          console.log(`[Outreach Worker] Non-dispatch validation/duplicate resolution. Proceeding to next job without 3-minute wait.`);
+          await sleep(1000);
+        } else if (sendResult.errorCategory === 'uncertain') {
+          // Uncertain outcome: Gmail API call was made but connection dropped.
+          // Anti-duplicate protection: Preserved as uncertain; never retried.
+          // Enforce 3-minute pacing to protect network.
+          db.update(schedulerState)
+            .set({
+              lastSendAttemptAt: attemptTimestamp,
+              nextSendAt: new Date(Date.now() + intervalMinutes * 60 * 1000).toISOString(),
+            })
+            .where(eq(schedulerState.id, 'singleton'))
+            .run();
+
+          console.log(`[Outreach Worker] Uncertain outcome recorded. Enforcing ${intervalMinutes}-min gap before next send attempt...`);
+          await sleep(intervalMinutes * 60 * 1000);
+        } else {
+          // Dispatch attempt failed (auth, network, etc.).
+          // Enforce 3-minute pacing.
+          db.update(schedulerState)
+            .set({
+              lastSendAttemptAt: attemptTimestamp,
+              nextSendAt: new Date(Date.now() + intervalMinutes * 60 * 1000).toISOString(),
+            })
+            .where(eq(schedulerState.id, 'singleton'))
+            .run();
+
+          console.log(`[Outreach Worker] Send error encountered. Sleeping for ${intervalMinutes} minutes before next attempt...`);
+          await sleep(intervalMinutes * 60 * 1000);
+        }
       }
-
-      // Check if this send completed a batch
-      checkBatchCompletions();
-
-      // Enforce the 3-minute gap
-      console.log(`[Outreach Worker] Send complete. Sleeping for ${intervalMinutes} minutes before next eligible send attempt...`);
-      await sleep(intervalMinutes * 60 * 1000);
     } catch (loopErr) {
       console.error('[Outreach Worker] Unexpected error in worker loop:', loopErr);
       await sleep(10000);

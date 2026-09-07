@@ -1,11 +1,100 @@
 import { getDb } from '@/db';
-import { contacts, batches, outreachQueue, schedulerState, settings } from '@/db/schema';
-import { eq, and, sql, asc, desc } from 'drizzle-orm';
+import { contacts, batches, outreachQueue, schedulerState, settings, resume } from '@/db/schema';
+import { eq, and, sql, asc, desc, inArray, ne, or, isNotNull } from 'drizzle-orm';
 import { getLocalDateString, getConfiguredTimezone, getCooldownCutoffIso } from './time-utils';
 import type { QueueItem, Contact } from '@/types';
 
 const QUEUE_ITEM_LEASE_MS = 60 * 1000; // 60 seconds lease per item
 const MAX_TRANSIENT_ATTEMPTS = 3;
+
+/**
+ * Safely marks a contact as having a stale resume, routing it back to PENDING_GENERATION
+ * and settling its outreach_queue item so it cannot block or starve the send queue.
+ */
+export function markContactStaleResumeForRegeneration(contactId: string): void {
+  const db = getDb();
+  const nowIso = new Date().toISOString();
+
+  db.update(contacts)
+    .set({
+      status: 'queued',
+      generationStatus: 'PENDING_GENERATION',
+      generationAttemptCount: 0,
+      generationClaimToken: null,
+      generationLeaseExpiresAt: null,
+      nextGenerationRetryAt: null,
+      lastGenerationErrorCategory: null,
+      errorMessage: 'Active resume updated after email generated. Queued for autonomous regeneration.',
+      emailSubject: null,
+      emailBody: null,
+      emailStrategy: null,
+      personalizationPoints: null,
+      resumeVersion: null,
+      updatedAt: nowIso,
+    })
+    .where(eq(contacts.id, contactId))
+    .run();
+
+  db.delete(outreachQueue)
+    .where(eq(outreachQueue.contactId, contactId))
+    .run();
+}
+
+/**
+ * Batch invalidates all existing generated/queued contacts that were generated
+ * using a prior resume version, making them immediately eligible for autonomous
+ * regeneration with the new resume.
+ */
+export function invalidateStaleResumeContacts(activeResumeVersion: string): number {
+  const db = getDb();
+  const nowIso = new Date().toISOString();
+
+  const staleRows = db
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(
+      and(
+        sql`contacts.status NOT IN ('sent', 'simulated', 'failed', 'skipped', 'uncertain')`,
+        or(
+          and(isNotNull(contacts.resumeVersion), ne(contacts.resumeVersion, activeResumeVersion)),
+          and(eq(contacts.status, 'generated'), ne(sql`COALESCE(${contacts.resumeVersion}, '')`, activeResumeVersion))
+        )
+      )
+    )
+    .all();
+
+  if (staleRows.length === 0) {
+    return 0;
+  }
+
+  const staleIds = staleRows.map((r) => r.id);
+
+  db.update(contacts)
+    .set({
+      status: 'queued',
+      generationStatus: 'PENDING_GENERATION',
+      generationAttemptCount: 0,
+      generationClaimToken: null,
+      generationLeaseExpiresAt: null,
+      nextGenerationRetryAt: null,
+      lastGenerationErrorCategory: null,
+      errorMessage: 'Active resume updated after email generated. Queued for autonomous regeneration.',
+      emailSubject: null,
+      emailBody: null,
+      emailStrategy: null,
+      personalizationPoints: null,
+      resumeVersion: null,
+      updatedAt: nowIso,
+    })
+    .where(inArray(contacts.id, staleIds))
+    .run();
+
+  db.delete(outreachQueue)
+    .where(inArray(outreachQueue.contactId, staleIds))
+    .run();
+
+  return staleIds.length;
+}
 
 export interface NextEligibleJob {
   queueItem: QueueItem;
@@ -159,6 +248,16 @@ export function recoverStaleProcessingItems(): number {
       continue;
     }
 
+    // Check if resume was updated since this email was generated
+    const resumeRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();
+    const activeResumeVersion = resumeRecord ? (resumeRecord.version || resumeRecord.uploadedAt) : null;
+    if (activeResumeVersion && contact.resumeVersion && contact.resumeVersion !== activeResumeVersion) {
+      markContactStaleResumeForRegeneration(contact.id);
+      recoveredCount++;
+      console.log(`[Crash Recovery] Stale resume detected for item ${item.id} (${contact.email}). Routed to PENDING_GENERATION.`);
+      continue;
+    }
+
     // Definitely not sent - check attempt count
     if (item.attempts >= MAX_TRANSIENT_ATTEMPTS) {
       db.update(outreachQueue)
@@ -213,6 +312,10 @@ export function acquireNextEligibleJob(workerId: string): NextEligibleJob | null
   const leaseExpiresAt = new Date(now.getTime() + QUEUE_ITEM_LEASE_MS).toISOString();
   const cooldownCutoffIso = getCooldownCutoffIso(now.getTime());
 
+  // Check active resume version
+  const resumeRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();
+  const activeResumeVersion = resumeRecord ? (resumeRecord.version || resumeRecord.uploadedAt) : null;
+
   // Find candidate items ordered by: priority desc, scheduledFor asc, createdAt asc, id asc
   const candidates = db
     .select({
@@ -255,43 +358,52 @@ export function acquireNextEligibleJob(workerId: string): NextEligibleJob | null
       asc(outreachQueue.createdAt),
       asc(outreachQueue.id)
     )
-    .limit(1)
+    .limit(10)
     .all();
 
   if (candidates.length === 0) {
     return null;
   }
 
-  const { queue: candidateQueue, contact: candidateContact } = candidates[0];
+  for (const { queue: candidateQueue, contact: candidateContact } of candidates) {
+    // If active resume exists and contact's resumeVersion is outdated, auto-heal to PENDING_GENERATION
+    if (activeResumeVersion && candidateContact.resumeVersion && candidateContact.resumeVersion !== activeResumeVersion) {
+      console.log(`[Queue Manager] Stale resume detected for candidate ${candidateContact.id} (${candidateContact.email}). Auto-healing to PENDING_GENERATION.`);
+      markContactStaleResumeForRegeneration(candidateContact.id);
+      continue;
+    }
 
-  // Atomically claim the queue item with worker lease
-  const claimResult = db.run(sql`
-    UPDATE outreach_queue
-    SET
-      status = 'processing',
-      worker_id = ${workerId},
-      lease_expires_at = ${leaseExpiresAt},
-      last_attempt_at = ${nowIso},
-      updated_at = ${nowIso}
-    WHERE id = ${candidateQueue.id}
-      AND (status = 'pending' OR (status = 'failed' AND attempts < ${MAX_TRANSIENT_ATTEMPTS}))
-  `);
+    // Atomically claim the queue item with worker lease
+    const claimResult = db.run(sql`
+      UPDATE outreach_queue
+      SET
+        status = 'processing',
+        worker_id = ${workerId},
+        lease_expires_at = ${leaseExpiresAt},
+        last_attempt_at = ${nowIso},
+        updated_at = ${nowIso}
+      WHERE id = ${candidateQueue.id}
+        AND (status = 'pending' OR (status = 'failed' AND attempts < ${MAX_TRANSIENT_ATTEMPTS}))
+    `);
 
-  if (claimResult.changes === 0) {
-    // Another worker grabbed it simultaneously
-    return null;
+    if (claimResult.changes === 0) {
+      // Another worker grabbed it simultaneously
+      continue;
+    }
+
+    return {
+      queueItem: {
+        ...candidateQueue,
+        status: 'processing',
+        workerId,
+        leaseExpiresAt,
+        lastAttemptAt: nowIso,
+      } as QueueItem,
+      contact: candidateContact as Contact,
+    };
   }
 
-  return {
-    queueItem: {
-      ...candidateQueue,
-      status: 'processing',
-      workerId,
-      leaseExpiresAt,
-      lastAttemptAt: nowIso,
-    } as QueueItem,
-    contact: candidateContact as Contact,
-  };
+  return null;
 }
 
 /**

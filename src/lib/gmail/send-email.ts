@@ -8,6 +8,7 @@ import { buildMimeMessage } from './mime-builder';
 import { normalizeEmail, isValidEmail } from '@/lib/utils';
 import { isEmailInCooldown, getCooldownExpiresAt } from '@/lib/scheduler/time-utils';
 import { getResumesDir } from '@/lib/config/paths';
+import { markContactStaleResumeForRegeneration } from '@/lib/scheduler/queue-manager';
 import type { Contact } from '@/types';
 
 export interface SendResult {
@@ -28,29 +29,25 @@ function getActiveResumeAttachment(): {
   const db = getDb();
   const resumeRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();
 
-  if (!resumeRecord || !resumeRecord.filePath) {
-    throw new Error('Cannot send email because no active resume is available. Please upload a resume in Settings.');
+  if (!resumeRecord) {
+    throw new Error('No active resume uploaded. Please upload a resume before sending outreach emails.');
   }
 
-  let resolvedFilePath = resumeRecord.filePath;
-  if (!fs.existsSync(resolvedFilePath)) {
-    // Fallback: check if the file exists under the current resumesDir (e.g. if DATA_DIR changed or migrated to Railway volume)
-    const fallbackPath = path.join(getResumesDir(), path.basename(resumeRecord.filePath));
-    if (fs.existsSync(fallbackPath)) {
-      resolvedFilePath = fallbackPath;
-    } else {
-      throw new Error(`Resume file not found on disk at ${resumeRecord.filePath} (or ${fallbackPath}). Please re-upload your resume.`);
-    }
+  const resumesDir = getResumesDir();
+  let candidatePath = resumeRecord.filePath;
+  if (!fs.existsSync(candidatePath)) {
+    candidatePath = path.join(resumesDir, path.basename(resumeRecord.filePath));
   }
 
-  const content = fs.readFileSync(resolvedFilePath);
-  if (!content || content.length === 0) {
-    throw new Error('Active resume file is empty.');
+  if (!fs.existsSync(candidatePath)) {
+    throw new Error(`Active resume file not found on disk at ${candidatePath}. Please re-upload your resume.`);
   }
 
+  const content = fs.readFileSync(candidatePath);
   const version = resumeRecord.version || resumeRecord.uploadedAt;
+
   return {
-    filename: resumeRecord.filename || 'Resume.pdf',
+    filename: resumeRecord.filename || 'resume.pdf',
     content,
     version,
   };
@@ -65,15 +62,21 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
   // 1. Fetch Contact
   const contact = db.select().from(contacts).where(eq(contacts.id, contactId)).get() as Contact | undefined;
   if (!contact) {
+    db.delete(outreachQueue).where(eq(outreachQueue.contactId, contactId)).run();
     return { success: false, error: `Contact "${contactId}" not found.`, errorCategory: 'validation' };
   }
 
   // 1b. Validate parent batch existence and active status
   const parentBatch = db.select().from(batches).where(eq(batches.id, contact.batchId)).get();
   if (!parentBatch) {
+    db.delete(outreachQueue).where(eq(outreachQueue.contactId, contact.id)).run();
     return { success: false, error: `Parent batch "${contact.batchId}" not found.`, errorCategory: 'validation' };
   }
   if (parentBatch.status === 'deleted' || parentBatch.status === 'cancelled') {
+    db.update(outreachQueue)
+      .set({ status: 'cancelled', updatedAt: new Date().toISOString() })
+      .where(eq(outreachQueue.contactId, contact.id))
+      .run();
     return {
       success: false,
       error: `Parent batch "${parentBatch.filename}" has been ${parentBatch.status}. Outreach send blocked.`,
@@ -84,16 +87,30 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
   // 2. Validate email format
   const normalizedTo = normalizeEmail(contact.email);
   if (!isValidEmail(normalizedTo)) {
+    db.update(contacts)
+      .set({ status: 'failed', emailValid: false, errorMessage: `Invalid recipient email address: ${contact.email}`, updatedAt: new Date().toISOString() })
+      .where(eq(contacts.id, contact.id))
+      .run();
+    db.delete(outreachQueue).where(eq(outreachQueue.contactId, contact.id)).run();
     return { success: false, error: `Invalid recipient email address: ${contact.email}`, errorCategory: 'validation' };
   }
 
   // 3. Relevance check
   if (contact.isRelevant === false) {
+    db.update(contacts)
+      .set({ status: 'skipped', errorMessage: 'Contact company was marked as non-tech/irrelevant.', updatedAt: new Date().toISOString() })
+      .where(eq(contacts.id, contact.id))
+      .run();
+    db.delete(outreachQueue).where(eq(outreachQueue.contactId, contact.id)).run();
     return { success: false, error: 'Contact company was marked as non-tech/irrelevant.', errorCategory: 'validation' };
   }
 
   // 4. Sent check on contact record
   if (contact.status === 'sent' || contact.sentAt) {
+    db.update(outreachQueue)
+      .set({ status: 'completed', updatedAt: new Date().toISOString() })
+      .where(eq(outreachQueue.contactId, contact.id))
+      .run();
     return { success: false, error: 'This contact has already been sent an outreach email.', errorCategory: 'duplicate' };
   }
 
@@ -112,6 +129,7 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
       })
       .where(eq(contacts.id, contact.id))
       .run();
+    db.delete(outreachQueue).where(eq(outreachQueue.contactId, contact.id)).run();
 
     return {
       success: false,
@@ -122,6 +140,17 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
 
   // 6. Generated email check
   if (!contact.emailSubject || !contact.emailBody) {
+    db.update(contacts)
+      .set({
+        status: 'queued',
+        generationStatus: 'PENDING_GENERATION',
+        generationAttemptCount: 0,
+        errorMessage: 'Personalized email missing. Queued for autonomous generation.',
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(contacts.id, contact.id))
+      .run();
+    db.delete(outreachQueue).where(eq(outreachQueue.contactId, contact.id)).run();
     return {
       success: false,
       error: 'No personalized email has been generated for this contact yet. Please generate the email first.',
@@ -134,6 +163,10 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
   try {
     resumeAttachment = getActiveResumeAttachment();
   } catch (resumeErr) {
+    db.update(outreachQueue)
+      .set({ status: 'pending', workerId: null, leaseExpiresAt: null, updatedAt: new Date().toISOString() })
+      .where(eq(outreachQueue.contactId, contact.id))
+      .run();
     return {
       success: false,
       error: resumeErr instanceof Error ? resumeErr.message : 'Resume attachment unavailable.',
@@ -143,6 +176,7 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
 
   // 8. Resume version match check (Requirement 13)
   if (contact.resumeVersion && contact.resumeVersion !== resumeAttachment.version) {
+    markContactStaleResumeForRegeneration(contact.id);
     return {
       success: false,
       error: 'The active resume was updated after this email was generated. Please regenerate the email before sending to reflect your latest credentials.',
@@ -166,6 +200,10 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
     try {
       gmailClient = await getAuthenticatedGmailClient();
     } catch (authErr) {
+      db.update(outreachQueue)
+        .set({ status: 'pending', workerId: null, leaseExpiresAt: null, updatedAt: new Date().toISOString() })
+        .where(eq(outreachQueue.contactId, contact.id))
+        .run();
       return {
         success: false,
         error: authErr instanceof Error ? authErr.message : 'Gmail is not connected or authorization expired.',
