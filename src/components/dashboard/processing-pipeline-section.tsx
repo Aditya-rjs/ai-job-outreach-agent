@@ -377,12 +377,23 @@ export function ProcessingPipelineSection({
                 {stats?.generationRetryCount ?? 0}
               </p>
             </div>
-            <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-orange-100 text-orange-800 border border-orange-300 shrink-0">
-              Backoff
+            <span
+              className={cn(
+                'rounded-full px-2 py-0.5 text-[10px] font-bold shrink-0',
+                (stats?.emailGenerationPendingCount ?? 0) > 0 && (stats?.generationRetryCount ?? 0) > 0
+                  ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                  : 'bg-orange-100 text-orange-800 border border-orange-300'
+              )}
+            >
+              {(stats?.emailGenerationPendingCount ?? 0) > 0 && (stats?.generationRetryCount ?? 0) > 0
+                ? 'Waiting on Active'
+                : 'Eligible'}
             </span>
           </div>
           <p className="text-[11px] text-muted-foreground mt-2 leading-tight">
-            Encountered transient rate limit or timeout. Retrying automatically with backoff.
+            {(stats?.emailGenerationPendingCount ?? 0) > 0 && (stats?.generationRetryCount ?? 0) > 0
+              ? `Waiting for active generation pass to drain (${stats?.emailGenerationPendingCount} pending).`
+              : 'Active generation pass drained. Retrying failures automatically with backoff.'}
           </p>
         </div>
 
@@ -837,47 +848,64 @@ export function ProcessingPipelineSection({
 
                 {/* 3. GENERATION RETRY VIEW */}
                 {activeCategory === 'generation-retry' && (
-                  <table className="w-full text-xs text-left min-w-[650px]">
-                    <thead>
-                      <tr className="border-b border-border/70 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                        <th className="py-2.5 px-3">Recipient</th>
-                        <th className="py-2.5 px-3">Company</th>
-                        <th className="py-2.5 px-3">Email</th>
-                        <th className="py-2.5 px-3">Error Category</th>
-                        <th className="py-2.5 px-3">Attempt #</th>
-                        <th className="py-2.5 px-3">Next Retry</th>
-                        <th className="py-2.5 px-3 text-right">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border/60">
-                      {genRetryRecords.map((r) => (
-                        <tr key={r.id} className="hover:bg-muted/30 transition-colors">
-                          <td className="py-2.5 px-3 font-medium text-foreground">
-                            {r.contactName || 'Unknown Recipient'}
-                          </td>
-                          <td className="py-2.5 px-3 text-muted-foreground">{r.companyName || '—'}</td>
-                          <td className="py-2.5 px-3 font-mono text-[11px] text-muted-foreground">{r.email}</td>
-                          <td className="py-2.5 px-3">
-                            <span className="font-mono text-[11px] font-semibold text-orange-700 dark:text-orange-400 bg-orange-50 px-1.5 py-0.5 rounded border border-orange-200">
-                              {r.lastGenerationErrorCategory || 'TRANSIENT_ERROR'}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3 text-muted-foreground font-medium">
-                            Attempt {r.generationAttemptCount}
-                          </td>
-                          <td className="py-2.5 px-3 font-mono text-[11px] text-muted-foreground">
-                            {r.nextGenerationRetryAt ? new Date(r.nextGenerationRetryAt).toLocaleTimeString() : 'Scheduled'}
-                          </td>
-                          <td className="py-2.5 px-3 text-right">
-                            <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-orange-100 text-orange-900 border border-orange-300">
-                              <span className="h-1.5 w-1.5 rounded-full bg-orange-500 animate-pulse" />
-                              Retrying automatically
-                            </span>
-                          </td>
+                  <>
+                    {(stats?.emailGenerationPendingCount ?? 0) > 0 && (
+                      <div className="mb-4 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 p-3 flex items-start gap-2.5 text-xs text-amber-800 dark:text-amber-300">
+                        <Info className="h-4 w-4 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-semibold">Generation Retries Waiting:</span> Active email generation is currently in progress ({stats?.emailGenerationPendingCount} pending). Following round-based scheduling, retries will begin automatically once active generation reaches 0.
+                        </div>
+                      </div>
+                    )}
+                    <table className="w-full text-xs text-left min-w-[650px]">
+                      <thead>
+                        <tr className="border-b border-border/70 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                          <th className="py-2.5 px-3">Recipient</th>
+                          <th className="py-2.5 px-3">Company</th>
+                          <th className="py-2.5 px-3">Email</th>
+                          <th className="py-2.5 px-3">Error Category</th>
+                          <th className="py-2.5 px-3">Attempt #</th>
+                          <th className="py-2.5 px-3">Next Retry</th>
+                          <th className="py-2.5 px-3 text-right">Status</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-border/60">
+                        {genRetryRecords.map((r) => (
+                          <tr key={r.id} className="hover:bg-muted/30 transition-colors">
+                            <td className="py-2.5 px-3 font-medium text-foreground">
+                              {r.contactName || 'Unknown Recipient'}
+                            </td>
+                            <td className="py-2.5 px-3 text-muted-foreground">{r.companyName || '—'}</td>
+                            <td className="py-2.5 px-3 font-mono text-[11px] text-muted-foreground">{r.email}</td>
+                            <td className="py-2.5 px-3">
+                              <span className="font-mono text-[11px] font-semibold text-orange-700 dark:text-orange-400 bg-orange-50 px-1.5 py-0.5 rounded border border-orange-200">
+                                {r.lastGenerationErrorCategory || 'TRANSIENT_ERROR'}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-muted-foreground font-medium">
+                              Attempt {r.generationAttemptCount}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-[11px] text-muted-foreground">
+                              {r.nextGenerationRetryAt ? new Date(r.nextGenerationRetryAt).toLocaleTimeString() : 'Scheduled'}
+                            </td>
+                            <td className="py-2.5 px-3 text-right">
+                              {(stats?.emailGenerationPendingCount ?? 0) > 0 ? (
+                                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-amber-100 text-amber-900 border border-amber-300">
+                                  <Clock className="h-3 w-3 text-amber-600 shrink-0" />
+                                  Waiting on Active
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-orange-100 text-orange-900 border border-orange-300">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-orange-500 animate-pulse shrink-0" />
+                                  Eligible for Retry
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
                 )}
 
                 {/* 3b. GENERATION FAILED VIEW */}

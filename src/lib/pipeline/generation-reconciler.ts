@@ -19,6 +19,9 @@ export interface GenerationReconcileResult {
   failed: number;
   recovered: number;
   skippedReason?: string;
+  activePass?: 'ACTIVE_GENERATION' | 'GENERATION_RETRY' | 'IDLE';
+  activePendingCount?: number;
+  retryWaitingCount?: number;
 }
 
 /**
@@ -78,10 +81,80 @@ export function resetGenerationActiveClaimsForTesting(): void {
 }
 
 /**
+ * Returns the current persistent state of generation rounds:
+ * - activePendingCount: fresh contacts waiting for initial generation (PENDING_GENERATION or actively GENERATING)
+ * - retryWaitingCount: contacts with transient errors waiting for active generation to drain (RETRY_PENDING)
+ * - isCurrentRoundDrained: true when activePendingCount === 0
+ */
+export function getGenerationRoundState(
+  db: ReturnType<typeof getDb> = getDb(),
+  batchId?: string
+): {
+  activePendingCount: number;
+  retryWaitingCount: number;
+  isCurrentRoundDrained: boolean;
+} {
+  const batchCondition = batchId
+    ? sql`AND contacts.batch_id = ${batchId}`
+    : sql`AND batches.status NOT IN ('deleted', 'cancelled')`;
+
+  const row = db.get<{
+    activePending: number;
+    retryWaiting: number;
+  }>(sql`
+    SELECT
+      COALESCE(SUM(
+        CASE
+          WHEN contacts.is_relevant = 1
+            AND contacts.email_valid = 1
+            AND contacts.is_duplicate = 0
+            AND contacts.sent_at IS NULL
+            AND contacts.generation_status != 'GENERATED'
+            AND (
+              contacts.generation_status IN ('PENDING_GENERATION', 'GENERATING')
+              OR (
+                contacts.generation_status IS NULL
+                AND contacts.status IN ('queued', 'generating', 'discovered')
+                AND (contacts.email_subject IS NULL OR contacts.email_body IS NULL OR TRIM(contacts.email_subject) = '' OR TRIM(contacts.email_body) = '')
+              )
+            )
+          THEN 1
+          ELSE 0
+        END
+      ), 0) as activePending,
+      COALESCE(SUM(
+        CASE
+          WHEN contacts.is_relevant = 1
+            AND contacts.email_valid = 1
+            AND contacts.is_duplicate = 0
+            AND contacts.sent_at IS NULL
+            AND contacts.generation_status = 'RETRY_PENDING'
+          THEN 1
+          ELSE 0
+        END
+      ), 0) as retryWaiting
+    FROM contacts
+    INNER JOIN batches ON contacts.batch_id = batches.id
+    WHERE 1=1
+      ${batchCondition}
+  `);
+
+  const activePendingCount = row?.activePending ?? 0;
+  const retryWaitingCount = row?.retryWaiting ?? 0;
+
+  return {
+    activePendingCount,
+    retryWaitingCount,
+    isCurrentRoundDrained: activePendingCount === 0,
+  };
+}
+
+/**
  * Periodically processes contacts pending AI email generation in the background.
  * Completely autonomous: runs independently of browser activity.
  */
 export async function reconcilePendingEmailGenerations(options: {
+  batchId?: string;
   batchSize?: number;
   claimWorkerId?: string;
   aiCallerOverride?: (prompt: string) => Promise<string>;
@@ -123,7 +196,6 @@ export async function reconcilePendingEmailGenerations(options: {
     };
   }
 
-
   let profile: StructuredResumeProfile;
   try {
     profile = JSON.parse(resumeRecord.parsedData);
@@ -140,59 +212,103 @@ export async function reconcilePendingEmailGenerations(options: {
 
   const resumeVersion = resumeRecord.version || resumeRecord.uploadedAt;
 
-  // 3. Find candidate contacts eligible for email generation
-  // Rules:
-  // - Company classification is RELEVANT
-  // - Valid email
-  // - Not a duplicate
-  // - Batch is not deleted or cancelled
-  // - Not previously successfully contacted in global history
-  // - generationStatus is PENDING_GENERATION OR RETRY_PENDING (with next_generation_retry_at <= now)
-  // - NEVER touch contacts already GENERATED
-  const cooldownCutoffIso = getCooldownCutoffIso(now.getTime());
+  // 4. Evaluate Round State: Active Generation Pass vs Generation Retry Pass
+  // Invariant: Generation Retry may begin ONLY when current active Email Gen Pending count is strictly zero.
+  const roundState = getGenerationRoundState(db, options.batchId);
 
-  const candidates = db
-    .select({
-      contact: contacts,
-    })
-    .from(contacts)
-    .innerJoin(batches, eq(contacts.batchId, batches.id))
-    .where(
-      sql`
-        batches.status NOT IN ('deleted', 'cancelled')
-        AND contacts.is_relevant = 1
-        AND contacts.email_valid = 1
-        AND contacts.is_duplicate = 0
-        AND contacts.sent_at IS NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM global_email_history
-          WHERE global_email_history.email = LOWER(TRIM(contacts.email))
-            AND global_email_history.status = 'sent'
-            AND global_email_history.sent_at IS NOT NULL
-            AND global_email_history.sent_at > ${cooldownCutoffIso}
-        )
-        AND (
-          contacts.generation_status = 'PENDING_GENERATION'
-          OR (
-            contacts.generation_status = 'RETRY_PENDING'
-            AND (contacts.next_generation_retry_at IS NULL OR contacts.next_generation_retry_at <= ${nowIso})
+  const cooldownCutoffIso = getCooldownCutoffIso(now.getTime());
+  const batchFilter = options.batchId
+    ? sql`AND contacts.batch_id = ${options.batchId}`
+    : sql`AND batches.status NOT IN ('deleted', 'cancelled')`;
+
+  let candidates: Contact[] = [];
+  let activePass: 'ACTIVE_GENERATION' | 'GENERATION_RETRY' | 'IDLE' = 'IDLE';
+
+  if (roundState.activePendingCount > 0) {
+    // PASS 1: ACTIVE GENERATION PASS
+    // Email Gen Pending > 0: Retries must WAIT. Only fresh pending generation contacts are eligible.
+    activePass = 'ACTIVE_GENERATION';
+    candidates = db
+      .select({
+        contact: contacts,
+      })
+      .from(contacts)
+      .innerJoin(batches, eq(contacts.batchId, batches.id))
+      .where(
+        sql`
+          1=1
+          ${batchFilter}
+          AND contacts.is_relevant = 1
+          AND contacts.email_valid = 1
+          AND contacts.is_duplicate = 0
+          AND contacts.sent_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM global_email_history
+            WHERE global_email_history.email = LOWER(TRIM(contacts.email))
+              AND global_email_history.status = 'sent'
+              AND global_email_history.sent_at IS NOT NULL
+              AND global_email_history.sent_at > ${cooldownCutoffIso}
           )
-          OR (
-            contacts.generation_status IS NULL
-            AND contacts.status = 'queued'
-            AND (contacts.email_subject IS NULL OR contacts.email_body IS NULL)
+          AND (
+            contacts.generation_status = 'PENDING_GENERATION'
+            OR (
+              contacts.generation_status IS NULL
+              AND contacts.status = 'queued'
+              AND (contacts.email_subject IS NULL OR contacts.email_body IS NULL)
+            )
           )
-        )
-        AND contacts.generation_status != 'GENERATED'
-      `
-    )
-    .orderBy(
-      asc(contacts.createdAt),
-      asc(contacts.id)
-    )
-    .limit(batchLimit)
-    .all()
-    .map((r) => r.contact as Contact);
+          AND (contacts.generation_lease_expires_at IS NULL OR contacts.generation_lease_expires_at < ${nowIso})
+          AND contacts.generation_status != 'GENERATED'
+        `
+      )
+      .orderBy(
+        asc(contacts.createdAt),
+        asc(contacts.id)
+      )
+      .limit(batchLimit)
+      .all()
+      .map((r) => r.contact as Contact);
+  } else if (roundState.retryWaitingCount > 0) {
+    // PASS 2: GENERATION RETRY PASS
+    // Email Gen Pending === 0: Active generation pass has completely drained.
+    // Generation Retry is now eligible to process waiting transient generation failures.
+    // Order by lowest generationAttemptCount first (Round 1 retries, then Round 2 retries, etc.)
+    activePass = 'GENERATION_RETRY';
+    candidates = db
+      .select({
+        contact: contacts,
+      })
+      .from(contacts)
+      .innerJoin(batches, eq(contacts.batchId, batches.id))
+      .where(
+        sql`
+          1=1
+          ${batchFilter}
+          AND contacts.is_relevant = 1
+          AND contacts.email_valid = 1
+          AND contacts.is_duplicate = 0
+          AND contacts.sent_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM global_email_history
+            WHERE global_email_history.email = LOWER(TRIM(contacts.email))
+              AND global_email_history.status = 'sent'
+              AND global_email_history.sent_at IS NOT NULL
+              AND global_email_history.sent_at > ${cooldownCutoffIso}
+          )
+          AND contacts.generation_status = 'RETRY_PENDING'
+          AND (contacts.generation_lease_expires_at IS NULL OR contacts.generation_lease_expires_at < ${nowIso})
+          AND contacts.generation_status != 'GENERATED'
+        `
+      )
+      .orderBy(
+        asc(contacts.generationAttemptCount),
+        asc(contacts.createdAt),
+        asc(contacts.id)
+      )
+      .limit(batchLimit)
+      .all()
+      .map((r) => r.contact as Contact);
+  }
 
   if (candidates.length === 0) {
     return {
@@ -201,6 +317,9 @@ export async function reconcilePendingEmailGenerations(options: {
       retryPending: 0,
       failed: 0,
       recovered,
+      activePass,
+      activePendingCount: roundState.activePendingCount,
+      retryWaitingCount: roundState.retryWaitingCount,
     };
   }
 
@@ -229,26 +348,65 @@ export async function reconcilePendingEmailGenerations(options: {
     const claimToken = `${workerId}_${ulid()}`;
     const leaseExpiresAt = new Date(Date.now() + GENERATION_LEASE_MS).toISOString();
 
-    // 4. Atomic claim lease
-    const claimResult = db.run(sql`
-      UPDATE contacts
-      SET generation_status = 'GENERATING',
-          generation_claim_token = ${claimToken},
-          generation_lease_expires_at = ${leaseExpiresAt},
-          last_generation_attempt_at = ${nowIso},
-          status = 'generating',
-          updated_at = ${nowIso}
-      WHERE id = ${contact.id}
-        AND (
-          generation_status IN ('PENDING_GENERATION', 'RETRY_PENDING')
-          OR generation_status IS NULL
-          OR generation_lease_expires_at < ${nowIso}
-        )
-        AND generation_status != 'GENERATED'
-    `);
+    const isRetryCandidate = contact.generationStatus === 'RETRY_PENDING';
+
+    // 5. Atomic claim lease with round safety invariant
+    let claimResult;
+    if (isRetryCandidate) {
+      // Invariant: Generation Retry may begin ONLY when the active Email Gen Pending count is strictly zero.
+      // Under SQLite write lock, verify no active pending generation contacts exist before leasing a retry item.
+      claimResult = db.run(sql`
+        UPDATE contacts
+        SET generation_status = 'GENERATING',
+            generation_claim_token = ${claimToken},
+            generation_lease_expires_at = ${leaseExpiresAt},
+            last_generation_attempt_at = ${nowIso},
+            status = 'generating',
+            updated_at = ${nowIso}
+        WHERE id = ${contact.id}
+          AND generation_status = 'RETRY_PENDING'
+          AND (generation_lease_expires_at IS NULL OR generation_lease_expires_at < ${nowIso})
+          AND NOT EXISTS (
+            SELECT 1 FROM contacts c2
+            INNER JOIN batches b2 ON c2.batch_id = b2.id
+            WHERE 1=1
+              ${options.batchId ? sql`AND b2.id = ${options.batchId}` : sql`AND b2.status NOT IN ('deleted', 'cancelled')`}
+              AND c2.is_relevant = 1
+              AND c2.email_valid = 1
+              AND c2.is_duplicate = 0
+              AND c2.sent_at IS NULL
+              AND c2.generation_status != 'GENERATED'
+              AND (
+                c2.generation_status IN ('PENDING_GENERATION', 'GENERATING')
+                OR (
+                  c2.generation_status IS NULL
+                  AND c2.status IN ('queued', 'generating', 'discovered')
+                  AND (c2.email_subject IS NULL OR c2.email_body IS NULL OR TRIM(c2.email_subject) = '' OR TRIM(c2.email_body) = '')
+                )
+              )
+          )
+      `);
+    } else {
+      claimResult = db.run(sql`
+        UPDATE contacts
+        SET generation_status = 'GENERATING',
+            generation_claim_token = ${claimToken},
+            generation_lease_expires_at = ${leaseExpiresAt},
+            last_generation_attempt_at = ${nowIso},
+            status = 'generating',
+            updated_at = ${nowIso}
+        WHERE id = ${contact.id}
+          AND (
+            generation_status = 'PENDING_GENERATION'
+            OR generation_status IS NULL
+            OR generation_lease_expires_at < ${nowIso}
+          )
+          AND generation_status != 'GENERATED'
+      `);
+    }
 
     if (claimResult.changes === 0) {
-      // Claimed by another worker or already generated
+      // Claimed by another worker, already generated, or an active pending job appeared preventing retry claim
       continue;
     }
 
@@ -359,10 +517,13 @@ export async function reconcilePendingEmailGenerations(options: {
             genErr.waitRemainingMs / 1000
           )}s). Releasing contact ${contact.email} claim without burning attempt count.`
         );
+        const revertStatus = isRetryCandidate ? 'RETRY_PENDING' : 'PENDING_GENERATION';
         db.update(contacts)
           .set({
+            generationStatus: revertStatus,
             generationClaimToken: null,
             generationLeaseExpiresAt: null,
+            status: 'queued',
             updatedAt: new Date().toISOString(),
           })
           .where(eq(contacts.id, contact.id))
@@ -458,6 +619,9 @@ export async function reconcilePendingEmailGenerations(options: {
     retryPending,
     failed,
     recovered,
+    activePass,
+    activePendingCount: roundState.activePendingCount,
+    retryWaitingCount: roundState.retryWaitingCount,
   };
 }
 
