@@ -7,6 +7,7 @@ import { categorizeGeminiError, globalGeminiLimiter } from '@/lib/ai/gemini-clie
 import { isOpenRouterConfigured, isOpenRouterError } from '@/lib/ai/openrouter-client';
 import { isAiProviderUnavailableError } from '@/lib/ai/ai-dispatcher';
 import { isAiOutputInvalidError } from '@/lib/ai/json-parser';
+import { normalizeGenerationError } from '@/lib/pipeline/generation-error-boundary';
 import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
 import type { StructuredResumeProfile, Contact } from '@/types';
 
@@ -688,26 +689,17 @@ export async function reconcilePendingEmailGenerations(options: {
             break;
           }
 
-          const isFromOpenRouter =
-            isOpenRouterError(genErr) ||
-            (genErr as { provider?: string })?.provider === 'openrouter';
-          const isFromGemini = (genErr as { provider?: string })?.provider === 'gemini';
-          const isAiOutputInvalid = isAiOutputInvalidError(genErr);
-          const isLocalBug =
-            !isAiOutputInvalid &&
-            (genErr instanceof SyntaxError ||
-              genErr instanceof TypeError ||
-              genErr instanceof RangeError);
+          const diag = normalizeGenerationError(genErr, {
+            provider: (genErr as { provider?: string })?.provider,
+            contactEmail: contact.email,
+          });
 
-          const diag = categorizeGeminiError(genErr);
+          const isFromOpenRouter = diag.provider === 'openrouter';
+          const isFromGemini = diag.provider === 'gemini';
           const attemptTimestamp = new Date().toISOString();
           const currentAttempts = (contact.generationAttemptCount || 0) + 1;
 
-          const isRateLimit =
-            diag.code === 'RATE_LIMIT_EXCEEDED' ||
-            /\b429\b/.test(diag.safeDetail) ||
-            /RESOURCE_EXHAUSTED/i.test(diag.safeDetail) ||
-            Boolean((genErr as { isRateLimit?: boolean })?.isRateLimit);
+          const isRateLimit = diag.category === 'PROVIDER_RATE_LIMIT';
 
           if (isRateLimit && !isFromOpenRouter) {
             globalGeminiLimiter.recordError(genErr);
@@ -726,14 +718,14 @@ export async function reconcilePendingEmailGenerations(options: {
               ? 'Gemini'
               : 'AI';
 
-          if (isLocalBug) {
-            // TERMINAL APPLICATION BUG:
-            const failReason = `Deterministic local error (${genErr instanceof Error ? genErr.name : 'Bug'}): ${diag.safeDetail}`;
+          if (diag.isDeterministicDefect) {
+            // TERMINAL DETERMINISTIC DATA/APPLICATION DEFECT:
+            const failReason = `Deterministic defect (${diag.originalErrorName}): ${diag.safeMessage}`;
             db.update(contacts)
               .set({
                 generationStatus: 'GENERATION_FAILED',
                 generationAttemptCount: currentAttempts,
-                lastGenerationErrorCategory: 'LOCAL_BUG',
+                lastGenerationErrorCategory: diag.category,
                 generationClaimToken: null,
                 generationLeaseExpiresAt: null,
                 retryTurnStartedAt: null,
@@ -751,12 +743,14 @@ export async function reconcilePendingEmailGenerations(options: {
             break;
           }
 
-          // Transient error: update attempt telemetry (indefinite retries in circular queue)
+          // Recoverable error (NETWORK_TRANSPORT_ERROR, PROVIDER_RATE_LIMIT, PROVIDER_OUTAGE_5XX,
+          // PROVIDER_AUTH_ERROR, PROVIDER_SAFETY_REFUSAL, AI_OUTPUT_MALFORMED, DATABASE_TRANSIENT_ERROR,
+          // UNANTICIPATED_RUNTIME_ERROR): update attempt telemetry (indefinite retries in circular queue)
           db.update(contacts)
             .set({
               generationAttemptCount: currentAttempts,
-              lastGenerationErrorCategory: diag.code,
-              errorMessage: `${providerPrefix} transient error (${diag.code}, attempt #${currentAttempts}): ${diag.safeDetail}`,
+              lastGenerationErrorCategory: diag.category,
+              errorMessage: `${providerPrefix} error (${diag.category}, attempt #${currentAttempts}): ${diag.safeMessage}`,
               updatedAt: attemptTimestamp,
             })
             .where(eq(contacts.id, contact.id))
@@ -972,26 +966,17 @@ export async function reconcilePendingEmailGenerations(options: {
           break;
         }
 
-        const isFromOpenRouter =
-          isOpenRouterError(genErr) ||
-          (genErr as { provider?: string })?.provider === 'openrouter';
-        const isFromGemini = (genErr as { provider?: string })?.provider === 'gemini';
-        const isAiOutputInvalid = isAiOutputInvalidError(genErr);
-        const isLocalBug =
-          !isAiOutputInvalid &&
-          (genErr instanceof SyntaxError ||
-            genErr instanceof TypeError ||
-            genErr instanceof RangeError);
+        const diag = normalizeGenerationError(genErr, {
+          provider: (genErr as { provider?: string })?.provider,
+          contactEmail: contact.email,
+        });
 
-        const diag = categorizeGeminiError(genErr);
+        const isFromOpenRouter = diag.provider === 'openrouter';
+        const isFromGemini = diag.provider === 'gemini';
         const attemptTimestamp = new Date().toISOString();
         const currentAttempts = (contact.generationAttemptCount || 0) + 1;
 
-        const isRateLimit =
-          diag.code === 'RATE_LIMIT_EXCEEDED' ||
-          /\b429\b/.test(diag.safeDetail) ||
-          /RESOURCE_EXHAUSTED/i.test(diag.safeDetail) ||
-          Boolean((genErr as { isRateLimit?: boolean })?.isRateLimit);
+        const isRateLimit = diag.category === 'PROVIDER_RATE_LIMIT';
 
         if (isRateLimit && !isFromOpenRouter) {
           globalGeminiLimiter.recordError(genErr);
@@ -1003,13 +988,13 @@ export async function reconcilePendingEmailGenerations(options: {
             ? 'Gemini'
             : 'AI';
 
-        if (isLocalBug) {
-          const failReason = `Deterministic local error (${genErr instanceof Error ? genErr.name : 'Bug'}): ${diag.safeDetail}`;
+        if (diag.isDeterministicDefect) {
+          const failReason = `Deterministic defect (${diag.originalErrorName}): ${diag.safeMessage}`;
           db.update(contacts)
             .set({
               generationStatus: 'GENERATION_FAILED',
               generationAttemptCount: currentAttempts,
-              lastGenerationErrorCategory: 'LOCAL_BUG',
+              lastGenerationErrorCategory: diag.category,
               generationClaimToken: null,
               generationLeaseExpiresAt: null,
               retryTurnStartedAt: null,
@@ -1024,7 +1009,7 @@ export async function reconcilePendingEmailGenerations(options: {
           failed++;
           console.error(`[GenerationReconciler] Permanent generation failure for ${contact.email}: ${failReason}`);
         } else {
-          // Transient error: enters circular retry queue for the first time
+          // Recoverable error: enters circular retry queue for the first time
           const nextRetry = computeGenerationRetryTime(currentAttempts, new Date());
           db.update(contacts)
             .set({
@@ -1033,12 +1018,12 @@ export async function reconcilePendingEmailGenerations(options: {
               retryQueueEnqueuedAt: attemptTimestamp, // initial circular queue order
               retryTurnStartedAt: null,
               retryTurnConsumedMs: 0,
-              lastGenerationErrorCategory: diag.code,
+              lastGenerationErrorCategory: diag.category,
               nextGenerationRetryAt: nextRetry,
               generationClaimToken: null,
               generationLeaseExpiresAt: null,
               status: 'queued',
-              errorMessage: `${providerPrefix} transient error (${diag.code}, attempt #${currentAttempts}): ${diag.safeDetail}`,
+              errorMessage: `${providerPrefix} error (${diag.category}, attempt #${currentAttempts}): ${diag.safeMessage}`,
               updatedAt: attemptTimestamp,
             })
             .where(eq(contacts.id, contact.id))
@@ -1046,7 +1031,7 @@ export async function reconcilePendingEmailGenerations(options: {
 
           retryPending++;
           console.warn(
-            `[GenerationReconciler] Transient generation failure for ${contact.email} (${diag.code}, attempt #${currentAttempts}). Added to circular retry queue.`
+            `[GenerationReconciler] Generation failure for ${contact.email} (${diag.category}, attempt #${currentAttempts}). Added to circular retry queue.`
           );
         }
 

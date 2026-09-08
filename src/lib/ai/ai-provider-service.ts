@@ -328,6 +328,44 @@ export function recordGeminiFailure(errorDetail: string): void {
 }
 
 /**
+ * Records a transient Gemini failure (5xx, network, transport, timeout) that triggered
+ * fallback to OpenRouter.
+ * Sets a short transient outage cooldown (default 30s) in SQLite so subsequent requests
+ * route immediately to OpenRouter without hammering a dead Gemini endpoint.
+ * Accurately updates activeProvider, geminiCooldownUntil, geminiFailures, fallbackCount, lastFallbackAt, and geminiLastError.
+ */
+export function recordGeminiTransientFailure(
+  errorDetail: string,
+  fellBackToOpenRouter: boolean,
+  durationMs: number = 30000
+): void {
+  const db = getDb();
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const cooldownUntilIso = new Date(now + Math.max(5000, durationMs)).toISOString();
+
+  const currentState = getPersistentAiProviderState();
+  const previewState: PersistentAiProviderState = {
+    ...currentState,
+    geminiCooldownUntil: cooldownUntilIso,
+  };
+  const nextActive = computeEffectiveActiveProvider(previewState, now);
+
+  db.update(aiProviderState)
+    .set({
+      activeProvider: nextActive,
+      geminiCooldownUntil: cooldownUntilIso,
+      geminiFailures: sql`${aiProviderState.geminiFailures} + 1`,
+      geminiLastError: errorDetail.slice(0, 300),
+      fallbackCount: fellBackToOpenRouter ? sql`${aiProviderState.fallbackCount} + 1` : aiProviderState.fallbackCount,
+      lastFallbackAt: fellBackToOpenRouter ? nowIso : aiProviderState.lastFallbackAt,
+      updatedAt: nowIso,
+    })
+    .where(eq(aiProviderState.id, 'singleton'))
+    .run();
+}
+
+/**
  * Records a successful Gemini dispatch.
  */
 export function recordGeminiSuccess(): void {

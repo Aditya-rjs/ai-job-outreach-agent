@@ -49,6 +49,7 @@ import {
 } from '../src/lib/pipeline/generation-reconciler';
 import { AiProviderUnavailableError } from '../src/lib/ai/ai-dispatcher';
 import { globalGeminiLimiter } from '../src/lib/ai/gemini-client';
+import { DeterministicDefectError } from '../src/lib/pipeline/generation-error-boundary';
 
 async function runAllTests() {
   console.log('======================================================================');
@@ -406,7 +407,7 @@ async function runAllTests() {
   assert.strictEqual(cTransAfter?.retryTurnConsumedMs, 0, 'Consumed ms must reset to 0 after budget exhaustion');
   assert.ok(cTransAfter?.retryQueueEnqueuedAt, 'retryQueueEnqueuedAt must be updated to rotate to back');
 
-  // 2. Genuine local programming bug -> isolated immediately as terminal GENERATION_FAILED
+  // 2. Verified deterministic defect -> isolated immediately as terminal GENERATION_FAILED
   const cBugId = 'c10_local_bug';
   db.insert(contacts).values({
     id: cBugId,
@@ -426,16 +427,44 @@ async function runAllTests() {
     batchId: b10,
     turnBudgetMs: 50,
     aiCallerOverride: async () => {
-      throw new TypeError('Cannot read property of undefined in local formatter');
+      throw new DeterministicDefectError('Missing required email in schema invariant');
     },
   });
 
   const cBugAfter = db.select().from(contacts).where(eq(contacts.id, cBugId)).get();
-  assert.strictEqual(cBugAfter?.generationStatus, 'GENERATION_FAILED', 'Local programming bug must fail terminally');
-  assert.strictEqual(cBugAfter?.lastGenerationErrorCategory, 'LOCAL_BUG', 'Must be categorized as LOCAL_BUG');
+  assert.strictEqual(cBugAfter?.generationStatus, 'GENERATION_FAILED', 'Deterministic defect must fail terminally');
+  assert.strictEqual(cBugAfter?.lastGenerationErrorCategory, 'DETERMINISTIC_DEFECT', 'Must be categorized as DETERMINISTIC_DEFECT');
   assert.strictEqual(cBugAfter?.status, 'failed', 'Status must be set to failed');
 
-  markPass(10, 'Retry failure → circular queue rotation (transient) vs terminal bug isolation');
+  // 3. Unexpected runtime TypeError -> safely normalized to UNANTICIPATED_RUNTIME_ERROR (remains in circular retry queue)
+  const cTypeErrId = 'c10_type_err';
+  db.insert(contacts).values({
+    id: cTypeErrId,
+    batchId: b10,
+    email: 'type_err@s10.com',
+    isRelevant: true,
+    emailValid: true,
+    isDuplicate: false,
+    generationStatus: 'RETRY_PENDING',
+    generationAttemptCount: 1,
+    status: 'queued',
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  }).run();
+
+  await reconcilePendingEmailGenerations({
+    batchId: b10,
+    turnBudgetMs: 50,
+    aiCallerOverride: async () => {
+      throw new TypeError('Cannot read property of undefined in local formatter');
+    },
+  });
+
+  const cTypeErrAfter = db.select().from(contacts).where(eq(contacts.id, cTypeErrId)).get();
+  assert.strictEqual(cTypeErrAfter?.generationStatus, 'RETRY_PENDING', 'Unexpected TypeError must remain in circular retry queue');
+  assert.strictEqual(cTypeErrAfter?.lastGenerationErrorCategory, 'UNANTICIPATED_RUNTIME_ERROR', 'Must be categorized as UNANTICIPATED_RUNTIME_ERROR');
+
+  markPass(10, 'Retry failure → circular queue rotation (transient) vs terminal defect isolation vs unexpected TypeError safety');
 
   // -------------------------------------------------------------------------
   // Scenario 11: Provider WAITING while retry pass is active does not burn generation attempts

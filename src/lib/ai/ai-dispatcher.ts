@@ -21,6 +21,7 @@ import {
   recordOpenRouter429,
   recordGemini429,
   recordGeminiFailure,
+  recordGeminiTransientFailure,
   recordGeminiSuccess,
   recordOpenRouterSuccess,
   recordOpenRouterNon429Failure,
@@ -30,6 +31,7 @@ import {
   isAiProviderUnavailableError,
   type AiProviderStatusType,
 } from './ai-provider-service';
+import { normalizeGenerationError } from '../pipeline/generation-error-boundary';
 
 export {
   AiProviderUnavailableError,
@@ -340,14 +342,23 @@ export async function callAi(
         model: configuredGeminiModel,
       };
     } catch (geminiErr: unknown) {
+      // Semantically normalize the error using the Universal Error Boundary
+      const normDiag = normalizeGenerationError(geminiErr, { provider: 'gemini' });
       const diag = categorizeGeminiError(geminiErr);
 
       const isRateLimit =
+        normDiag.category === 'PROVIDER_RATE_LIMIT' ||
         diag.code === 'RATE_LIMIT_EXCEEDED' ||
         /\b429\b/.test(diag.safeDetail) ||
         /RESOURCE_EXHAUSTED/i.test(diag.safeDetail);
 
-      // If rate limit (429), transition to OPENROUTER ACTIVE and fall back
+      const isTransientInfrastructureFailure =
+        normDiag.category === 'PROVIDER_OUTAGE_5XX' ||
+        normDiag.category === 'NETWORK_TRANSPORT_ERROR';
+
+      // -----------------------------------------------------------------------
+      // Case 1A: Gemini Rate Limit (HTTP 429 / Quota Exceeded)
+      // -----------------------------------------------------------------------
       if (isRateLimit) {
         if (!globalGeminiLimiter.isCooldownActive()) {
           globalGeminiLimiter.handle429(geminiErr);
@@ -402,9 +413,40 @@ export async function callAi(
         );
       }
 
-      // Non-429 Gemini error: record error, do NOT cooldown, do NOT fallback
+      // -----------------------------------------------------------------------
+      // Case 1B: Gemini Transient Infrastructure Failure (5xx, Network, Transport, Timeout)
+      // -----------------------------------------------------------------------
+      if (isTransientInfrastructureFailure) {
+        // Set short 30s transient outage cooldown on Gemini in limiter and SQLite
+        globalGeminiLimiter.handleTransientOutage(30000);
+
+        const freshState = getPersistentAiProviderState();
+        const orCooled = isOpenRouterCooldownActive(freshState);
+
+        if (openRouterConfigured && !orCooled) {
+          console.warn(
+            `[AiDispatcher] Gemini transient infrastructure failure (${normDiag.category}: ${normDiag.safeMessage}). Gemini cooling for 30s. Falling back to OpenRouter (${getOpenRouterModel()}).`
+          );
+          try {
+            recordGeminiTransientFailure(normDiag.safeMessage, true, 30000);
+          } catch {}
+
+          return executeOpenRouterDispatch(prompt, options);
+        }
+
+        // OpenRouter not available: record transient failure cooldown without fallback
+        try {
+          recordGeminiTransientFailure(normDiag.safeMessage, false, 30000);
+        } catch {}
+
+        throw geminiErr;
+      }
+
+      // -----------------------------------------------------------------------
+      // Case 1C: Non-Failover Gemini Error (Auth, Safety Refusal, AI Output Malformed, Deterministic)
+      // -----------------------------------------------------------------------
       try {
-        recordGeminiFailure(diag.safeDetail);
+        recordGeminiFailure(normDiag.safeMessage || diag.safeDetail);
       } catch {}
 
       throw geminiErr;

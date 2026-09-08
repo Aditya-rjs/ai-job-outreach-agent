@@ -46,6 +46,7 @@ import {
 import { globalGeminiLimiter } from '../src/lib/ai/gemini-client';
 import { AiProviderUnavailableError } from '../src/lib/ai/ai-provider-service';
 import { AiOutputInvalidError } from '../src/lib/ai/json-parser';
+import { DeterministicDefectError } from '../src/lib/pipeline/generation-error-boundary';
 import { batches, contacts, outreachQueue, resume } from '../src/db/schema';
 import { eq, sql, desc, asc } from 'drizzle-orm';
 import { ulid } from 'ulid';
@@ -531,9 +532,9 @@ async function runAllTests() {
   markPass(8, 'Success removes contact from retry queue and enqueues in outreach_queue');
 
   // -------------------------------------------------------------------------
-  // Scenario 9: Genuine local programming bug fails terminally as LOCAL_BUG on Attempt 1
+  // Scenario 9: Verified deterministic defect fails terminally as DETERMINISTIC_DEFECT on Attempt 1
   // -------------------------------------------------------------------------
-  console.log('\n--- Scenario 9: Genuine local programming bug fails terminally on Attempt 1 ---');
+  console.log('\n--- Scenario 9: Verified deterministic defect fails terminally on Attempt 1 ---');
   const b9 = 'batch_circular_s9';
   db.insert(batches).values({ id: b9, filename: 's9.csv', uploadDate: nowIso, status: 'processing' }).run();
 
@@ -556,17 +557,47 @@ async function runAllTests() {
     batchId: b9,
     batchSize: 1,
     aiCallerOverride: async () => {
-      throw new TypeError('Cannot read properties of null (reading "toLowerCase")');
+      throw new DeterministicDefectError('Contact email missing or empty in database schema');
     },
   });
 
   const c9After = db.select().from(contacts).where(eq(contacts.id, c9Id)).get();
-  assert.strictEqual(c9After?.generationStatus, 'GENERATION_FAILED', 'Local programming bug must fail terminally');
-  assert.strictEqual(c9After?.lastGenerationErrorCategory, 'LOCAL_BUG');
+  assert.strictEqual(c9After?.generationStatus, 'GENERATION_FAILED', 'Deterministic defect must fail terminally');
+  assert.strictEqual(c9After?.lastGenerationErrorCategory, 'DETERMINISTIC_DEFECT');
   assert.strictEqual(c9After?.status, 'failed');
   assert.strictEqual(c9After?.generationAttemptCount, 1, 'Must fail on attempt 1');
 
-  markPass(9, 'Genuine local programming bug fails terminally as LOCAL_BUG on Attempt 1');
+  // Verify unexpected runtime TypeError does NOT fail terminally (safely remains in circular retry queue)
+  const c9TypeId = 'c9_type_err';
+  db.insert(contacts).values({
+    id: c9TypeId,
+    batchId: b9,
+    email: 'type_err9@test.com',
+    isRelevant: true,
+    emailValid: true,
+    isDuplicate: false,
+    generationStatus: 'RETRY_PENDING',
+    generationAttemptCount: 0,
+    status: 'queued',
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  }).run();
+
+  await reconcilePendingEmailGenerations({
+    batchId: b9,
+    batchSize: 1,
+    turnBudgetMs: 50,
+    backoffMsOverride: 10,
+    aiCallerOverride: async () => {
+      throw new TypeError('Cannot read properties of null (reading "toLowerCase")');
+    },
+  });
+
+  const c9TypeAfter = db.select().from(contacts).where(eq(contacts.id, c9TypeId)).get();
+  assert.strictEqual(c9TypeAfter?.generationStatus, 'RETRY_PENDING', 'Unexpected TypeError must remain in circular retry queue');
+  assert.strictEqual(c9TypeAfter?.lastGenerationErrorCategory, 'UNANTICIPATED_RUNTIME_ERROR');
+
+  markPass(9, 'Verified deterministic defect fails terminally on Attempt 1 vs unexpected TypeError safe retry');
 
   // -------------------------------------------------------------------------
   // Scenario 10: Malformed AI JSON is classified as transient retryable, NOT local bug
@@ -603,7 +634,7 @@ async function runAllTests() {
   const c10After = db.select().from(contacts).where(eq(contacts.id, c10Id)).get();
   assert.strictEqual(c10After?.generationStatus, 'RETRY_PENDING', 'Malformed AI output must remain RETRY_PENDING');
   assert.strictEqual(c10After?.status, 'queued', 'Status must remain queued for retry');
-  assert.strictEqual(c10After?.lastGenerationErrorCategory, 'INVALID_OUTPUT');
+  assert.strictEqual(c10After?.lastGenerationErrorCategory, 'AI_OUTPUT_MALFORMED');
   assert.notStrictEqual(c10After?.lastGenerationErrorCategory, 'LOCAL_BUG', 'Must NOT be categorized as LOCAL_BUG');
 
   markPass(10, 'Malformed AI JSON classified as transient retryable, NOT local bug');

@@ -466,6 +466,29 @@ export class GlobalGeminiRateLimiter {
 
   }
 
+  public handleTransientOutage(durationMs: number = 30000): number {
+    const now = Date.now();
+    const newCooldownUntil = now + Math.max(5000, durationMs);
+    if (newCooldownUntil > this.cooldownUntil) {
+      this.cooldownUntil = newCooldownUntil;
+    }
+
+    if (this.cooldownTimer) {
+      clearTimeout(this.cooldownTimer);
+    }
+    const timerDelay = Math.max(50, this.cooldownUntil - Date.now());
+    this.cooldownTimer = setTimeout(() => {
+      this.cooldownTimer = null;
+      this.processNext();
+    }, timerDelay);
+    if (typeof this.cooldownTimer?.unref === 'function') {
+      this.cooldownTimer.unref();
+    }
+
+    console.warn(`[GlobalGeminiRateLimiter] Transient Outage. Gemini temporary cooldown set: ${Math.round(durationMs / 1000)}s`);
+    return this.cooldownUntil;
+  }
+
   public recordSuccess(): void {
     this.requestsSucceeded++;
     this.consecutive429Count = 0;
