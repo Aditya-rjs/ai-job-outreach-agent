@@ -59,7 +59,8 @@ export function executeHistorical17Recovery(
 ): RecoveryExecutionResult {
   const db = customDb || getDb();
   const targetIds = targetIdsOverride || HISTORICAL_17_TARGET_IDS;
-  const nowIso = new Date().toISOString();
+  const now = new Date();
+  const nowIso = now.toISOString();
 
   try {
     const result = db.transaction((tx) => {
@@ -131,15 +132,21 @@ export function executeHistorical17Recovery(
           id: outreachQueue.id,
           contactId: outreachQueue.contactId,
           status: outreachQueue.status,
+          leaseExpiresAt: outreachQueue.leaseExpiresAt,
         })
         .from(outreachQueue)
         .where(inArray(outreachQueue.contactId, targetIds as unknown as string[]))
         .all();
 
-      // STRICT SAFETY GUARD: Abort if ANY target contact has an active/pending/processing queue record
-      const activeQueueRow = existingQueueRows.find(
-        (q) => q.status === 'pending' || q.status === 'processing'
-      );
+      // STRICT SAFETY GUARD: Abort if ANY target contact has an active in-flight worker send.
+      // A queue record is genuinely active strictly when status === 'processing' and has an unexpired lease.
+      const activeQueueRow = existingQueueRows.find((q) => {
+        if (q.status !== 'processing') return false;
+        if (!q.leaseExpiresAt) return false;
+        const leaseTime = new Date(q.leaseExpiresAt).getTime();
+        return !isNaN(leaseTime) && leaseTime > now.getTime();
+      });
+
       if (activeQueueRow) {
         throw new Error(`PRECONDITION_FAILED:active_outreach_queue_record:${activeQueueRow.contactId}`);
       }
@@ -198,14 +205,11 @@ export function executeHistorical17Recovery(
         }
       }
 
-      // Clean up any stale historical outreach_queue records (failed, cancelled, etc.) strictly for target contacts
-      const staleQueueIds = existingQueueRows
-        .filter((q) => q.status !== 'pending' && q.status !== 'processing')
-        .map((q) => q.id);
-
-      if (staleQueueIds.length > 0) {
+      // Clean up any existing outreach_queue records strictly for target contacts inside the same transaction
+      const queueIdsToDelete = existingQueueRows.map((q) => q.id);
+      if (queueIdsToDelete.length > 0) {
         tx.delete(outreachQueue)
-          .where(inArray(outreachQueue.id, staleQueueIds))
+          .where(inArray(outreachQueue.id, queueIdsToDelete))
           .run();
       }
 
@@ -224,6 +228,9 @@ export function executeHistorical17Recovery(
           next_generation_retry_at = NULL,
           last_generation_error_category = NULL,
           error_message = NULL,
+          email_subject = NULL,
+          email_body = NULL,
+          resume_version = NULL,
           updated_at = ${nowIso}
         WHERE id IN (${sql.raw(targetIds.map((id) => `'${id}'`).join(', '))})
           AND status = 'failed'

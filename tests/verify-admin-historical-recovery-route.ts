@@ -220,8 +220,11 @@ async function runTests() {
     assert.strictEqual(r.retryTurnConsumedMs, 0, 'consumed budget must be 0');
     assert.strictEqual(r.lastGenerationErrorCategory, null, 'last error category must be cleared');
     assert.strictEqual(r.errorMessage, null, 'error message must be cleared');
+    assert.strictEqual(r.emailSubject, null, 'emailSubject must be cleared');
+    assert.strictEqual(r.emailBody, null, 'emailBody must be cleared');
+    assert.strictEqual(r.resumeVersion, null, 'resumeVersion must be cleared');
   }
-  markPass(4, 'All 17 contacts successfully transitioned to PENDING_GENERATION');
+  markPass(4, 'All 17 contacts successfully transitioned to PENDING_GENERATION with reset fields');
 
   // -------------------------------------------------------------------------
   // Test 5: One failed precondition -> zero rows updated (Atomic Rollback)
@@ -298,76 +301,45 @@ async function runTests() {
   markPass(8, 'Idempotent repeated call safely reports already recovered with 0 updates');
 
   // -------------------------------------------------------------------------
-  // Test 9A: Active pending outreach_queue record causes safe abort
+  // Test 9A: Adani-style and KION-DEMATIC-style orphaned pending queue records are safely purged
   // -------------------------------------------------------------------------
-  console.log('\n--- Test 9A: Active pending outreach_queue record causes safe abort ---');
+  console.log('\n--- Test 9A: Adani & KION-DEMATIC orphaned pending queue records are safely purged ---');
   total++;
   seedAll17Failed();
-  // Insert an active 'pending' outreach_queue item for contact 2
+
+  // Contact 15 (Adani Group) orphaned pending queue item
+  const adaniQueueId = `queue_adani_${ulid()}`;
   db.insert(outreachQueue)
     .values({
-      id: `queue_test_${ulid()}`,
-      contactId: HISTORICAL_17_TARGET_IDS[2],
+      id: adaniQueueId,
+      contactId: HISTORICAL_17_TARGET_IDS[15],
       priority: 0,
       status: 'pending',
       attempts: 0,
+      leaseExpiresAt: null,
+      workerId: null,
       createdAt: nowIso,
       updatedAt: nowIso,
     })
     .run();
 
-  const res9a = executeHistorical17Recovery(db);
-  assert.strictEqual(res9a.success, false);
-  assert.strictEqual(res9a.failedPrecondition, 'active_outreach_queue_record');
-  assert.strictEqual(res9a.failedContactId, HISTORICAL_17_TARGET_IDS[2]);
-  markPass(9, 'Active pending outreach_queue record causes safe abort');
-
-  // -------------------------------------------------------------------------
-  // Test 9B: Active processing outreach_queue record causes safe abort
-  // -------------------------------------------------------------------------
-  console.log('\n--- Test 9B: Active processing outreach_queue record causes safe abort ---');
-  total++;
-  seedAll17Failed();
-  // Insert an active 'processing' outreach_queue item for contact 4
+  // Contact 16 (KION-DEMATIC) orphaned pending queue item
+  const kionQueueId = `queue_kion_${ulid()}`;
   db.insert(outreachQueue)
     .values({
-      id: `queue_test_${ulid()}`,
-      contactId: HISTORICAL_17_TARGET_IDS[4],
+      id: kionQueueId,
+      contactId: HISTORICAL_17_TARGET_IDS[16],
       priority: 0,
-      status: 'processing',
-      attempts: 1,
+      status: 'pending',
+      attempts: 0,
+      leaseExpiresAt: null,
+      workerId: null,
       createdAt: nowIso,
       updatedAt: nowIso,
     })
     .run();
 
-  const res9b = executeHistorical17Recovery(db);
-  assert.strictEqual(res9b.success, false);
-  assert.strictEqual(res9b.failedPrecondition, 'active_outreach_queue_record');
-  assert.strictEqual(res9b.failedContactId, HISTORICAL_17_TARGET_IDS[4]);
-  markPass(9.1, 'Active processing outreach_queue record causes safe abort');
-
-  // -------------------------------------------------------------------------
-  // Test 9C: Stale failed outreach_queue record is safely purged during recovery
-  // -------------------------------------------------------------------------
-  console.log('\n--- Test 9C: Stale failed outreach_queue record is safely purged during recovery ---');
-  total++;
-  seedAll17Failed();
-  // Insert a stale 'failed' outreach_queue item for contact 15 (like Adani Group on production)
-  const staleQueueId = `queue_stale_${ulid()}`;
-  db.insert(outreachQueue)
-    .values({
-      id: staleQueueId,
-      contactId: HISTORICAL_17_TARGET_IDS[15],
-      priority: 0,
-      status: 'failed',
-      attempts: 5,
-      createdAt: nowIso,
-      updatedAt: nowIso,
-    })
-    .run();
-
-  // Also insert an unrelated contact's queue record that must NOT be touched
+  // An unrelated contact's pending queue item that must NOT be touched
   const unrelatedContactId = 'cont_unrelated_queue_99';
   const unrelatedQueueId = `queue_unrelated_${ulid()}`;
   db.insert(contacts)
@@ -385,8 +357,89 @@ async function runTests() {
       id: unrelatedQueueId,
       contactId: unrelatedContactId,
       priority: 0,
-      status: 'failed',
+      status: 'pending',
+      attempts: 0,
+      leaseExpiresAt: null,
+      workerId: null,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    })
+    .run();
+
+  const res9a = executeHistorical17Recovery(db);
+  assert.strictEqual(res9a.success, true);
+  assert.strictEqual(res9a.affectedCount, 17);
+
+  // Both orphaned queue records must be purged
+  const adaniCheck = db.select().from(outreachQueue).where(eq(outreachQueue.id, adaniQueueId)).get();
+  assert.strictEqual(adaniCheck, undefined, 'Adani orphaned queue record must be purged');
+  const kionCheck = db.select().from(outreachQueue).where(eq(outreachQueue.id, kionQueueId)).get();
+  assert.strictEqual(kionCheck, undefined, 'KION-DEMATIC orphaned queue record must be purged');
+
+  // Unrelated contact's queue record must remain untouched
+  const unrelatedPendingCheck = db.select().from(outreachQueue).where(eq(outreachQueue.id, unrelatedQueueId)).get();
+  assert.ok(unrelatedPendingCheck !== undefined, 'Unrelated pending queue record must remain completely untouched');
+  assert.strictEqual(unrelatedPendingCheck.id, unrelatedQueueId);
+  markPass(9, 'Adani and KION-DEMATIC orphaned pending queue records purged without touching unrelated queue records');
+
+  // -------------------------------------------------------------------------
+  // Test 9B: Processing + unexpired lease causes complete recovery abort with zero mutations
+  // -------------------------------------------------------------------------
+  console.log('\n--- Test 9B: Processing + unexpired lease causes complete recovery abort ---');
+  total++;
+  seedAll17Failed();
+  const activeLeaseIso = new Date(Date.now() + 60000).toISOString();
+  const processingQueueId = `queue_active_${ulid()}`;
+  db.insert(outreachQueue)
+    .values({
+      id: processingQueueId,
+      contactId: HISTORICAL_17_TARGET_IDS[4],
+      priority: 0,
+      status: 'processing',
+      attempts: 1,
+      leaseExpiresAt: activeLeaseIso,
+      workerId: 'worker_live_active',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    })
+    .run();
+
+  const res9b = executeHistorical17Recovery(db);
+  assert.strictEqual(res9b.success, false);
+  assert.strictEqual(res9b.affectedCount, 0, 'Zero rows updated on active processing lease');
+  assert.strictEqual(res9b.failedPrecondition, 'active_outreach_queue_record');
+  assert.strictEqual(res9b.failedContactId, HISTORICAL_17_TARGET_IDS[4]);
+
+  // Verify all 17 contacts remain in failed state (all-or-nothing rollback)
+  const stillFailed9b = db
+    .select({ status: contacts.status, genStatus: contacts.generationStatus })
+    .from(contacts)
+    .where(inArray(contacts.id, HISTORICAL_17_TARGET_IDS as unknown as string[]))
+    .all();
+  assert.ok(stillFailed9b.every((c) => c.status === 'failed' && c.genStatus === 'GENERATION_FAILED'));
+
+  // Verify the active queue record was NOT deleted
+  const activeQueueCheck = db.select().from(outreachQueue).where(eq(outreachQueue.id, processingQueueId)).get();
+  assert.ok(activeQueueCheck !== undefined, 'Active queue record must not be touched');
+  markPass(9.1, 'Processing + unexpired lease causes complete recovery abort with zero mutations');
+
+  // -------------------------------------------------------------------------
+  // Test 9C: Expired processing lease does not incorrectly block recovery
+  // -------------------------------------------------------------------------
+  console.log('\n--- Test 9C: Expired processing lease does not incorrectly block recovery ---');
+  total++;
+  seedAll17Failed();
+  const expiredLeaseIso = new Date(Date.now() - 60000).toISOString();
+  const expiredQueueId = `queue_expired_${ulid()}`;
+  db.insert(outreachQueue)
+    .values({
+      id: expiredQueueId,
+      contactId: HISTORICAL_17_TARGET_IDS[3],
+      priority: 0,
+      status: 'processing',
       attempts: 2,
+      leaseExpiresAt: expiredLeaseIso,
+      workerId: 'worker_crashed_earlier',
       createdAt: nowIso,
       updatedAt: nowIso,
     })
@@ -396,15 +449,42 @@ async function runTests() {
   assert.strictEqual(res9c.success, true);
   assert.strictEqual(res9c.affectedCount, 17);
 
-  // Verify the stale queue record was purged
+  // Verify expired queue record was purged
+  const expiredCheck = db.select().from(outreachQueue).where(eq(outreachQueue.id, expiredQueueId)).get();
+  assert.strictEqual(expiredCheck, undefined, 'Expired processing queue record must be purged');
+  markPass(9.2, 'Expired processing lease does not block recovery and is safely purged');
+
+  // -------------------------------------------------------------------------
+  // Test 9D: Stale failed outreach_queue record is safely purged during recovery
+  // -------------------------------------------------------------------------
+  console.log('\n--- Test 9D: Stale failed outreach_queue record is safely purged during recovery ---');
+  total++;
+  seedAll17Failed();
+  const staleQueueId = `queue_stale_${ulid()}`;
+  db.insert(outreachQueue)
+    .values({
+      id: staleQueueId,
+      contactId: HISTORICAL_17_TARGET_IDS[10],
+      priority: 0,
+      status: 'failed',
+      attempts: 5,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    })
+    .run();
+
+  const res9d = executeHistorical17Recovery(db);
+  assert.strictEqual(res9d.success, true);
+  assert.strictEqual(res9d.affectedCount, 17);
+
+  // Verify stale queue record was purged
   const purgedCheck = db.select().from(outreachQueue).where(eq(outreachQueue.id, staleQueueId)).get();
   assert.strictEqual(purgedCheck, undefined, 'Stale historical queue record must be purged');
 
-  // Verify unrelated queue record is completely untouched
+  // Verify unrelated queue record is still untouched
   const unrelatedCheck = db.select().from(outreachQueue).where(eq(outreachQueue.id, unrelatedQueueId)).get();
   assert.ok(unrelatedCheck !== undefined, 'Unrelated queue record must remain completely untouched');
-  assert.strictEqual(unrelatedCheck.id, unrelatedQueueId);
-  markPass(9.2, 'Stale failed outreach_queue record is purged while unrelated records remain untouched');
+  markPass(9.3, 'Stale failed outreach_queue record is purged while unrelated records remain untouched');
 
   // -------------------------------------------------------------------------
   // Test 10: Active generation lease causes safe abort
