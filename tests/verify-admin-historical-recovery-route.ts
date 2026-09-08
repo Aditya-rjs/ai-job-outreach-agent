@@ -298,12 +298,12 @@ async function runTests() {
   markPass(8, 'Idempotent repeated call safely reports already recovered with 0 updates');
 
   // -------------------------------------------------------------------------
-  // Test 9: Existing outreach_queue record causes safe abort
+  // Test 9A: Active pending outreach_queue record causes safe abort
   // -------------------------------------------------------------------------
-  console.log('\n--- Test 9: Existing outreach_queue record causes safe abort ---');
+  console.log('\n--- Test 9A: Active pending outreach_queue record causes safe abort ---');
   total++;
   seedAll17Failed();
-  // Insert an outreach_queue item for contact 2
+  // Insert an active 'pending' outreach_queue item for contact 2
   db.insert(outreachQueue)
     .values({
       id: `queue_test_${ulid()}`,
@@ -316,11 +316,95 @@ async function runTests() {
     })
     .run();
 
-  const res9 = executeHistorical17Recovery(db);
-  assert.strictEqual(res9.success, false);
-  assert.strictEqual(res9.failedPrecondition, 'existing_outreach_queue_record');
-  assert.strictEqual(res9.failedContactId, HISTORICAL_17_TARGET_IDS[2]);
-  markPass(9, 'Existing outreach_queue record causes safe abort');
+  const res9a = executeHistorical17Recovery(db);
+  assert.strictEqual(res9a.success, false);
+  assert.strictEqual(res9a.failedPrecondition, 'active_outreach_queue_record');
+  assert.strictEqual(res9a.failedContactId, HISTORICAL_17_TARGET_IDS[2]);
+  markPass(9, 'Active pending outreach_queue record causes safe abort');
+
+  // -------------------------------------------------------------------------
+  // Test 9B: Active processing outreach_queue record causes safe abort
+  // -------------------------------------------------------------------------
+  console.log('\n--- Test 9B: Active processing outreach_queue record causes safe abort ---');
+  total++;
+  seedAll17Failed();
+  // Insert an active 'processing' outreach_queue item for contact 4
+  db.insert(outreachQueue)
+    .values({
+      id: `queue_test_${ulid()}`,
+      contactId: HISTORICAL_17_TARGET_IDS[4],
+      priority: 0,
+      status: 'processing',
+      attempts: 1,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    })
+    .run();
+
+  const res9b = executeHistorical17Recovery(db);
+  assert.strictEqual(res9b.success, false);
+  assert.strictEqual(res9b.failedPrecondition, 'active_outreach_queue_record');
+  assert.strictEqual(res9b.failedContactId, HISTORICAL_17_TARGET_IDS[4]);
+  markPass(9.1, 'Active processing outreach_queue record causes safe abort');
+
+  // -------------------------------------------------------------------------
+  // Test 9C: Stale failed outreach_queue record is safely purged during recovery
+  // -------------------------------------------------------------------------
+  console.log('\n--- Test 9C: Stale failed outreach_queue record is safely purged during recovery ---');
+  total++;
+  seedAll17Failed();
+  // Insert a stale 'failed' outreach_queue item for contact 15 (like Adani Group on production)
+  const staleQueueId = `queue_stale_${ulid()}`;
+  db.insert(outreachQueue)
+    .values({
+      id: staleQueueId,
+      contactId: HISTORICAL_17_TARGET_IDS[15],
+      priority: 0,
+      status: 'failed',
+      attempts: 5,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    })
+    .run();
+
+  // Also insert an unrelated contact's queue record that must NOT be touched
+  const unrelatedContactId = 'cont_unrelated_queue_99';
+  const unrelatedQueueId = `queue_unrelated_${ulid()}`;
+  db.insert(contacts)
+    .values({
+      id: unrelatedContactId,
+      batchId: BATCH_ID,
+      email: 'unrelated@corp.test',
+      status: 'queued',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    })
+    .run();
+  db.insert(outreachQueue)
+    .values({
+      id: unrelatedQueueId,
+      contactId: unrelatedContactId,
+      priority: 0,
+      status: 'failed',
+      attempts: 2,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    })
+    .run();
+
+  const res9c = executeHistorical17Recovery(db);
+  assert.strictEqual(res9c.success, true);
+  assert.strictEqual(res9c.affectedCount, 17);
+
+  // Verify the stale queue record was purged
+  const purgedCheck = db.select().from(outreachQueue).where(eq(outreachQueue.id, staleQueueId)).get();
+  assert.strictEqual(purgedCheck, undefined, 'Stale historical queue record must be purged');
+
+  // Verify unrelated queue record is completely untouched
+  const unrelatedCheck = db.select().from(outreachQueue).where(eq(outreachQueue.id, unrelatedQueueId)).get();
+  assert.ok(unrelatedCheck !== undefined, 'Unrelated queue record must remain completely untouched');
+  assert.strictEqual(unrelatedCheck.id, unrelatedQueueId);
+  markPass(9.2, 'Stale failed outreach_queue record is purged while unrelated records remain untouched');
 
   // -------------------------------------------------------------------------
   // Test 10: Active generation lease causes safe abort

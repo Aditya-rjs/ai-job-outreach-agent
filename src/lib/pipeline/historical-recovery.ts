@@ -127,12 +127,22 @@ export function executeHistorical17Recovery(
 
       // 3. Fetch existing outreach_queue records for targets
       const existingQueueRows = tx
-        .select({ id: outreachQueue.id, contactId: outreachQueue.contactId })
+        .select({
+          id: outreachQueue.id,
+          contactId: outreachQueue.contactId,
+          status: outreachQueue.status,
+        })
         .from(outreachQueue)
         .where(inArray(outreachQueue.contactId, targetIds as unknown as string[]))
         .all();
 
-      const queuedContactIds = new Set(existingQueueRows.map((q) => q.contactId));
+      // STRICT SAFETY GUARD: Abort if ANY target contact has an active/pending/processing queue record
+      const activeQueueRow = existingQueueRows.find(
+        (q) => q.status === 'pending' || q.status === 'processing'
+      );
+      if (activeQueueRow) {
+        throw new Error(`PRECONDITION_FAILED:active_outreach_queue_record:${activeQueueRow.contactId}`);
+      }
 
       // 4. Fetch global email history for targets
       const targetEmails = Array.from(
@@ -183,12 +193,20 @@ export function executeHistorical17Recovery(
         if (!validBatchIds.has(row.batchId)) {
           throw new Error(`PRECONDITION_FAILED:parent_batch_invalid_or_deleted:${row.id}`);
         }
-        if (queuedContactIds.has(row.id)) {
-          throw new Error(`PRECONDITION_FAILED:existing_outreach_queue_record:${row.id}`);
-        }
         if (sentEmails.has(row.email.trim().toLowerCase())) {
           throw new Error(`PRECONDITION_FAILED:global_email_history_sent_conflict:${row.id}`);
         }
+      }
+
+      // Clean up any stale historical outreach_queue records (failed, cancelled, etc.) strictly for target contacts
+      const staleQueueIds = existingQueueRows
+        .filter((q) => q.status !== 'pending' && q.status !== 'processing')
+        .map((q) => q.id);
+
+      if (staleQueueIds.length > 0) {
+        tx.delete(outreachQueue)
+          .where(inArray(outreachQueue.id, staleQueueIds))
+          .run();
       }
 
       // 6. Execute atomic UPDATE affecting ONLY these exact targets
