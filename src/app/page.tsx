@@ -621,7 +621,7 @@ export default function DashboardPage() {
         <StatCard
           title={stats?.isDryRun ? "Simulated Sends" : "Emails Sent"}
           value={stats ? (stats.isDryRun ? stats.emailsSimulated : stats.emailsSent) : 0}
-          subtitle={stats?.isDryRun ? "Simulated — no real emails sent." : "30 successful real emails/day"}
+          subtitle={stats?.isDryRun ? "Simulated — no real emails sent." : `${stats?.todaySentCount ?? 0} sent today • 10 AM–4 PM IST`}
           icon={Send}
           onClick={() => handleOpenCardView('emails-sent')}
           active={activeModalView === 'emails-sent'}
