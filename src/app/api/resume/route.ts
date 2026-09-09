@@ -3,7 +3,7 @@ import { getDb } from '@/db';
 import { resume } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { initializeDatabase } from '@/db/migrate';
-import { parseAndStructureResume } from '@/lib/resume/resume-parser';
+import { parseAndStructureResume, structureResumeText } from '@/lib/resume/resume-parser';
 import type { ApiResponse, ResumeData, StructuredResumeProfile, VerifiedProfileLinks } from '@/types';
 import fs from 'fs';
 import path from 'path';
@@ -75,6 +75,48 @@ export async function POST(
   try {
     ensureInitialized();
     const db = getDb();
+
+    // Check if this is a JSON request to re-analyze existing stored parsedText
+    const contentType = request.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const body = await request.json().catch(() => ({}));
+      if (body.action === 'reparse') {
+        const record = db.select().from(resume).where(eq(resume.id, 'current')).get();
+        if (!record || !record.parsedText || record.parsedText.trim().length === 0) {
+          return NextResponse.json(
+            { success: false, error: 'No existing resume text found to re-analyze. Please upload a resume PDF first.' },
+            { status: 400 }
+          );
+        }
+
+        const profile = await structureResumeText(record.parsedText);
+        const version = new Date().toISOString();
+
+        db.update(resume)
+          .set({
+            parsedData: JSON.stringify(profile),
+            version,
+          })
+          .where(eq(resume.id, 'current'))
+          .run();
+
+        const invalidatedCount = invalidateStaleResumeContacts(version);
+        if (invalidatedCount > 0) {
+          console.log(`[Resume Re-analyze] Invalidated ${invalidatedCount} contacts with stale resume versions.`);
+        }
+
+        const updatedRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();
+
+        return NextResponse.json({
+          success: true,
+          data: {
+            resume: updatedRecord as ResumeData,
+            profile,
+            verifiedLinks: getUserVerifiedLinks(),
+          },
+        });
+      }
+    }
 
     const formData = await request.formData();
     const file = formData.get('file');

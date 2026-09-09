@@ -84,17 +84,24 @@ export function heuristicParseResume(text: string): StructuredResumeProfile {
   sections[currentSection] = [];
 
   const SECTION_HEADERS: Array<{ key: string; regex: RegExp }> = [
-    { key: 'EDUCATION', regex: /^(?:EDUCATION|ACADEMICS|ACADEMIC BACKGROUND)\b/i },
-    { key: 'EXPERIENCE', regex: /^(?:EXPERIENCE|WORK EXPERIENCE|PROFESSIONAL EXPERIENCE|INTERNSHIPS)\b/i },
-    { key: 'PROJECTS', regex: /^(?:PROJECTS|TECHNICAL PROJECTS|KEY PROJECTS|ACADEMIC PROJECTS)\b/i },
-    { key: 'SKILLS', regex: /^(?:TECHNICAL SKILLS|SKILLS|SKILLS & TECHNOLOGIES|CORE COMPETENCIES)\b/i },
-    { key: 'ACHIEVEMENTS', regex: /^(?:ACHIEVEMENTS|HONORS|AWARDS|ACCOMPLISHMENTS)\b/i },
-    { key: 'LEADERSHIP', regex: /^(?:POSITIONS OF RESPONSIBILITY|LEADERSHIP|EXTRACURRICULAR)\b/i },
-    { key: 'CERTIFICATIONS', regex: /^(?:CERTIFICATIONS|LICENSES & CERTIFICATIONS)\b/i },
+    { key: 'EDUCATION', regex: /^(?:EDUCATION|ACADEMICS|ACADEMIC BACKGROUND|ACADEMIC QUALIFICATIONS|QUALIFICATIONS)\b/i },
+    { key: 'EXPERIENCE', regex: /^(?:EXPERIENCE|WORK EXPERIENCE|PROFESSIONAL EXPERIENCE|INTERNSHIPS|EMPLOYMENT HISTORY|WORK HISTORY)\b/i },
+    { key: 'PROJECTS', regex: /^(?:PROJECTS|TECHNICAL PROJECTS|KEY PROJECTS|ACADEMIC PROJECTS|PERSONAL PROJECTS)\b/i },
+    { key: 'SKILLS', regex: /^(?:TECHNICAL SKILLS|SKILLS|SKILLS & TECHNOLOGIES|CORE COMPETENCIES|AREAS OF EXPERTISE)\b/i },
+    { key: 'ACHIEVEMENTS_CERTIFICATIONS', regex: /^(?:ACHIEVEMENTS & CERTIFICATIONS|CERTIFICATIONS & ACHIEVEMENTS)\b/i },
+    { key: 'ACHIEVEMENTS', regex: /^(?:ACHIEVEMENTS|HONORS|AWARDS|ACCOMPLISHMENTS|KEY ACHIEVEMENTS|HONORS & AWARDS)\b/i },
+    { key: 'LEADERSHIP', regex: /^(?:POSITIONS OF RESPONSIBILITY|LEADERSHIP|EXTRACURRICULAR|RESPONSIBILITIES|ACTIVITIES & LEADERSHIP)\b/i },
+    { key: 'CERTIFICATIONS', regex: /^(?:CERTIFICATIONS|LICENSES|LICENSES & CERTIFICATIONS|COURSES & CERTIFICATIONS)\b/i },
   ];
 
   for (const line of lines) {
-    const matchedHeader = SECTION_HEADERS.find((h) => h.regex.test(line));
+    // Strip leading bullets, numbers, dashes, and trailing punctuation before matching headers
+    const cleanedForHeader = line
+      .replace(/^[•–\-*#\d\.\s|]+/, '')
+      .replace(/[:\s]+$/, '')
+      .trim();
+
+    const matchedHeader = SECTION_HEADERS.find((h) => h.regex.test(cleanedForHeader));
     if (matchedHeader) {
       currentSection = matchedHeader.key;
       if (!sections[currentSection]) sections[currentSection] = [];
@@ -111,7 +118,8 @@ export function heuristicParseResume(text: string): StructuredResumeProfile {
     let currentInst = '';
     let currentYear: string | undefined = undefined;
 
-    for (const line of eduLines) {
+    for (const rawLine of eduLines) {
+      const line = rawLine.replace(/^[•–\-*]\s*/, '').trim();
       if (/Institute\/Board|CGPA\/Percentage|Year/i.test(line) && line.length < 50) {
         continue; // Skip table header artifact
       }
@@ -145,13 +153,99 @@ export function heuristicParseResume(text: string): StructuredResumeProfile {
   const expLines = sections['EXPERIENCE'] || [];
   if (expLines.length > 0) {
     let currentExp: ResumeExperience | null = null;
-    const isRoleTitle = (str: string) => /(?:intern|engineer|developer|lead|consultant|associate|manager|specialist|analyst|coordinator|trainee)/i.test(str);
-    const isDateString = (str: string) => /(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|20\d{2})\s*[-–]\s*(?:Present|\w+\s*20\d{2}|20\d{2})/i.test(str);
 
-    for (const line of expLines) {
-      const isBullet = /^[•–\-*]\s*/.test(line);
+    const isRoleTitle = (str: string) =>
+      /(?:intern|engineer|developer|lead|consultant|associate|manager|specialist|analyst|coordinator|trainee|architect|designer|programmer)/i.test(str);
 
-      if (isBullet) {
+    const isDateString = (str: string) =>
+      /(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|20\d{2})\s*[-–]\s*(?:Present|\w+\s*20\d{2}|20\d{2})/i.test(str) ||
+      /\b(19|20)\d{2}\s*[-–]\s*(?:(19|20)\d{2}|Present)\b/i.test(str);
+
+    const isActionHighlight = (str: string) =>
+      str.length > 55 ||
+      /^(?:developed|built|created|implemented|engineered|designed|maintained|led|collaborated|integrated|automated|utilized|orchestrated|optimized|managed|spearheaded|architected|resolved|streamlined|achieved)\b/i.test(str);
+
+    for (const rawLine of expLines) {
+      const cleanLine = rawLine.replace(/^[•–\-*]\s*/, '').trim();
+      if (!cleanLine) continue;
+
+      // Date line detection
+      if (isDateString(cleanLine)) {
+        if (!currentExp) {
+          currentExp = {
+            company: 'Software Company',
+            role: 'Software Engineer Intern',
+            title: 'Software Engineer Intern',
+            duration: cleanLine,
+            highlights: [],
+            bullets: [],
+          };
+        } else {
+          currentExp.duration = cleanLine;
+          const dateParts = cleanLine.split(/[-–]/).map((s) => s.trim());
+          currentExp.startDate = dateParts[0] || null;
+          currentExp.endDate = dateParts[1] || null;
+        }
+        continue;
+      }
+
+      // Inline "Role: Description" format
+      if (cleanLine.includes(':') && isRoleTitle(cleanLine.split(':')[0])) {
+        const [rolePart, ...descParts] = cleanLine.split(':');
+        const desc = descParts.join(':').trim();
+        if (currentExp && (currentExp.highlights.length > 0 || currentExp.company !== 'Software Company')) {
+          if (!currentExp.company) currentExp.company = 'Software Organization';
+          currentExp.title = currentExp.role;
+          experience.push(currentExp);
+          currentExp = null;
+        }
+        const entry: ResumeExperience = {
+          company: 'Software Organization',
+          role: rolePart.trim(),
+          title: rolePart.trim(),
+          highlights: desc ? [desc] : [],
+          bullets: desc ? [desc] : [],
+        };
+        experience.push(entry);
+        continue;
+      }
+
+      // Pipe-separated format (e.g. Infosys Ltd | Bangalore, India or Company | Role)
+      const pipeParts = cleanLine.split(/[|]/).map((s) => s.trim());
+      if (pipeParts.length >= 2) {
+        if (currentExp && (currentExp.highlights.length > 0 || currentExp.company !== 'Software Company')) {
+          if (!currentExp.company) currentExp.company = 'Software Organization';
+          currentExp.title = currentExp.role;
+          experience.push(currentExp);
+          currentExp = null;
+        }
+
+        if (isRoleTitle(pipeParts[1])) {
+          currentExp = {
+            company: pipeParts[0],
+            role: pipeParts[1],
+            title: pipeParts[1],
+            location: pipeParts[2] || null,
+            highlights: [],
+            bullets: [],
+          };
+        } else {
+          currentExp = {
+            company: pipeParts[0],
+            role: isRoleTitle(pipeParts[0]) ? pipeParts[0] : 'Software Engineer Intern',
+            title: isRoleTitle(pipeParts[0]) ? pipeParts[0] : 'Software Engineer Intern',
+            location: pipeParts[1] || null,
+            highlights: [],
+            bullets: [],
+          };
+        }
+        continue;
+      }
+
+      // Action highlight bullet point
+      const isBulletChar = /^[•–\-*]\s*/.test(rawLine);
+      const isLongText = cleanLine.length > 45;
+      if (isActionHighlight(cleanLine) || (currentExp && isBulletChar && currentExp.company && currentExp.company !== 'Software Company' && (currentExp.role !== 'Software Engineer Intern' || currentExp.duration || isLongText))) {
         if (!currentExp) {
           currentExp = {
             company: 'Software Company',
@@ -161,86 +255,61 @@ export function heuristicParseResume(text: string): StructuredResumeProfile {
             bullets: [],
           };
         }
-        const cleanedBullet = line.replace(/^[•–\-*]\s*/, '').trim();
-        if (cleanedBullet) {
-          currentExp.highlights.push(cleanedBullet);
-          if (!currentExp.bullets) currentExp.bullets = [];
-          currentExp.bullets.push(cleanedBullet);
+        currentExp.highlights.push(cleanLine);
+        if (!currentExp.bullets) currentExp.bullets = [];
+        currentExp.bullets.push(cleanLine);
+        continue;
+      }
+
+      // Single-line Role / Company handling (supports bullet-prefixed "- Invigo Infotech", "- Web Development Intern")
+      if (!currentExp) {
+        if (isRoleTitle(cleanLine)) {
+          currentExp = {
+            company: 'Software Company',
+            role: cleanLine,
+            title: cleanLine,
+            highlights: [],
+            bullets: [],
+          };
+        } else {
+          currentExp = {
+            company: cleanLine,
+            role: 'Software Engineer Intern',
+            title: 'Software Engineer Intern',
+            highlights: [],
+            bullets: [],
+          };
         }
-      } else if (line.length > 2) {
-        // Non-bullet line
-        if (isDateString(line)) {
-          if (currentExp) {
-            currentExp.duration = line.trim();
-            const dateParts = line.split(/[-–]/).map((s) => s.trim());
-            currentExp.startDate = dateParts[0] || null;
-            currentExp.endDate = dateParts[1] || null;
-          }
-        } else if (currentExp && currentExp.highlights.length > 0) {
-          // A new experience entry is beginning because previous entry already collected bullet points
+      } else {
+        // currentExp exists: update company or role if they were placeholders
+        if (!currentExp.company || currentExp.company === 'Software Company') {
+          currentExp.company = cleanLine;
+        } else if (isRoleTitle(cleanLine) || currentExp.role === 'Software Engineer Intern') {
+          currentExp.role = cleanLine;
+          currentExp.title = cleanLine;
+        } else if (currentExp.highlights.length > 0) {
+          // New company entry begins
           if (!currentExp.company) currentExp.company = 'Software Organization';
           currentExp.title = currentExp.role;
           experience.push(currentExp);
-          currentExp = null;
-        }
-
-        if (!currentExp) {
-          // Starting a header for experience
-          const parts = line.split(/[|]/).map((s) => s.trim());
-          if (parts.length >= 2) {
-            if (isRoleTitle(parts[1])) {
-              currentExp = {
-                company: parts[0],
-                role: parts[1],
-                title: parts[1],
-                location: parts[2] || null,
-                highlights: [],
-                bullets: [],
-              };
-            } else {
-              currentExp = {
-                company: parts[0],
-                role: isRoleTitle(parts[0]) ? parts[0] : 'Software Engineer Intern',
-                title: isRoleTitle(parts[0]) ? parts[0] : 'Software Engineer Intern',
-                location: parts[1] || null,
-                highlights: [],
-                bullets: [],
-              };
-            }
-          } else {
-            if (isRoleTitle(line)) {
-              currentExp = {
-                company: '',
-                role: line.trim(),
-                title: line.trim(),
-                highlights: [],
-                bullets: [],
-              };
-            } else {
-              currentExp = {
-                company: line.trim(),
-                role: 'Software Engineer Intern',
-                title: 'Software Engineer Intern',
-                highlights: [],
-                bullets: [],
-              };
-            }
-          }
-        } else if (currentExp && currentExp.highlights.length === 0 && (!currentExp.company || currentExp.company === '')) {
-          // Line 2 provides company and location
-          const parts = line.split(/[|]/).map((s) => s.trim());
-          currentExp.company = parts[0];
-          if (parts[1]) currentExp.location = parts[1];
-        } else if (currentExp && currentExp.highlights.length === 0 && currentExp.company && line.includes('|')) {
-          const parts = line.split(/[|]/).map((s) => s.trim());
-          if (!currentExp.location) currentExp.location = parts[parts.length - 1];
+          currentExp = {
+            company: cleanLine,
+            role: 'Software Engineer Intern',
+            title: 'Software Engineer Intern',
+            highlights: [],
+            bullets: [],
+          };
+        } else {
+          currentExp.highlights.push(cleanLine);
+          if (!currentExp.bullets) currentExp.bullets = [];
+          currentExp.bullets.push(cleanLine);
         }
       }
     }
 
-    if (currentExp && (currentExp.highlights.length > 0 || currentExp.company)) {
-      if (!currentExp.company) currentExp.company = 'Software Organization';
-      currentExp.title = currentExp.role;
+    if (currentExp && (currentExp.highlights.length > 0 || (currentExp.company && currentExp.company !== 'Software Company') || currentExp.role)) {
+      if (!currentExp.company || currentExp.company === '') currentExp.company = 'Software Organization';
+      currentExp.title = currentExp.role || 'Software Engineer Intern';
       experience.push(currentExp);
     }
   }
@@ -250,45 +319,154 @@ export function heuristicParseResume(text: string): StructuredResumeProfile {
   const projLines = sections['PROJECTS'] || [];
   if (projLines.length > 0) {
     let currentProj: ResumeProject | null = null;
-    for (const line of projLines) {
-      const isBullet = /^[•–\-*]\s*/.test(line);
-      const isTechLine = /^(?:Technologies|Tech\s*Stack|Tools|Built\s*with|Stack):/i.test(line);
 
-      if (isTechLine && currentProj) {
-        const rawTech = line.replace(/^(?:Technologies|Tech\s*Stack|Tools|Built\s*with|Stack):\s*/i, '').trim();
-        currentProj.techStack = rawTech.split(/[,|]/).map((t) => t.trim()).filter(Boolean);
-      } else if (!isBullet && line.length > 3) {
-        if (currentProj && (currentProj.highlights.length > 0 || currentProj.title)) {
+    const isTechLine = (str: string) =>
+      /^(?:Technologies|Tech\s*Stack|Tools|Built\s*with|Stack|Technologies\s*Used):/i.test(str) ||
+      (/\b(React|Next\.?js|Vue|Angular|Node\.?js|Express|Python|Java|C\+\+|TypeScript|JavaScript|PostgreSQL|MongoDB|SQLite|MySQL|Redis|Docker|AWS|Tailwind|FastAPI|Django|Flask|GraphQL|REST|Drizzle|Prisma|HTML|CSS|Git)\b/i.test(str) &&
+        (str.includes(',') || str.includes('|') || str.includes('•') || str.toLowerCase().includes('stack') || str.toLowerCase().includes('tech')));
+
+    const isDateString = (str: string) =>
+      /(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|20\d{2})\s*[-–]\s*(?:Present|\w+\s*20\d{2}|20\d{2})/i.test(str) ||
+      /\b(19|20)\d{2}\s*[-–]\s*(?:(19|20)\d{2}|Present)\b/i.test(str);
+
+    const ACTION_VERB_REGEX = /^(?:developed|built|created|implemented|engineered|designed|maintained|led|collaborated|integrated|automated|utilized|orchestrated|optimized|managed|spearheaded|architected|resolved|streamlined|performed|trained|deployed|conducted|configured|tested|migrated|authored|enhanced|formulated|executed|reduced|increased|delivered)\b/i;
+
+    const isActionHighlight = (str: string) =>
+      ACTION_VERB_REGEX.test(str) ||
+      (str.length > 50 && /[.;]$/.test(str.trim())) ||
+      (str.length > 60 && str.includes(' '));
+
+    for (const rawLine of projLines) {
+      const cleanLine = rawLine.replace(/^[•–\-*]\s*/, '').trim();
+      if (!cleanLine) continue;
+
+      if (isTechLine(cleanLine)) {
+        const rawTech = cleanLine.replace(/^(?:Technologies|Tech\s*Stack|Tools|Built\s*with|Stack|Technologies\s*Used):\s*/i, '').trim();
+        const tokens = rawTech.split(/[,|•]/).map((t) => t.trim()).filter(Boolean);
+        if (currentProj) {
+          currentProj.techStack = Array.from(new Set([...currentProj.techStack, ...tokens]));
+        } else {
+          currentProj = {
+            title: 'Technical Project',
+            techStack: tokens,
+            highlights: [],
+            bullets: [],
+          };
+        }
+        continue;
+      }
+
+      if (isDateString(cleanLine)) {
+        if (currentProj) {
+          currentProj.duration = cleanLine;
+        }
+        continue;
+      }
+
+      // Inline "Title: Description" format
+      if (cleanLine.includes(':') && !isTechLine(cleanLine) && cleanLine.split(':')[0].length < 45) {
+        const [titlePart, ...descParts] = cleanLine.split(':');
+        const desc = descParts.join(':').trim();
+        if (currentProj && (currentProj.highlights.length > 0 || currentProj.title !== 'Technical Project')) {
           projects.push(currentProj);
         }
-        const dateMatch = line.match(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|20\d{2})\s*[-–]\s*(?:Present|\w+\s*20\d{2}|20\d{2})/i);
-        const title = line.replace(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|20\d{2})\s*[-–]\s*(?:Present|\w+\s*20\d{2}|20\d{2})/i, '').replace(/^[•–\-*]\s*/, '').trim();
         currentProj = {
-          title: title || 'Software Project',
-          duration: dateMatch ? dateMatch[0].trim() : null,
+          title: titlePart.trim(),
+          description: desc || undefined,
           techStack: [],
-          highlights: [],
+          highlights: desc ? [desc] : [],
+          bullets: desc ? [desc] : [],
         };
-      } else if (currentProj && isBullet) {
-        const cleanedBullet = line.replace(/^[•–\-*]\s*/, '').trim();
-        if (cleanedBullet) {
-          currentProj.highlights.push(cleanedBullet);
+        continue;
+      }
+
+      // Check if line is an action highlight or description
+      const isBulletChar = /^[•–\-*]\s*/.test(rawLine);
+      if (isActionHighlight(cleanLine) || (currentProj && isBulletChar && currentProj.highlights.length > 0 && (cleanLine.length > 30 || cleanLine.endsWith('.')))) {
+        if (!currentProj) {
+          currentProj = {
+            title: 'Technical Project',
+            techStack: [],
+            highlights: [],
+            bullets: [],
+          };
+        }
+        currentProj.highlights.push(cleanLine);
+        if (!currentProj.bullets) currentProj.bullets = [];
+        currentProj.bullets.push(cleanLine);
+        continue;
+      }
+
+      // New project title (only if current project already has highlights or tech/date)
+      if (currentProj && (currentProj.highlights.length > 0 || currentProj.title !== 'Technical Project')) {
+        if (currentProj.highlights.length > 0) {
+          projects.push(currentProj);
+          currentProj = null;
+        } else if (isActionHighlight(cleanLine) || cleanLine.endsWith('.')) {
+          currentProj.highlights.push(cleanLine);
+          if (!currentProj.bullets) currentProj.bullets = [];
+          currentProj.bullets.push(cleanLine);
+          continue;
         }
       }
+
+      const dateMatch = cleanLine.match(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|20\d{2})\s*[-–]\s*(?:Present|\w+\s*20\d{2}|20\d{2})/i);
+      const title = cleanLine
+        .replace(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|20\d{2})\s*[-–]\s*(?:Present|\w+\s*20\d{2}|20\d{2})/i, '')
+        .replace(/^[•–\-*|]\s*/, '')
+        .trim();
+
+      currentProj = {
+        title: title || 'Technical Project',
+        duration: dateMatch ? dateMatch[0].trim() : null,
+        techStack: [],
+        highlights: [],
+        bullets: [],
+      };
     }
+
     if (currentProj && (currentProj.highlights.length > 0 || currentProj.title)) {
       projects.push(currentProj);
     }
   }
 
-  // 9. Parse Achievements
+  // 9. Parse Achievements & Certifications
   const achievements: Array<string | ResumeAchievement> = [];
-  const achLines = sections['ACHIEVEMENTS'] || [];
-  for (const line of achLines) {
-    const cleaned = line.replace(/^[•–\-*]\s*/, '').trim();
-    if (cleaned.length > 5) {
+  const certifications: ResumeCertification[] = [];
+
+  const achLines = [
+    ...(sections['ACHIEVEMENTS'] || []),
+    ...(sections['ACHIEVEMENTS_CERTIFICATIONS'] || []),
+  ];
+
+  const certLines = [
+    ...(sections['CERTIFICATIONS'] || []),
+  ];
+
+  for (const rawLine of achLines) {
+    const cleaned = rawLine.replace(/^[•–\-*]\s*/, '').trim();
+    if (cleaned.length < 4) continue;
+
+    if (/certified|certification|aws|gcp|azure|coursera|udemy|cisco|oracle|kubernetes|comptia/i.test(cleaned)) {
+      certifications.push({
+        name: cleaned,
+        issuer: cleaned.includes('AWS') ? 'Amazon Web Services' : null,
+        date: cleaned.match(/\b(19|20)\d{2}\b/)?.[0] || null,
+      });
+    } else {
       achievements.push(cleaned);
     }
+  }
+
+  for (const rawLine of certLines) {
+    const cleaned = rawLine.replace(/^[•–\-*]\s*/, '').trim();
+    if (cleaned.length < 4) continue;
+    const yearMatch = cleaned.match(/\b(19|20)\d{2}\b/);
+    certifications.push({
+      name: cleaned,
+      issuer: null,
+      date: yearMatch ? yearMatch[0] : null,
+    });
   }
 
   // 10. Parse Leadership
@@ -300,7 +478,7 @@ export function heuristicParseResume(text: string): StructuredResumeProfile {
       const parts = cleaned.split(/[,–-]/).map((s) => s.trim());
       leadership.push({
         position: parts[0] || 'Coordinator',
-        organization: parts[1] || 'Student Organization',
+        organization: parts[1] || 'Student / Professional Organization',
         highlights: [cleaned],
       });
     }
@@ -321,7 +499,7 @@ export function heuristicParseResume(text: string): StructuredResumeProfile {
     skills: foundSkills,
     experience,
     projects,
-    certifications: [],
+    certifications,
     achievements,
     leadership: leadership.length > 0 ? leadership : undefined,
     summary: `${name} is a software professional with hands-on experience in ${topSkills || 'software engineering'}.`,
@@ -576,7 +754,27 @@ ${rawText.slice(0, 30000)}
 }
 
 /**
- * Main resume parsing and structuring entry point.
+ * Structures raw resume text into a verified candidate profile.
+ * Attempts AI structuring first (Gemini/OpenRouter), falling back to heuristic parsing if unavailable.
+ */
+export async function structureResumeText(rawText: string): Promise<StructuredResumeProfile> {
+  if (!rawText || rawText.trim().length === 0) {
+    throw new Error('Resume text is empty.');
+  }
+
+  if (getGeminiClient() || isOpenRouterConfigured()) {
+    try {
+      return await structureResumeWithAI(rawText);
+    } catch (aiErr) {
+      console.warn('[ResumeParser] AI resume structuring failed, falling back to section-aware heuristic parsing:', aiErr);
+    }
+  }
+
+  return heuristicParseResume(rawText);
+}
+
+/**
+ * Main resume parsing and structuring entry point from a PDF buffer.
  */
 export async function parseAndStructureResume(
   buffer: Buffer
@@ -586,15 +784,6 @@ export async function parseAndStructureResume(
     throw new Error('Unable to extract text from the provided resume PDF. Please ensure the file is not empty.');
   }
 
-  if (getGeminiClient() || isOpenRouterConfigured()) {
-    try {
-      const profile = await structureResumeWithAI(rawText);
-      return { rawText, profile };
-    } catch (aiErr) {
-      console.warn('[ResumeParser] AI resume structuring failed, falling back to section-aware heuristic parsing:', aiErr);
-    }
-  }
-
-  const profile = heuristicParseResume(rawText);
+  const profile = await structureResumeText(rawText);
   return { rawText, profile };
 }

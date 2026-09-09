@@ -275,6 +275,7 @@ export interface ResumeProject {
   architecture?: string | null;
   implementationDetails?: string | null;
   highlights: string[];
+  bullets?: string[];
   metrics?: string[];
   deployment?: string | null;
   liveUrl?: string | null;

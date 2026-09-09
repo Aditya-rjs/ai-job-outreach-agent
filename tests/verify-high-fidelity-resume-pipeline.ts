@@ -256,13 +256,186 @@ async function runTests() {
   );
   console.log('✓ Resume re-upload verified: user-verified links preserved intact.\n');
 
+  // --------------------------------------------------------------------------
+  // TEST 6: Real-World Bullet-Prefixed Resume Formatting & Compound Headings
+  // --------------------------------------------------------------------------
+  console.log('Test 6: Real-World Bullet-Prefixed Resume Formatting & Compound Headings...');
+  const REAL_WORLD_RESUME_TEXT = `
+ADITYA RAJ SINGH
+aditya.work2407@gmail.com | +91 9876543210
+Patna, Bihar, India
+
+EDUCATION
+- LNJPIT Chapra
+- Bachelor of Technology in Computer Science & Engineering
+- 2020 - 2024 | CGPA: 8.24
+
+TECHNICAL SKILLS
+- Languages: JavaScript, TypeScript, Python, SQL
+- Frontend: React.js, Next.js, HTML5, CSS3, Tailwind CSS
+- Backend: Node.js, Express.js, REST APIs
+- Databases: PostgreSQL, MongoDB, SQLite
+- Cloud / DevOps: Docker, AWS, Git, GitHub
+- Tools: VS Code, Postman, Linux
+
+EXPERIENCE
+- Invigo Infotech
+- Web Development Intern
+- Dec 2025 – Jan 2026
+- Developed high-performance responsive web dashboard using React and Tailwind CSS.
+- Optimized REST API endpoints reducing query latency by 30%.
+- Collaborated with senior engineers on client feature deliverables.
+
+PROJECTS
+- AI Job Outreach Agent
+- Next.js 16, TypeScript, Drizzle ORM, SQLite
+- Jan 2026 – Feb 2026
+- Engineered end-to-end recruiter outreach system with AI email generation and rate limits.
+- Built multi-phase deduplication and domain cooldown mechanics.
+
+ACHIEVEMENTS & CERTIFICATIONS
+- 1st Place at National Level Hackathon 2024
+- AWS Certified Cloud Practitioner
+- Solved 400+ problems on LeetCode
+
+LEADERSHIP
+- Technical Lead, College Coding Society
+- Conducted hands-on web development workshops for 100+ students.
+`;
+
+  const normalizedRealWorld = normalizeExtractedPdfText(REAL_WORLD_RESUME_TEXT);
+  const parsedRealWorld = heuristicParseResume(normalizedRealWorld);
+
+  // Verify Experience extraction from bulleted format
+  assert(parsedRealWorld.experience && parsedRealWorld.experience.length > 0, 'Real-world experience array must NOT be 0');
+  const expItem = parsedRealWorld.experience[0];
+  assert.strictEqual(expItem.company, 'Invigo Infotech', 'Company must be Invigo Infotech');
+  assert.strictEqual(expItem.role, 'Web Development Intern', 'Role must be Web Development Intern');
+  assert(expItem.duration?.includes('Dec 2025'), 'Duration must be Dec 2025 – Jan 2026');
+  assert((expItem.bullets?.length ?? 0) >= 2, 'Experience bullets must be captured');
+
+  // Verify Projects extraction from bulleted format
+  assert(parsedRealWorld.projects && parsedRealWorld.projects.length > 0, 'Real-world projects array must NOT be 0');
+  const projItem = parsedRealWorld.projects[0];
+  assert.strictEqual(projItem.title, 'AI Job Outreach Agent', 'Project title must be AI Job Outreach Agent');
+  assert((projItem.bullets?.length ?? 0) >= 1, 'Project bullets must be captured');
+
+  // Verify compound header extraction
+  assert(parsedRealWorld.achievements && parsedRealWorld.achievements.length > 0, 'Achievements must NOT be 0');
+  assert(parsedRealWorld.certifications && parsedRealWorld.certifications.length > 0, 'Certifications must NOT be 0');
+  assert(parsedRealWorld.leadership && parsedRealWorld.leadership.length > 0, 'Leadership must NOT be 0');
+
+  console.log('✓ Real-world bullet-prefixed resume parsing passed (Experience, Projects, Certifications, Achievements populated).\n');
+
+  // --------------------------------------------------------------------------
+  // TEST 7: DB Re-analysis of Existing Stored parsedText (Upgrade Legacy Record)
+  // --------------------------------------------------------------------------
+  console.log('Test 7: DB Re-analysis of Existing Stored parsedText...');
+  // Simulate legacy DB state: parsedText exists, but parsedData has 0 experience/projects
+  const legacyParsedData: StructuredResumeProfile = {
+    name: 'Aditya Raj Singh',
+    email: 'aditya.work2407@gmail.com',
+    phone: null,
+    location: null,
+    education: [{ institution: 'LNJPIT Chapra', degree: 'B.Tech CSE', year: '2024' }],
+    skills: {
+      languages: ['TypeScript', 'JavaScript'],
+      frontend: ['React'],
+      backend: ['Node.js'],
+      frameworks: [],
+      databases: [],
+      aiMl: [],
+      dataScience: [],
+      cloudDevOps: [],
+      tools: ['Git'],
+      apisIntegrations: [],
+      coreCs: [],
+      other: [],
+    },
+    experience: [], // 0 in legacy
+    projects: [],   // 0 in legacy
+    certifications: [],
+    achievements: [],
+    leadership: [],
+    summary: 'Legacy summary',
+  };
+
+  db.insert(resume)
+    .values({
+      id: 'current',
+      filename: 'Aditya_Resume.pdf',
+      filePath: '/data/resumes/Aditya_Resume.pdf',
+      mimeType: 'application/pdf',
+      parsedText: normalizedRealWorld,
+      parsedData: JSON.stringify(legacyParsedData),
+      uploadedAt: new Date().toISOString(),
+    })
+    .onConflictDoUpdate({
+      target: resume.id,
+      set: {
+        parsedText: normalizedRealWorld,
+        parsedData: JSON.stringify(legacyParsedData),
+      },
+    })
+    .run();
+
+  // Verify DB starts in legacy 0-count state
+  const legacyRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();
+  assert(legacyRecord, 'Legacy record must exist');
+  const initialData: StructuredResumeProfile = JSON.parse(legacyRecord.parsedData || '{}');
+  assert.strictEqual(initialData.experience.length, 0, 'Legacy experience count should initially be 0');
+  assert.strictEqual(initialData.projects.length, 0, 'Legacy projects count should initially be 0');
+
+  // Perform re-analysis using heuristic fallback (or AI when configured)
+  const upgradedProfile = heuristicParseResume(legacyRecord.parsedText || '');
+  db.update(resume)
+    .set({
+      parsedData: JSON.stringify(upgradedProfile),
+    })
+    .where(eq(resume.id, 'current'))
+    .run();
+
+  // Verify DB record is now upgraded
+  const upgradedRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();
+  const verifiedData: StructuredResumeProfile = JSON.parse(upgradedRecord?.parsedData || '{}');
+  assert(verifiedData.experience.length > 0, 'Upgraded DB record must have experience > 0');
+  assert.strictEqual(verifiedData.experience[0].company, 'Invigo Infotech', 'Upgraded company must match');
+  assert(verifiedData.projects.length > 0, 'Upgraded DB record must have projects > 0');
+  assert(verifiedData.certifications.length > 0, 'Upgraded DB record must have certifications > 0');
+  console.log('✓ Database re-analysis cleanly upgraded legacy 0-count record to fully populated state.\n');
+
+  // --------------------------------------------------------------------------
+  // TEST 8: Canonical Skill Keys Hygiene
+  // --------------------------------------------------------------------------
+  console.log('Test 8: Canonical Skill Keys Hygiene...');
+  const skillKeys = Object.keys(upgradedProfile.skills);
+  const canonicalKeys = [
+    'languages',
+    'frontend',
+    'backend',
+    'frameworks',
+    'databases',
+    'aiMl',
+    'dataScience',
+    'cloudDevOps',
+    'tools',
+    'apisIntegrations',
+    'coreCs',
+    'other',
+  ];
+  for (const k of skillKeys) {
+    assert(canonicalKeys.includes(k), `Key '${k}' must be one of the canonical ResumeSkills schema keys`);
+  }
+  assert(!('developerTools' in upgradedProfile.skills), 'Legacy alias developerTools must NOT be written to output object');
+  console.log('✓ Canonical skill keys schema verified (no duplicate/legacy keys written).\n');
+
   // Clean up test directory
   try {
     fs.rmSync(TEST_DIR, { recursive: true, force: true });
   } catch {}
 
   console.log('================================================================');
-  console.log('ALL HIGH-FIDELITY RESUME PIPELINE TESTS PASSED SUCCESSFULLY (5/5)');
+  console.log('ALL HIGH-FIDELITY RESUME PIPELINE TESTS PASSED SUCCESSFULLY (8/8)');
   console.log('================================================================\n');
 }
 
@@ -270,3 +443,4 @@ runTests().catch((err) => {
   console.error('Test failed with error:', err);
   process.exit(1);
 });
+

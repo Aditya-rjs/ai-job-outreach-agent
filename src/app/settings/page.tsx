@@ -53,6 +53,35 @@ export default function SettingsPage() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [reanalyzing, setReanalyzing] = useState(false);
+
+  const handleReparseResume = async () => {
+    setReanalyzing(true);
+    setErrorMessage(null);
+    setStatusMessage('Re-analyzing stored resume text with AI candidate profile structuring...');
+    try {
+      const res = await fetch('/api/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reparse' }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || 'Failed to re-analyze resume.');
+      }
+      setResumeData(json.data.resume);
+      setProfile(json.data.profile);
+      if (json.data.verifiedLinks) {
+        setVerifiedLinks(json.data.verifiedLinks);
+      }
+      setStatusMessage('Resume re-analyzed and candidate profile updated successfully!');
+      setTimeout(() => setStatusMessage(null), 4000);
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Error re-analyzing resume.');
+    } finally {
+      setReanalyzing(false);
+    }
+  };
 
   const handleSaveLinks = async () => {
     setSavingLinks(true);
@@ -528,7 +557,26 @@ export default function SettingsPage() {
                     </span>
                   )}
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={handleReparseResume}
+                    disabled={reanalyzing || uploading}
+                    className="gap-1.5"
+                  >
+                    {reanalyzing ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Re-analyzing with AI...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="h-3.5 w-3.5" />
+                        Re-analyze Resume with AI
+                      </>
+                    )}
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
@@ -553,17 +601,32 @@ export default function SettingsPage() {
 
               {/* Extraction Counts Bar */}
               {(() => {
+                const languages = profile.skills?.languages || [];
+                const frontend = profile.skills?.frontend || profile.skills?.webTechnologies || [];
+                const backend = profile.skills?.backend || profile.skills?.backendTechnologies || [];
+                const frameworks = profile.skills?.frameworks || [];
+                const databases = profile.skills?.databases || [];
+                const aiMl = profile.skills?.aiMl || [];
+                const dataScience = profile.skills?.dataScience || [];
+                const cloudDevOps = profile.skills?.cloudDevOps || [];
+                const tools = profile.skills?.tools || profile.skills?.developerTools || [];
+                const apisIntegrations = profile.skills?.apisIntegrations || [];
+                const coreCs = profile.skills?.coreCs || profile.skills?.coreConcepts || [];
+                const other = profile.skills?.other || [];
+
                 const totalSkillsCount = [
-                  ...(profile.skills?.languages || []),
-                  ...(profile.skills?.frameworks || []),
-                  ...(profile.skills?.webTechnologies || []),
-                  ...(profile.skills?.backendTechnologies || []),
-                  ...(profile.skills?.databases || []),
-                  ...(profile.skills?.cloudDevOps || []),
-                  ...(profile.skills?.aiMl || []),
-                  ...(profile.skills?.developerTools || []),
-                  ...(profile.skills?.coreConcepts || []),
-                  ...(profile.skills?.other || []),
+                  ...languages,
+                  ...frontend,
+                  ...backend,
+                  ...frameworks,
+                  ...databases,
+                  ...aiMl,
+                  ...dataScience,
+                  ...cloudDevOps,
+                  ...tools,
+                  ...apisIntegrations,
+                  ...coreCs,
+                  ...other,
                 ].length;
 
                 return (
@@ -687,12 +750,14 @@ export default function SettingsPage() {
                 </div>
 
                 {/* Education Section */}
-                {profile.education && profile.education.length > 0 && (
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs font-semibold text-foreground">
+                    <div className="flex items-center gap-1.5">
                       <GraduationCap className="h-4 w-4 text-primary" />
-                      <span>Education</span>
+                      <span>Education ({profile.education?.length || 0})</span>
                     </div>
+                  </div>
+                  {profile.education && profile.education.length > 0 ? (
                     <div className="grid gap-2 sm:grid-cols-2">
                       {profile.education.map((edu, idx) => (
                         <div key={idx} className="rounded-lg border border-border/80 bg-muted/10 p-3 text-xs space-y-1">
@@ -705,136 +770,206 @@ export default function SettingsPage() {
                         </div>
                       ))}
                     </div>
-                  </div>
-                )}
-
-                {/* Categorized Skills Section */}
-                <div className="space-y-3 pt-2 border-t border-border">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                    <Code2 className="h-4 w-4 text-primary" />
-                    <span>Categorized Technical Skills (Source of Truth)</span>
-                  </div>
-
-                  <div className="grid gap-2.5 sm:grid-cols-2 text-xs">
-                    {profile.skills?.languages?.length > 0 && (
-                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
-                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Programming Languages</span>
-                        <div className="flex flex-wrap gap-1">
-                          {profile.skills.languages.map((s) => (
-                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {profile.skills?.frameworks?.length > 0 && (
-                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
-                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Frameworks & Libraries</span>
-                        <div className="flex flex-wrap gap-1">
-                          {profile.skills.frameworks.map((s) => (
-                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {profile.skills?.webTechnologies && profile.skills.webTechnologies.length > 0 && (
-                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
-                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Web Technologies</span>
-                        <div className="flex flex-wrap gap-1">
-                          {profile.skills.webTechnologies.map((s: string) => (
-                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {profile.skills?.backendTechnologies && profile.skills.backendTechnologies.length > 0 && (
-                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
-                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Backend & APIs</span>
-                        <div className="flex flex-wrap gap-1">
-                          {profile.skills.backendTechnologies.map((s: string) => (
-                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {profile.skills?.databases && profile.skills.databases.length > 0 && (
-                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
-                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Databases & Storage</span>
-                        <div className="flex flex-wrap gap-1">
-                          {profile.skills.databases.map((s: string) => (
-                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {profile.skills?.cloudDevOps && profile.skills.cloudDevOps.length > 0 && (
-                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
-                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Cloud & DevOps</span>
-                        <div className="flex flex-wrap gap-1">
-                          {profile.skills.cloudDevOps.map((s: string) => (
-                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {profile.skills?.aiMl && profile.skills.aiMl.length > 0 && (
-                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
-                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">AI & Machine Learning</span>
-                        <div className="flex flex-wrap gap-1">
-                          {profile.skills.aiMl.map((s: string) => (
-                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {profile.skills?.developerTools && profile.skills.developerTools.length > 0 && (
-                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
-                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Developer Tools & VCS</span>
-                        <div className="flex flex-wrap gap-1">
-                          {profile.skills.developerTools.map((s: string) => (
-                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {profile.skills?.coreConcepts && profile.skills.coreConcepts.length > 0 && (
-                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
-                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Core Computer Science</span>
-                        <div className="flex flex-wrap gap-1">
-                          {profile.skills.coreConcepts.map((s: string) => (
-                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {profile.skills?.other && profile.skills.other.length > 0 && (
-                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
-                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Other Skills</span>
-                        <div className="flex flex-wrap gap-1">
-                          {profile.skills.other.map((s: string) => (
-                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-border/80 bg-muted/5 p-3 text-center">
+                      <p className="text-xs font-medium text-muted-foreground">Education — 0 extracted</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        No education records found in structured profile. Click &ldquo;Re-analyze Resume with AI&rdquo; to re-structure.
+                      </p>
+                    </div>
+                  )}
                 </div>
 
-                {/* Experience Section */}
-                {profile.experience && profile.experience.length > 0 && (
-                  <div className="space-y-3 pt-2 border-t border-border">
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                      <Briefcase className="h-4 w-4 text-primary" />
-                      <span>Experience</span>
+                {/* Categorized Skills Section */}
+                {(() => {
+                  const languages = profile.skills?.languages || [];
+                  const frontend = profile.skills?.frontend || profile.skills?.webTechnologies || [];
+                  const backend = profile.skills?.backend || profile.skills?.backendTechnologies || [];
+                  const frameworks = profile.skills?.frameworks || [];
+                  const databases = profile.skills?.databases || [];
+                  const aiMl = profile.skills?.aiMl || [];
+                  const dataScience = profile.skills?.dataScience || [];
+                  const cloudDevOps = profile.skills?.cloudDevOps || [];
+                  const tools = profile.skills?.tools || profile.skills?.developerTools || [];
+                  const apisIntegrations = profile.skills?.apisIntegrations || [];
+                  const coreCs = profile.skills?.coreCs || profile.skills?.coreConcepts || [];
+                  const other = profile.skills?.other || [];
+
+                  const totalCount = [
+                    ...languages,
+                    ...frontend,
+                    ...backend,
+                    ...frameworks,
+                    ...databases,
+                    ...aiMl,
+                    ...dataScience,
+                    ...cloudDevOps,
+                    ...tools,
+                    ...apisIntegrations,
+                    ...coreCs,
+                    ...other,
+                  ].length;
+
+                  return (
+                    <div className="space-y-3 pt-2 border-t border-border">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                        <Code2 className="h-4 w-4 text-primary" />
+                        <span>Categorized Technical Skills ({totalCount})</span>
+                      </div>
+
+                      {totalCount > 0 ? (
+                        <div className="grid gap-2.5 sm:grid-cols-2 text-xs">
+                          {languages.length > 0 && (
+                            <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Programming Languages</span>
+                              <div className="flex flex-wrap gap-1">
+                                {languages.map((s) => (
+                                  <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {frontend.length > 0 && (
+                            <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Frontend & Web</span>
+                              <div className="flex flex-wrap gap-1">
+                                {frontend.map((s) => (
+                                  <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {backend.length > 0 && (
+                            <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Backend & Servers</span>
+                              <div className="flex flex-wrap gap-1">
+                                {backend.map((s) => (
+                                  <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {frameworks.length > 0 && (
+                            <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Frameworks & Libraries</span>
+                              <div className="flex flex-wrap gap-1">
+                                {frameworks.map((s) => (
+                                  <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {databases.length > 0 && (
+                            <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Databases & Storage</span>
+                              <div className="flex flex-wrap gap-1">
+                                {databases.map((s) => (
+                                  <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {aiMl.length > 0 && (
+                            <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">AI & Machine Learning</span>
+                              <div className="flex flex-wrap gap-1">
+                                {aiMl.map((s) => (
+                                  <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {dataScience.length > 0 && (
+                            <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Data Science & Analytics</span>
+                              <div className="flex flex-wrap gap-1">
+                                {dataScience.map((s) => (
+                                  <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {cloudDevOps.length > 0 && (
+                            <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Cloud & DevOps</span>
+                              <div className="flex flex-wrap gap-1">
+                                {cloudDevOps.map((s) => (
+                                  <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {tools.length > 0 && (
+                            <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Developer Tools & VCS</span>
+                              <div className="flex flex-wrap gap-1">
+                                {tools.map((s) => (
+                                  <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {apisIntegrations.length > 0 && (
+                            <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">APIs & Integrations</span>
+                              <div className="flex flex-wrap gap-1">
+                                {apisIntegrations.map((s) => (
+                                  <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {coreCs.length > 0 && (
+                            <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Core Computer Science</span>
+                              <div className="flex flex-wrap gap-1">
+                                {coreCs.map((s) => (
+                                  <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {other.length > 0 && (
+                            <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Other Skills</span>
+                              <div className="flex flex-wrap gap-1">
+                                {other.map((s) => (
+                                  <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-dashed border-border/80 bg-muted/5 p-3 text-center">
+                          <p className="text-xs font-medium text-muted-foreground">Skills — 0 extracted</p>
+                          <p className="text-[11px] text-muted-foreground mt-0.5">
+                            No technical skills categorized. Click &ldquo;Re-analyze Resume with AI&rdquo; to re-structure.
+                          </p>
+                        </div>
+                      )}
                     </div>
+                  );
+                })()}
+
+                {/* Experience Section */}
+                <div className="space-y-3 pt-2 border-t border-border">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                    <Briefcase className="h-4 w-4 text-primary" />
+                    <span>Experience ({profile.experience?.length || 0})</span>
+                  </div>
+                  {profile.experience && profile.experience.length > 0 ? (
                     <div className="space-y-3">
                       {profile.experience.map((exp, idx) => (
                         <div key={idx} className="rounded-lg border border-border/80 bg-muted/10 p-3 text-xs space-y-2">
@@ -866,16 +1001,23 @@ export default function SettingsPage() {
                         </div>
                       ))}
                     </div>
-                  </div>
-                )}
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-border/80 bg-muted/5 p-3 text-center">
+                      <p className="text-xs font-medium text-muted-foreground">Experience — 0 extracted</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        No work experience or internships extracted. If your resume contains experience, click &ldquo;Re-analyze Resume with AI&rdquo; above.
+                      </p>
+                    </div>
+                  )}
+                </div>
 
                 {/* Projects Section */}
-                {profile.projects && profile.projects.length > 0 && (
-                  <div className="space-y-3 pt-2 border-t border-border">
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                      <FolderGit2 className="h-4 w-4 text-primary" />
-                      <span>Technical Projects ({profile.projects.length})</span>
-                    </div>
+                <div className="space-y-3 pt-2 border-t border-border">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                    <FolderGit2 className="h-4 w-4 text-primary" />
+                    <span>Technical Projects ({profile.projects?.length || 0})</span>
+                  </div>
+                  {profile.projects && profile.projects.length > 0 ? (
                     <div className="grid gap-3 sm:grid-cols-2">
                       {profile.projects.map((p, idx) => (
                         <div key={idx} className="rounded-lg border border-border/80 bg-muted/10 p-3 text-xs space-y-2 flex flex-col justify-between">
@@ -925,77 +1067,98 @@ export default function SettingsPage() {
                         </div>
                       ))}
                     </div>
-                  </div>
-                )}
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-border/80 bg-muted/5 p-3 text-center">
+                      <p className="text-xs font-medium text-muted-foreground">Projects — 0 extracted</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        No technical projects extracted. If your resume contains projects, click &ldquo;Re-analyze Resume with AI&rdquo; above.
+                      </p>
+                    </div>
+                  )}
+                </div>
 
                 {/* Achievements & Certifications */}
-                {((profile.achievements && profile.achievements.length > 0) ||
-                  (profile.certifications && profile.certifications.length > 0)) && (
-                  <div className="space-y-3 pt-2 border-t border-border">
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                      <Award className="h-4 w-4 text-primary" />
-                      <span>Achievements & Certifications</span>
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-2 text-xs">
-                      {profile.achievements && profile.achievements.length > 0 && (
-                        <div className="rounded-lg border border-border/60 bg-muted/5 p-3 space-y-1.5">
-                          <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Key Achievements</p>
-                          <ul className="list-disc list-inside space-y-1 text-slate-700 text-[11px]">
-                            {profile.achievements.map((ach, idx) => (
-                              <li key={idx}>
-                                {typeof ach === 'string' ? ach : (
-                                  <>
-                                    <strong>{ach.title}</strong>
-                                    {ach.description ? ` — ${ach.description}` : ''}
-                                    {ach.year ? ` (${ach.year})` : ''}
-                                  </>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
+                <div className="space-y-3 pt-2 border-t border-border">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                    <Award className="h-4 w-4 text-primary" />
+                    <span>Achievements & Certifications ({(profile.achievements?.length || 0) + (profile.certifications?.length || 0)})</span>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 text-xs">
+                    <div className="rounded-lg border border-border/60 bg-muted/5 p-3 space-y-1.5">
+                      <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">
+                        Key Achievements ({profile.achievements?.length || 0})
+                      </p>
+                      {profile.achievements && profile.achievements.length > 0 ? (
+                        <ul className="list-disc list-inside space-y-1 text-slate-700 text-[11px]">
+                          {profile.achievements.map((ach, idx) => (
+                            <li key={idx}>
+                              {typeof ach === 'string' ? ach : (
+                                <>
+                                  <strong>{ach.title}</strong>
+                                  {ach.description ? ` — ${ach.description}` : ''}
+                                  {(ach.date || ach.year) ? ` (${ach.date || ach.year})` : ''}
+                                </>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-[11px] text-muted-foreground italic">No achievements or competition awards extracted.</p>
                       )}
+                    </div>
 
-                      {profile.certifications && profile.certifications.length > 0 && (
-                        <div className="rounded-lg border border-border/60 bg-muted/5 p-3 space-y-1.5">
-                          <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Certifications</p>
-                          <ul className="list-disc list-inside space-y-1 text-slate-700 text-[11px]">
-                            {profile.certifications.map((cert, idx) => (
-                              <li key={idx}>
-                                {typeof cert === 'string' ? cert : (
-                                  <>
-                                    <strong>{cert.name}</strong>
-                                    {cert.issuer ? ` (${cert.issuer})` : ''}
-                                    {cert.year ? ` [${cert.year}]` : ''}
-                                  </>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
+                    <div className="rounded-lg border border-border/60 bg-muted/5 p-3 space-y-1.5">
+                      <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">
+                        Certifications ({profile.certifications?.length || 0})
+                      </p>
+                      {profile.certifications && profile.certifications.length > 0 ? (
+                        <ul className="list-disc list-inside space-y-1 text-slate-700 text-[11px]">
+                          {profile.certifications.map((cert, idx) => (
+                            <li key={idx}>
+                              {typeof cert === 'string' ? cert : (
+                                <>
+                                  <strong>{cert.name}</strong>
+                                  {cert.issuer ? ` (${cert.issuer})` : ''}
+                                  {(cert.date || cert.year) ? ` [${cert.date || cert.year}]` : ''}
+                                </>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-[11px] text-muted-foreground italic">No certifications extracted from resume.</p>
                       )}
                     </div>
                   </div>
-                )}
+                </div>
 
                 {/* Leadership & Extra-Curricular */}
-                {profile.leadership && profile.leadership.length > 0 && (
-                  <div className="space-y-2 pt-2 border-t border-border">
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                      <Sparkles className="h-4 w-4 text-primary" />
-                      <span>Leadership & Extra-Curricular</span>
-                    </div>
+                <div className="space-y-2 pt-2 border-t border-border">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                    <span>Leadership & Extra-Curricular ({profile.leadership?.length || 0})</span>
+                  </div>
+                  {profile.leadership && profile.leadership.length > 0 ? (
                     <div className="grid gap-2 sm:grid-cols-2 text-xs">
                       {profile.leadership.map((lead, idx) => (
                         <div key={idx} className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1">
-                          <p className="font-semibold text-foreground">{lead.role}</p>
-                          <p className="text-muted-foreground">{lead.organization}{lead.period ? ` • ${lead.period}` : ''}</p>
-                          {lead.description && <p className="text-[11px] text-slate-600 leading-relaxed">{lead.description}</p>}
+                          <p className="font-semibold text-foreground">{lead.position || lead.role || 'Coordinator'}</p>
+                          <p className="text-muted-foreground">{lead.organization}{lead.duration || lead.period ? ` • ${lead.duration || lead.period}` : ''}</p>
+                          {(lead.description || lead.highlights?.[0]) && (
+                            <p className="text-[11px] text-slate-600 leading-relaxed">{lead.description || lead.highlights?.[0]}</p>
+                          )}
                         </div>
                       ))}
                     </div>
-                  </div>
-                )}
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-border/80 bg-muted/5 p-3 text-center">
+                      <p className="text-xs font-medium text-muted-foreground">Leadership — 0 extracted</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        No positions of responsibility extracted.
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Collapsible Read-Only Raw Extracted Resume Text */}
