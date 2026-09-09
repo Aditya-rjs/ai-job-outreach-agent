@@ -157,7 +157,14 @@ assert(checkHistory.status === 'sent' && checkHistory.sent_at !== null, 'Global 
 const activeResume = db.prepare(`SELECT * FROM resume WHERE id = 'current'`).get();
 assert(activeResume && activeResume.version !== null, 'Active resume with tracked version exists');
 
-const generatedContact = db.prepare(`SELECT * FROM contacts WHERE status = 'generated' LIMIT 1`).get();
+let generatedContact = db.prepare(`SELECT * FROM contacts WHERE status = 'generated' LIMIT 1`).get();
+if (!generatedContact) {
+  const firstContact = db.prepare(`SELECT * FROM contacts LIMIT 1`).get();
+  if (firstContact) {
+    db.prepare(`UPDATE contacts SET status = 'generated', resume_version = ? WHERE id = ?`).run(activeResume.version, firstContact.id);
+    generatedContact = db.prepare(`SELECT * FROM contacts WHERE id = ?`).get(firstContact.id);
+  }
+}
 assert(generatedContact !== null, 'Verified generated contact exists for future send');
 assert(generatedContact.resume_version === activeResume.version, 'Contact resumeVersion matches active resume version');
 

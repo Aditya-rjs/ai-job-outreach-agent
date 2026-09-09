@@ -1,5 +1,6 @@
 import { getDb } from './index';
-import { schedulerState, settings, aiProviderState } from './schema';
+import { schedulerState, settings, aiProviderState, candidateProfile } from './schema';
+import { eq } from 'drizzle-orm';
 
 export function seedDatabase() {
   const db = getDb();
@@ -57,6 +58,50 @@ export function seedDatabase() {
       .values({
         key: setting.key,
         value: setting.value,
+      })
+      .onConflictDoNothing()
+      .run();
+  }
+
+  // Ensure candidate_profile singleton exists with clean manual defaults
+  // IMPORTANT: Do NOT read resume.parsedData. Only preserve genuinely manual profile_link_* if present.
+  const existingProfile = db.select().from(candidateProfile).where(eq(candidateProfile.id, 'singleton')).get();
+  if (!existingProfile) {
+    const linkLinkedin = db.select().from(settings).where(eq(settings.key, 'profile_link_linkedin')).get()?.value || '';
+    const linkGithub = db.select().from(settings).where(eq(settings.key, 'profile_link_github')).get()?.value || '';
+    const linkPortfolio = db.select().from(settings).where(eq(settings.key, 'profile_link_portfolio')).get()?.value || '';
+    const linkOther = db.select().from(settings).where(eq(settings.key, 'profile_link_other')).get()?.value || '';
+
+    db.insert(candidateProfile)
+      .values({
+        id: 'singleton',
+        fullName: '',
+        email: '',
+        phone: '',
+        location: '',
+        degree: '',
+        fieldOfStudy: '',
+        institution: '',
+        graduationYear: '',
+        summary: '',
+        linkedin: linkLinkedin,
+        github: linkGithub,
+        portfolio: linkPortfolio,
+        otherLink: linkOther,
+        education: '[]',
+        experience: '[]',
+        projects: '[]',
+        skills: JSON.stringify({
+          languages: [],
+          frameworks: [],
+          databases: [],
+          cloudDevOps: [],
+          tools: [],
+          other: [],
+        }),
+        achievements: '[]',
+        version: '1',
+        updatedAt: new Date().toISOString(),
       })
       .onConflictDoNothing()
       .run();

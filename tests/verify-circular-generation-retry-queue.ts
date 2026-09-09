@@ -48,6 +48,7 @@ import { AiProviderUnavailableError } from '../src/lib/ai/ai-provider-service';
 import { AiOutputInvalidError } from '../src/lib/ai/json-parser';
 import { DeterministicDefectError } from '../src/lib/pipeline/generation-error-boundary';
 import { batches, contacts, outreachQueue, resume } from '../src/db/schema';
+import { saveCandidateProfile } from '../src/lib/candidate-profile/candidate-profile-service';
 import { eq, sql, desc, asc } from 'drizzle-orm';
 import { ulid } from 'ulid';
 
@@ -86,6 +87,31 @@ async function runAllTests() {
     })
     .onConflictDoNothing()
     .run();
+
+  // Ensure candidate profile exists as authoritative source of truth
+  saveCandidateProfile(
+    {
+      fullName: 'Candidate Alex',
+      email: 'alex@example.com',
+      degree: 'B.S.',
+      fieldOfStudy: 'Computer Science',
+      institution: 'State University',
+      summary: 'Full Stack Engineer with React, Node, Python, SQLite experience.',
+      skills: {
+        languages: ['TypeScript', 'JavaScript', 'Python'],
+        frameworks: ['React', 'Node.js'],
+        tools: ['PostgreSQL', 'SQLite'],
+      },
+      projects: [
+        {
+          title: 'Outreach Platform',
+          description: 'Automated email outreach agent',
+          technologies: ['React', 'Node.js', 'SQLite'],
+        },
+      ],
+    },
+    db
+  );
 
   // -------------------------------------------------------------------------
   // Scenario 1: Sequential FIFO processing (#1 -> #2 -> #3)

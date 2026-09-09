@@ -47,6 +47,9 @@ import {
   getGenerationRoundState,
   MAX_GENERATION_RETRIES,
 } from '../src/lib/pipeline/generation-reconciler';
+import {
+  saveCandidateProfile,
+} from '../src/lib/candidate-profile/candidate-profile-service';
 import { AiProviderUnavailableError } from '../src/lib/ai/ai-dispatcher';
 import { globalGeminiLimiter } from '../src/lib/ai/gemini-client';
 import { DeterministicDefectError } from '../src/lib/pipeline/generation-error-boundary';
@@ -80,6 +83,31 @@ async function runAllTests() {
       uploadedAt: nowIso,
     })
     .run();
+
+  // Seed candidate profile as authoritative source of truth
+  saveCandidateProfile(
+    {
+      fullName: 'Aditya Raj Singh',
+      email: 'aditya.rjs003@gmail.com',
+      degree: 'B.Tech',
+      fieldOfStudy: 'Computer Science',
+      institution: 'University',
+      summary: 'Full Stack Engineer with experience in React and Node',
+      skills: {
+        languages: ['TypeScript', 'JavaScript', 'Python'],
+        frameworks: ['Next.js', 'React', 'Node.js'],
+        tools: ['Git', 'Docker'],
+      },
+      projects: [
+        {
+          title: 'Cloud Platform',
+          description: 'Scalable cloud infrastructure',
+          technologies: ['React', 'Node.js'],
+        },
+      ],
+    },
+    db
+  );
 
   const batchId = 'batch_gen_retry_rounds_01';
   db.insert(batches)

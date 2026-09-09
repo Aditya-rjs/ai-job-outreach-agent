@@ -1,5 +1,5 @@
 import { getDb } from '@/db';
-import { contacts, batches, outreachQueue, schedulerState, settings, resume } from '@/db/schema';
+import { contacts, batches, outreachQueue, schedulerState, settings, resume, candidateProfile } from '@/db/schema';
 import { eq, and, sql, asc, desc, inArray, ne, or, isNotNull } from 'drizzle-orm';
 import { getLocalDateString, getConfiguredTimezone, getCooldownCutoffIso } from './time-utils';
 import type { QueueItem, Contact } from '@/types';
@@ -248,13 +248,19 @@ export function recoverStaleProcessingItems(): number {
       continue;
     }
 
-    // Check if resume was updated since this email was generated
+    // Check if candidate profile or resume was updated since this email was generated
+    const profileRecord = db.select({ version: candidateProfile.version }).from(candidateProfile).where(eq(candidateProfile.id, 'singleton')).get();
     const resumeRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();
+    const activeProfileVersion = profileRecord?.version || null;
     const activeResumeVersion = resumeRecord ? (resumeRecord.version || resumeRecord.uploadedAt) : null;
-    if (activeResumeVersion && contact.resumeVersion && contact.resumeVersion !== activeResumeVersion) {
+
+    const isMatch = (activeProfileVersion && contact.resumeVersion === activeProfileVersion) ||
+                    (activeResumeVersion && contact.resumeVersion === activeResumeVersion);
+
+    if (contact.resumeVersion && !isMatch) {
       markContactStaleResumeForRegeneration(contact.id);
       recoveredCount++;
-      console.log(`[Crash Recovery] Stale resume detected for item ${item.id} (${contact.email}). Routed to PENDING_GENERATION.`);
+      console.log(`[Crash Recovery] Stale credentials detected for item ${item.id} (${contact.email}). Routed to PENDING_GENERATION.`);
       continue;
     }
 
@@ -312,8 +318,10 @@ export function acquireNextEligibleJob(workerId: string): NextEligibleJob | null
   const leaseExpiresAt = new Date(now.getTime() + QUEUE_ITEM_LEASE_MS).toISOString();
   const cooldownCutoffIso = getCooldownCutoffIso(now.getTime());
 
-  // Check active resume version
+  // Check active candidate profile or resume version
+  const profileRecord = db.select({ version: candidateProfile.version }).from(candidateProfile).where(eq(candidateProfile.id, 'singleton')).get();
   const resumeRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();
+  const activeProfileVersion = profileRecord?.version || null;
   const activeResumeVersion = resumeRecord ? (resumeRecord.version || resumeRecord.uploadedAt) : null;
 
   // Find candidate items ordered by: priority desc, scheduledFor asc, createdAt asc, id asc
@@ -366,9 +374,12 @@ export function acquireNextEligibleJob(workerId: string): NextEligibleJob | null
   }
 
   for (const { queue: candidateQueue, contact: candidateContact } of candidates) {
-    // If active resume exists and contact's resumeVersion is outdated, auto-heal to PENDING_GENERATION
-    if (activeResumeVersion && candidateContact.resumeVersion && candidateContact.resumeVersion !== activeResumeVersion) {
-      console.log(`[Queue Manager] Stale resume detected for candidate ${candidateContact.id} (${candidateContact.email}). Auto-healing to PENDING_GENERATION.`);
+    // If contact's resumeVersion is outdated compared to active profile and resume, auto-heal to PENDING_GENERATION
+    const isMatch = (activeProfileVersion && candidateContact.resumeVersion === activeProfileVersion) ||
+                    (activeResumeVersion && candidateContact.resumeVersion === activeResumeVersion);
+
+    if (candidateContact.resumeVersion && !isMatch) {
+      console.log(`[Queue Manager] Stale credentials detected for contact ${candidateContact.id} (${candidateContact.email}). Auto-healing to PENDING_GENERATION.`);
       markContactStaleResumeForRegeneration(candidateContact.id);
       continue;
     }

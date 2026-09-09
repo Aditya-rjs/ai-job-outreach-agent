@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getDb } from '@/db';
-import { contacts, batches, resume, globalEmailHistory, outreachQueue } from '@/db/schema';
+import { contacts, batches, resume, globalEmailHistory, outreachQueue, candidateProfile } from '@/db/schema';
 import { eq, sql, and, ne } from 'drizzle-orm';
 import { getAuthenticatedGmailClient } from './gmail-client';
 import { buildMimeMessage } from './mime-builder';
@@ -174,8 +174,15 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
     };
   }
 
-  // 8. Resume version match check (Requirement 13)
-  if (contact.resumeVersion && contact.resumeVersion !== resumeAttachment.version) {
+  // 8. Candidate profile & resume version match check
+  const profileRecord = db.select({ version: candidateProfile.version }).from(candidateProfile).where(eq(candidateProfile.id, 'singleton')).get();
+  const activeProfileVersion = profileRecord?.version || null;
+  const activeResumeVersion = resumeAttachment.version || null;
+
+  const isMatch = (activeProfileVersion && contact.resumeVersion === activeProfileVersion) ||
+                  (activeResumeVersion && contact.resumeVersion === activeResumeVersion);
+
+  if (contact.resumeVersion && !isMatch) {
     markContactStaleResumeForRegeneration(contact.id);
     return {
       success: false,

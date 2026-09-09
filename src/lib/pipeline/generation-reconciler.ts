@@ -10,7 +10,8 @@ import { isAiOutputInvalidError } from '@/lib/ai/json-parser';
 import { normalizeGenerationError } from '@/lib/pipeline/generation-error-boundary';
 import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
 import { getUserVerifiedLinks } from '@/lib/resume/profile-links';
-import type { StructuredResumeProfile, Contact } from '@/types';
+import { getCandidateProfile, isCandidateProfileConfigured } from '@/lib/candidate-profile/candidate-profile-service';
+import type { StructuredResumeProfile, CandidateProfile, Contact, VerifiedProfileLinks } from '@/types';
 
 export const GENERATION_LEASE_MS = 150 * 1000; // 150-second lease (headroom over 120s active turn budget)
 export const RETRY_TURN_BUDGET_MS = 120 * 1000; // 120-second active turn budget per retry contact
@@ -315,35 +316,27 @@ export async function reconcilePendingEmailGenerations(options: {
     };
   }
 
-  // 3. Verify active verified resume exists as source of truth
+  // 3. Verify active persistent candidate profile exists as authoritative source of truth
+  const profile = getCandidateProfile(db);
+  if (!isCandidateProfileConfigured(profile)) {
+    return {
+      processed: 0,
+      succeeded: 0,
+      retryPending: 0,
+      failed: 0,
+      recovered,
+      skippedReason: 'NO_CANDIDATE_PROFILE',
+    };
+  }
+
+  const verifiedLinks: VerifiedProfileLinks = {
+    linkedin: profile.linkedin || null,
+    github: profile.github || null,
+    portfolio: profile.portfolio || null,
+    other: profile.otherLink || null,
+  };
   const resumeRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();
-  if (!resumeRecord || !resumeRecord.parsedData) {
-    return {
-      processed: 0,
-      succeeded: 0,
-      retryPending: 0,
-      failed: 0,
-      recovered,
-      skippedReason: 'NO_ACTIVE_RESUME',
-    };
-  }
-
-  let profile: StructuredResumeProfile;
-  try {
-    profile = JSON.parse(resumeRecord.parsedData);
-  } catch {
-    return {
-      processed: 0,
-      succeeded: 0,
-      retryPending: 0,
-      failed: 0,
-      recovered,
-      skippedReason: 'INVALID_RESUME_DATA',
-    };
-  }
-
-  const verifiedLinks = getUserVerifiedLinks(db);
-  const resumeVersion = resumeRecord.version || resumeRecord.uploadedAt;
+  const resumeVersion = resumeRecord?.version || resumeRecord?.uploadedAt || profile.version;
 
   // 4. Evaluate Round State: Active Generation Pass vs Generation Retry Pass
   // Invariant: Generation Retry may begin ONLY when current active Email Gen Pending count is strictly zero.

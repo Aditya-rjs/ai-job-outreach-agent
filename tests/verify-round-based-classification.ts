@@ -61,6 +61,7 @@ import {
   resume,
 } from '../src/db/schema';
 import { eq, sql, inArray } from 'drizzle-orm';
+import { saveCandidateProfile } from '../src/lib/candidate-profile/candidate-profile-service';
 import {
   reconcilePendingClassifications,
   discoverAndSeedOrphanedCompanies,
@@ -658,6 +659,13 @@ async function runTests() {
     })
     .onConflictDoNothing()
     .run();
+
+  saveCandidateProfile({
+    fullName: 'Aditya Raj Singh',
+    education: [{ id: 'edu_1', degree: 'B.Tech CSE', institution: 'LNJPIT' }],
+    skills: { languages: ['TypeScript', 'Python'], frameworks: ['React', 'Next.js'], databases: [], cloudDevOps: [], tools: [], other: [] },
+    projects: [{ id: 'proj_1', name: 'Job Agent', techStack: ['TypeScript', 'Next.js'], highlights: [] }],
+  }, db);
 
   // Run Email Generation reconciler on one of the relevant contacts
   const mockAiGenerator = async () => 'Subject: Engineering Opportunities\n\nDear Recruiter,\n\nI am interested in roles at Microsoft.';

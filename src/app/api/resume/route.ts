@@ -3,13 +3,10 @@ import { getDb } from '@/db';
 import { resume } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { initializeDatabase } from '@/db/migrate';
-import { parseAndStructureResume, structureResumeFromPdf } from '@/lib/resume/resume-parser';
-import type { ApiResponse, ResumeData, StructuredResumeProfile, VerifiedProfileLinks } from '@/types';
+import type { ApiResponse, ResumeData } from '@/types';
 import fs from 'fs';
 import path from 'path';
 import { getResumesDir } from '@/lib/config/paths';
-import { invalidateStaleResumeContacts } from '@/lib/scheduler/queue-manager';
-import { getUserVerifiedLinks } from '@/lib/resume/profile-links';
 
 let initialized = false;
 function ensureInitialized() {
@@ -25,8 +22,6 @@ export async function GET(): Promise<
   NextResponse<
     ApiResponse<{
       resume: ResumeData | null;
-      profile: StructuredResumeProfile | null;
-      verifiedLinks: VerifiedProfileLinks;
     }>
   >
 > {
@@ -34,36 +29,17 @@ export async function GET(): Promise<
     ensureInitialized();
     const db = getDb();
     const record = db.select().from(resume).where(eq(resume.id, 'current')).get();
-    const verifiedLinks = getUserVerifiedLinks();
-
-    if (!record) {
-      return NextResponse.json({
-        success: true,
-        data: { resume: null, profile: null, verifiedLinks },
-      });
-    }
-
-    let profile: StructuredResumeProfile | null = null;
-    if (record.parsedData) {
-      try {
-        profile = JSON.parse(record.parsedData);
-      } catch {
-        // ignore parse error
-      }
-    }
 
     return NextResponse.json({
       success: true,
       data: {
-        resume: record as ResumeData,
-        profile,
-        verifiedLinks,
+        resume: (record as ResumeData) || null,
       },
     });
   } catch (error) {
     console.error('Resume GET error:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch resume data' },
+      { success: false, error: 'Failed to fetch resume file record' },
       { status: 500 }
     );
   }
@@ -71,67 +47,10 @@ export async function GET(): Promise<
 
 export async function POST(
   request: NextRequest
-): Promise<NextResponse<ApiResponse<{ resume: ResumeData; profile: StructuredResumeProfile; verifiedLinks: VerifiedProfileLinks }>>> {
+): Promise<NextResponse<ApiResponse<{ resume: ResumeData }>>> {
   try {
     ensureInitialized();
     const db = getDb();
-
-    // Check if this is a JSON request to re-analyze existing stored original resume PDF
-    const contentType = request.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
-      const body = await request.json().catch(() => ({}));
-      if (body.action === 'reparse') {
-        const record = db.select().from(resume).where(eq(resume.id, 'current')).get();
-        if (!record || !record.filePath) {
-          return NextResponse.json(
-            { success: false, error: 'No existing resume found to re-analyze. Please upload a resume PDF first.' },
-            { status: 400 }
-          );
-        }
-
-        const resumesDir = getResumesDir();
-        let targetFilePath = record.filePath;
-        if (!fs.existsSync(targetFilePath)) {
-          targetFilePath = path.join(resumesDir, path.basename(record.filePath));
-        }
-
-        if (!fs.existsSync(targetFilePath)) {
-          return NextResponse.json(
-            { success: false, error: 'Original resume PDF file not found on disk. Please upload your resume PDF.' },
-            { status: 404 }
-          );
-        }
-
-        // Canonical re-analysis: Reads the ORIGINAL PDF directly from disk
-        const pdfBuffer = fs.readFileSync(targetFilePath);
-        const profile = await structureResumeFromPdf(pdfBuffer, record.filename);
-        const version = new Date().toISOString();
-
-        db.update(resume)
-          .set({
-            parsedData: JSON.stringify(profile),
-            version,
-          })
-          .where(eq(resume.id, 'current'))
-          .run();
-
-        const invalidatedCount = invalidateStaleResumeContacts(version);
-        if (invalidatedCount > 0) {
-          console.log(`[Resume Re-analyze] Invalidated ${invalidatedCount} contacts with stale resume versions.`);
-        }
-
-        const updatedRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();
-
-        return NextResponse.json({
-          success: true,
-          data: {
-            resume: updatedRecord as ResumeData,
-            profile,
-            verifiedLinks: getUserVerifiedLinks(),
-          },
-        });
-      }
-    }
 
     const formData = await request.formData();
     const file = formData.get('file');
@@ -174,16 +93,13 @@ export async function POST(
     const targetPath = path.join(resumesDir, safeFilename);
     fs.writeFileSync(targetPath, buffer);
 
-    // Parse and structure the resume
-    const { rawText, profile } = await parseAndStructureResume(buffer);
-
     const recordData = {
       id: 'current',
       filename,
       filePath: targetPath,
       mimeType: 'application/pdf',
-      parsedText: rawText,
-      parsedData: JSON.stringify(profile),
+      parsedText: null,
+      parsedData: null,
       version,
       uploadedAt: version,
     };
@@ -196,23 +112,15 @@ export async function POST(
       })
       .run();
 
-    // Immediately invalidate contacts generated with prior resume versions so they can be regenerated autonomously
-    const invalidatedCount = invalidateStaleResumeContacts(version);
-    if (invalidatedCount > 0) {
-      console.log(`[Resume Upload] Invalidated ${invalidatedCount} contacts with stale resume versions for autonomous regeneration.`);
-    }
-
     return NextResponse.json({
       success: true,
       data: {
         resume: recordData as ResumeData,
-        profile,
-        verifiedLinks: getUserVerifiedLinks(),
       },
     });
   } catch (error) {
-    console.error('Resume upload/parse error:', error);
-    const msg = error instanceof Error ? error.message : 'Failed to parse resume document.';
+    console.error('Resume upload error:', error);
+    const msg = error instanceof Error ? error.message : 'Failed to upload resume document.';
     return NextResponse.json(
       { success: false, error: msg },
       { status: 500 }

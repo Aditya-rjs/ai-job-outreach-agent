@@ -4,8 +4,8 @@ import { resume, contacts } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { initializeDatabase } from '@/db/migrate';
 import { generatePersonalizedEmail } from '@/lib/ai/email-generator';
-import { getUserVerifiedLinks } from '@/lib/resume/profile-links';
-import type { ApiResponse, StructuredResumeProfile, Contact } from '@/types';
+import { getCandidateProfile, isCandidateProfileConfigured } from '@/lib/candidate-profile/candidate-profile-service';
+import type { ApiResponse, Contact, VerifiedProfileLinks } from '@/types';
 
 let initialized = false;
 function ensureInitialized() {
@@ -24,17 +24,21 @@ export async function POST(
     const { id } = await params;
     const db = getDb();
 
-    // 1. Fetch resume
-    const resumeRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();
-    if (!resumeRecord || !resumeRecord.parsedData) {
+    // 1. Fetch persistent candidate profile
+    const profile = getCandidateProfile(db);
+    if (!isCandidateProfileConfigured(profile)) {
       return NextResponse.json(
-        { success: false, error: 'No active resume found. Please upload a resume first.' },
+        { success: false, error: 'No active candidate profile found. Please fill in your profile in Settings first.' },
         { status: 400 }
       );
     }
 
-    const profile: StructuredResumeProfile = JSON.parse(resumeRecord.parsedData);
-    const verifiedLinks = getUserVerifiedLinks(db);
+    const verifiedLinks: VerifiedProfileLinks = {
+      linkedin: profile.linkedin || null,
+      github: profile.github || null,
+      portfolio: profile.portfolio || null,
+      other: profile.otherLink || null,
+    };
 
     // 2. Fetch contact
     const contact = db.select().from(contacts).where(eq(contacts.id, id)).get();
@@ -82,7 +86,7 @@ export async function POST(
     });
 
     const now = new Date().toISOString();
-    const resumeVersion = resumeRecord.version || resumeRecord.uploadedAt;
+    const resumeVersion = profile.version;
 
     db.update(contacts)
       .set({

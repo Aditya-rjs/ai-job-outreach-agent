@@ -8,12 +8,12 @@ import {
   isAiOutputInvalidError,
   type ParsedEmailOutput,
 } from './json-parser';
-import type { StructuredResumeProfile, GeneratedEmailResult, VerifiedProfileLinks } from '@/types';
+import type { StructuredResumeProfile, CandidateProfile, GeneratedEmailResult, VerifiedProfileLinks } from '@/types';
 
 export { AiOutputInvalidError, isAiOutputInvalidError, extractAndParseEmailJson, type ParsedEmailOutput };
 
 export interface EmailGenerationInput {
-  profile: StructuredResumeProfile;
+  profile: CandidateProfile | StructuredResumeProfile;
   companyName: string;
   contactName?: string | null;
   designation?: string | null;
@@ -27,6 +27,70 @@ export interface EmailGenerationInput {
   verifiedLinks?: VerifiedProfileLinks;
 }
 
+function getProfileDetails(profile: CandidateProfile | StructuredResumeProfile, verifiedLinks?: VerifiedProfileLinks) {
+  const name = ('fullName' in profile && profile.fullName) ? profile.fullName : ((profile as any).name || 'Candidate');
+  const email = profile.email || '';
+  const phone = profile.phone || '';
+  const summary = profile.summary || '';
+
+  const education = (profile.education || []).map((e: any) => ({
+    degree: e.degree || '',
+    institution: e.institution || '',
+    fieldOfStudy: e.fieldOfStudy || '',
+    year: e.year || '',
+    score: e.score || e.gpa || '',
+    highlights: (e.highlights || e.relevantCoursework || []) as string[],
+  }));
+
+  const experience = (profile.experience || []).map((exp: any) => ({
+    role: exp.role || exp.title || '',
+    company: exp.company || '',
+    duration: exp.duration || (exp.startDate ? `${exp.startDate} – ${exp.endDate || 'Present'}` : ''),
+    location: exp.location || '',
+    highlights: (exp.highlights || exp.bullets || exp.responsibilities || []) as string[],
+    technologies: (exp.technologies || exp.tools || []) as string[],
+  }));
+
+  const projects = (profile.projects || []).map((p: any) => ({
+    name: p.name || p.title || '',
+    techStack: (p.techStack || p.frameworks || []) as string[],
+    description: p.description || '',
+    highlights: (p.highlights || p.bullets || []) as string[],
+    liveUrl: p.liveUrl || '',
+    githubUrl: p.githubUrl || '',
+  }));
+
+  const achievements = (profile.achievements || []).map((a: any) => {
+    if (typeof a === 'string') return { title: a, description: '', year: '' };
+    return {
+      title: a.title || '',
+      description: a.description || '',
+      year: a.year || a.date || '',
+    };
+  });
+
+  const skills = profile.skills || {};
+
+  const effectiveLinks: VerifiedProfileLinks = {
+    linkedin: (verifiedLinks?.linkedin || ('linkedin' in profile ? profile.linkedin : '')) || null,
+    github: (verifiedLinks?.github || ('github' in profile ? profile.github : '')) || null,
+    portfolio: (verifiedLinks?.portfolio || ('portfolio' in profile ? profile.portfolio : '')) || null,
+    other: (verifiedLinks?.other || ('otherLink' in profile ? profile.otherLink : '')) || null,
+  };
+
+  return {
+    name,
+    email,
+    phone,
+    summary,
+    education,
+    experience,
+    projects,
+    achievements,
+    skills,
+    effectiveLinks,
+  };
+}
 
 const STRATEGIES = [
   'skills-focused',
@@ -46,32 +110,33 @@ function heuristicGenerateEmail(
   strategyIndex = 0
 ): GeneratedEmailResult {
   const { profile, companyName, contactName, designation, relevanceReason, verifiedLinks } = input;
+  const details = getProfileDetails(profile, verifiedLinks);
 
-  const candidateName = profile.name || 'Aditya Raj Singh';
-  const primaryEdu = profile.education?.[0];
+  const candidateName = details.name || 'Candidate';
+  const primaryEdu = details.education[0];
   const degree = primaryEdu?.degree || 'Computer Science Engineering graduate';
-  const institution = primaryEdu?.institution || 'LNJPIT Chapra';
-  const topLanguages = (profile.skills?.languages || []).slice(0, 3).join(', ') || 'JavaScript, TypeScript, SQL';
-  const topFrameworks = (profile.skills?.frameworks || []).slice(0, 3).join(', ') || 'React, Next.js, Node.js';
-  const topProject = profile.projects?.[0]?.title || 'web-based software platforms';
-  const projectTech = (profile.projects?.[0]?.techStack || []).slice(0, 3).join(', ') || topFrameworks;
-  const projectHighlight = profile.projects?.[0]?.highlights?.[0] || profile.projects?.[0]?.description || '';
+  const institution = primaryEdu?.institution || '';
+  const topLanguages = (details.skills?.languages || []).slice(0, 3).join(', ') || 'JavaScript, TypeScript, SQL';
+  const topFrameworks = (details.skills?.frameworks || []).slice(0, 3).join(', ') || 'React, Next.js, Node.js';
+  const topProject = details.projects[0]?.name || 'web-based software platforms';
+  const projectTech = (details.projects[0]?.techStack || []).slice(0, 3).join(', ') || topFrameworks;
+  const projectHighlight = details.projects[0]?.highlights?.[0] || details.projects[0]?.description || '';
 
   const greeting = contactName && contactName.trim()
     ? `Dear ${contactName.trim()},`
     : 'Hello Recruitment Team,';
 
   const linkLines: string[] = [];
-  if (verifiedLinks?.linkedin) linkLines.push(`LinkedIn: ${verifiedLinks.linkedin}`);
-  if (verifiedLinks?.github) linkLines.push(`GitHub: ${verifiedLinks.github}`);
-  if (verifiedLinks?.portfolio) linkLines.push(`Portfolio: ${verifiedLinks.portfolio}`);
+  if (details.effectiveLinks?.linkedin) linkLines.push(`LinkedIn: ${details.effectiveLinks.linkedin}`);
+  if (details.effectiveLinks?.github) linkLines.push(`GitHub: ${details.effectiveLinks.github}`);
+  if (details.effectiveLinks?.portfolio) linkLines.push(`Portfolio: ${details.effectiveLinks.portfolio}`);
 
   const signature = [
     'Best regards,',
     candidateName,
-    `${degree} — ${institution}`,
-    profile.email ? `Email: ${profile.email}` : '',
-    profile.phone ? `Phone: ${profile.phone}` : '',
+    institution ? `${degree} — ${institution}` : degree,
+    details.email ? `Email: ${details.email}` : '',
+    details.phone ? `Phone: ${details.phone}` : '',
     ...linkLines,
   ].filter(Boolean).join('\n');
 
@@ -171,82 +236,68 @@ function buildGenerationPrompt(
   avoidSimilarGuidance?: string
 ): string {
   const { profile, companyName, contactName, designation, companyWebsite, companyLocation, relevanceReason, verifiedLinks } = input;
+  const details = getProfileDetails(profile, verifiedLinks);
 
   // Build structured candidate facts dossier
-  const eduLines = (profile.education || []).map((e) => {
-    const parts = [`${e.degree} from ${e.institution}`];
+  const eduLines = details.education.map((e) => {
+    const parts = [e.degree ? `${e.degree}${e.institution ? ` from ${e.institution}` : ''}` : e.institution];
     if (e.year) parts.push(`(${e.year})`);
     if (e.score) parts.push(`[Grade/Score: ${e.score}]`);
     return `- ${parts.join(' ')}`;
-  }).join('\n');
+  }).filter(Boolean).join('\n');
 
   const skillsCategories: string[] = [];
-  if (profile.skills?.languages?.length) skillsCategories.push(`- Languages: ${profile.skills.languages.join(', ')}`);
-  if (profile.skills?.frameworks?.length) skillsCategories.push(`- Frameworks & Libraries: ${profile.skills.frameworks.join(', ')}`);
-  if (profile.skills?.webTechnologies?.length) skillsCategories.push(`- Web Technologies: ${profile.skills.webTechnologies.join(', ')}`);
-  if (profile.skills?.backendTechnologies?.length) skillsCategories.push(`- Backend: ${profile.skills.backendTechnologies.join(', ')}`);
-  if (profile.skills?.databases?.length) skillsCategories.push(`- Databases: ${profile.skills.databases.join(', ')}`);
-  if (profile.skills?.cloudDevOps?.length) skillsCategories.push(`- Cloud & DevOps: ${profile.skills.cloudDevOps.join(', ')}`);
-  if (profile.skills?.aiMl?.length) skillsCategories.push(`- AI & Machine Learning: ${profile.skills.aiMl.join(', ')}`);
-  if (profile.skills?.developerTools?.length) skillsCategories.push(`- Developer Tools: ${profile.skills.developerTools.join(', ')}`);
-  if (profile.skills?.coreConcepts?.length) skillsCategories.push(`- Core Concepts: ${profile.skills.coreConcepts.join(', ')}`);
-  if (profile.skills?.other?.length) skillsCategories.push(`- Other Skills: ${profile.skills.other.join(', ')}`);
+  if (details.skills?.languages?.length) skillsCategories.push(`- Languages: ${details.skills.languages.join(', ')}`);
+  if (details.skills?.frameworks?.length) skillsCategories.push(`- Frameworks & Libraries: ${details.skills.frameworks.join(', ')}`);
+  if (details.skills?.databases?.length) skillsCategories.push(`- Databases: ${details.skills.databases.join(', ')}`);
+  if (details.skills?.cloudDevOps?.length) skillsCategories.push(`- Cloud & DevOps: ${details.skills.cloudDevOps.join(', ')}`);
+  if (details.skills?.tools?.length) skillsCategories.push(`- Developer Tools: ${details.skills.tools.join(', ')}`);
+  if (details.skills?.other?.length) skillsCategories.push(`- Other Skills: ${details.skills.other.join(', ')}`);
 
-  const experienceLines = (profile.experience || []).map((exp) => {
-    const header = `- ${exp.title} at ${exp.company} (${exp.startDate || ''} – ${exp.endDate || 'Present'}${exp.location ? `, ${exp.location}` : ''})`;
-    const bullets = (exp.bullets || []).map((b) => `  * ${b}`).join('\n');
+  const experienceLines = details.experience.map((exp) => {
+    const header = `- ${exp.role}${exp.company ? ` at ${exp.company}` : ''}${exp.duration ? ` (${exp.duration})` : ''}${exp.location ? `, ${exp.location}` : ''}`;
+    const bullets = exp.highlights.map((b) => `  * ${b}`).join('\n');
     const tools = exp.technologies?.length ? `  * Tech/Tools: ${exp.technologies.join(', ')}` : '';
     return [header, bullets, tools].filter(Boolean).join('\n');
   }).join('\n\n');
 
-  const projectLines = (profile.projects || []).map((p) => {
-    const header = `- ${p.title}${p.techStack?.length ? ` [Tech: ${p.techStack.join(', ')}]` : ''}`;
+  const projectLines = details.projects.map((p) => {
+    const header = `- ${p.name}${p.techStack?.length ? ` [Tech: ${p.techStack.join(', ')}]` : ''}`;
     const desc = p.description ? `  * Summary: ${p.description}` : '';
-    const highlights = (p.highlights || []).map((h) => `  * ${h}`).join('\n');
-    const metrics = (p.metrics || []).map((m) => `  * Metric: ${m}`).join('\n');
+    const highlights = p.highlights.map((h) => `  * ${h}`).join('\n');
     const links = [
       p.liveUrl ? `Live: ${p.liveUrl}` : '',
       p.githubUrl ? `GitHub: ${p.githubUrl}` : '',
     ].filter(Boolean).join(' | ');
     const linkLine = links ? `  * Project Links: ${links}` : '';
-    return [header, desc, highlights, metrics, linkLine].filter(Boolean).join('\n');
+    return [header, desc, highlights, linkLine].filter(Boolean).join('\n');
   }).join('\n\n');
 
-  const achievementLines = (profile.achievements || []).map((ach) => {
-    if (typeof ach === 'string') return `- ${ach}`;
+  const achievementLines = details.achievements.map((ach) => {
     return `- ${ach.title}${ach.description ? `: ${ach.description}` : ''}${ach.year ? ` (${ach.year})` : ''}`;
   }).join('\n');
 
-  const certLines = (profile.certifications || []).map((cert) => {
-    if (typeof cert === 'string') return `- ${cert}`;
-    return `- ${cert.name}${cert.issuer ? ` (Issued by ${cert.issuer})` : ''}${cert.year ? ` [${cert.year}]` : ''}`;
-  }).join('\n');
-
-  const leadershipLines = (profile.leadership || []).map((lead) => {
-    return `- ${lead.role}${lead.organization ? ` at ${lead.organization}` : ''}${lead.period ? ` (${lead.period})` : ''}${lead.description ? `: ${lead.description}` : ''}`;
-  }).join('\n');
-
   const verifiedLinkLines: string[] = [];
-  if (verifiedLinks?.linkedin) verifiedLinkLines.push(`- LinkedIn: ${verifiedLinks.linkedin}`);
-  if (verifiedLinks?.github) verifiedLinkLines.push(`- GitHub: ${verifiedLinks.github}`);
-  if (verifiedLinks?.portfolio) verifiedLinkLines.push(`- Portfolio: ${verifiedLinks.portfolio}`);
-  if (verifiedLinks?.other) verifiedLinkLines.push(`- Other: ${verifiedLinks.other}`);
+  if (details.effectiveLinks?.linkedin) verifiedLinkLines.push(`- LinkedIn: ${details.effectiveLinks.linkedin}`);
+  if (details.effectiveLinks?.github) verifiedLinkLines.push(`- GitHub: ${details.effectiveLinks.github}`);
+  if (details.effectiveLinks?.portfolio) verifiedLinkLines.push(`- Portfolio: ${details.effectiveLinks.portfolio}`);
+  if (details.effectiveLinks?.other) verifiedLinkLines.push(`- Other: ${details.effectiveLinks.other}`);
 
   return `You are a professional career communication specialist writing a personalized, high-conviction job-outreach email from an engineering candidate to an HR recruiter or hiring manager.
 
 === CANDIDATE FACTS (STRICT SOURCE OF TRUTH — NO HALLUCINATIONS) ===
-- Name: ${profile.name}
-${profile.email ? `- Email: ${profile.email}` : ''}
-${profile.phone ? `- Phone: ${profile.phone}` : ''}
-${profile.summary ? `- Background Summary: ${profile.summary}` : ''}
+- Name: ${details.name}
+${details.email ? `- Email: ${details.email}` : ''}
+${details.phone ? `- Phone: ${details.phone}` : ''}
+${details.summary ? `- Background Summary: ${details.summary}` : ''}
 
 Education:
-${eduLines || '- Computer Science Engineering graduate'}
+${eduLines || '- Engineering graduate'}
 
 Technical Skills:
 ${skillsCategories.join('\n') || '- Software Engineering, Full-Stack Development'}
 
-${experienceLines ? `Experience:\n${experienceLines}\n` : ''}${projectLines ? `Projects:\n${projectLines}\n` : ''}${achievementLines ? `Achievements:\n${achievementLines}\n` : ''}${certLines ? `Certifications:\n${certLines}\n` : ''}${leadershipLines ? `Leadership & Extra-Curricular:\n${leadershipLines}\n` : ''}
+${experienceLines ? `Experience:\n${experienceLines}\n` : ''}${projectLines ? `Projects:\n${projectLines}\n` : ''}${achievementLines ? `Achievements:\n${achievementLines}\n` : ''}
 ${verifiedLinkLines.length > 0 ? `Candidate's User-Verified Links (ONLY use these exact URLs if referencing links in the email body or signature):\n${verifiedLinkLines.join('\n')}` : ''}
 
 === RECIPIENT & COMPANY CONTEXT ===
@@ -268,10 +319,10 @@ Strategy: "${strategy}"
    - Present the candidate's technical breadth and depth naturally.
 2. SUBJECT LINE CONVENTIONS:
    - Use natural inquiry subjects such as:
-     * "Exploring Fresher Opportunities at ${companyName} — ${profile.name}"
-     * "Exploring Entry-Level Opportunities at ${companyName} — ${profile.name}"
-     * "Software Engineering Opportunity Inquiry — ${profile.name}"
-     * Or strategy-aligned variations mentioning ${companyName} and ${profile.name}.
+     * "Exploring Fresher Opportunities at ${companyName} — ${details.name}"
+     * "Exploring Entry-Level Opportunities at ${companyName} — ${details.name}"
+     * "Software Engineering Opportunity Inquiry — ${details.name}"
+     * Or strategy-aligned variations mentioning ${companyName} and ${details.name}.
 3. STRICT ANTI-HALLUCINATION:
    - Mention ONLY skills, projects, achievements, experiences, and educational credentials present in the CANDIDATE FACTS above.
    - NEVER invent skills, certifications, unmentioned awards, metrics, or previous companies.
@@ -306,10 +357,11 @@ Do not wrap in markdown fences or include explanations.`;
 export async function generatePersonalizedEmail(
   input: EmailGenerationInput
 ): Promise<GeneratedEmailResult> {
+  const candidateName = 'fullName' in input.profile ? input.profile.fullName : ((input.profile as any).name || '');
   const dynamicWordsToIgnore = [
     input.companyName,
     input.contactName || '',
-    input.profile.name,
+    candidateName,
   ].filter(Boolean);
 
   const availableStrategies = [...STRATEGIES];

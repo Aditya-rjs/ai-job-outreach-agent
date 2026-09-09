@@ -358,6 +358,80 @@ export interface AppSettings {
   resumeFilename: string | null;
   resumeVersion: string | null;
   resumeProfile?: StructuredResumeProfile | null;
+  candidateProfile?: CandidateProfile | null;
+}
+
+// Manual Authoritative Candidate Profile types
+export interface CandidateEducation {
+  id: string;
+  institution: string;
+  degree: string;
+  fieldOfStudy?: string;
+  year?: string;
+  gpa?: string;
+  highlights?: string[];
+}
+
+export interface CandidateExperience {
+  id: string;
+  company: string;
+  role: string;
+  duration?: string;
+  location?: string;
+  highlights: string[];
+  technologies?: string[];
+}
+
+export interface CandidateProject {
+  id?: string;
+  name?: string;
+  title?: string;
+  duration?: string;
+  description?: string;
+  techStack?: string[];
+  technologies?: string[];
+  highlights?: string[];
+  liveUrl?: string;
+  githubUrl?: string;
+}
+
+export interface CandidateSkills {
+  languages: string[];
+  frameworks: string[];
+  databases?: string[];
+  cloudDevOps?: string[];
+  tools?: string[];
+  other?: string[];
+}
+
+export interface CandidateAchievement {
+  id: string;
+  title: string;
+  description?: string;
+  year?: string;
+}
+
+export interface CandidateProfile {
+  fullName: string;
+  email: string;
+  phone: string;
+  location: string;
+  degree: string;
+  fieldOfStudy: string;
+  institution: string;
+  graduationYear: string;
+  summary: string;
+  linkedin: string;
+  github: string;
+  portfolio: string;
+  otherLink: string;
+  education: CandidateEducation[];
+  experience: CandidateExperience[];
+  projects: CandidateProject[];
+  skills: CandidateSkills;
+  achievements: CandidateAchievement[];
+  version: string;
+  updatedAt: string;
 }
 
 // AI Generated Email Result

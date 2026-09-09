@@ -201,6 +201,32 @@ export function initializeDatabase() {
   `);
 
   db.run(sql`
+    CREATE TABLE IF NOT EXISTS candidate_profile (
+      id TEXT PRIMARY KEY DEFAULT 'singleton',
+      full_name TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL DEFAULT '',
+      phone TEXT NOT NULL DEFAULT '',
+      location TEXT NOT NULL DEFAULT '',
+      degree TEXT NOT NULL DEFAULT '',
+      field_of_study TEXT NOT NULL DEFAULT '',
+      institution TEXT NOT NULL DEFAULT '',
+      graduation_year TEXT NOT NULL DEFAULT '',
+      summary TEXT NOT NULL DEFAULT '',
+      linkedin TEXT NOT NULL DEFAULT '',
+      github TEXT NOT NULL DEFAULT '',
+      portfolio TEXT NOT NULL DEFAULT '',
+      other_link TEXT NOT NULL DEFAULT '',
+      education TEXT NOT NULL DEFAULT '[]',
+      experience TEXT NOT NULL DEFAULT '[]',
+      projects TEXT NOT NULL DEFAULT '[]',
+      skills TEXT NOT NULL DEFAULT '{"languages":[],"frameworks":[],"databases":[],"cloudDevOps":[],"tools":[],"other":[]}',
+      achievements TEXT NOT NULL DEFAULT '[]',
+      version TEXT NOT NULL DEFAULT '1',
+      updated_at TEXT NOT NULL
+    )
+  `);
+
+  db.run(sql`
     CREATE TABLE IF NOT EXISTS ai_provider_state (
       id TEXT PRIMARY KEY DEFAULT 'singleton',
       active_provider TEXT NOT NULL DEFAULT 'gemini',

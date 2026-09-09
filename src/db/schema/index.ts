@@ -8,3 +8,4 @@ export { settings } from './settings';
 export { companyClassifications } from './company-classifications';
 export { aiProviderState } from './ai-provider-state';
 export { relevantCompanies, relevantCompanyAliases } from './relevant-companies';
+export { candidateProfile } from './candidate-profile';

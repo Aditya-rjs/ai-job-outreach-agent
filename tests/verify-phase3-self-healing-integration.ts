@@ -48,6 +48,7 @@ import {
   resume,
   globalEmailHistory,
 } from '../src/db/schema';
+import { saveCandidateProfile } from '../src/lib/candidate-profile/candidate-profile-service';
 import { eq, sql, desc, asc } from 'drizzle-orm';
 import { ulid } from 'ulid';
 
@@ -141,6 +142,31 @@ async function runEndToEndIntegrationVerification() {
     })
     .onConflictDoNothing()
     .run();
+
+  // Seed candidate profile as authoritative source of truth
+  saveCandidateProfile(
+    {
+      fullName: 'Alex Rivera',
+      email: 'alex@example.com',
+      degree: 'B.S.',
+      fieldOfStudy: 'Computer Science',
+      institution: 'State University',
+      summary: 'Senior Full Stack Engineer with TypeScript, Next.js, Node.js, and PostgreSQL expertise.',
+      skills: {
+        languages: ['TypeScript', 'JavaScript', 'SQL', 'Python'],
+        frameworks: ['Next.js', 'React', 'Node.js', 'Express'],
+        tools: ['PostgreSQL'],
+      },
+      projects: [
+        {
+          title: 'Autonomous Outreach Engine',
+          description: 'High performance autonomous email agent',
+          technologies: ['Next.js', 'SQLite', 'TypeScript'],
+        },
+      ],
+    },
+    db
+  );
 
   // Create test batch
   const testBatchId = `batch_int_${Date.now()}`;

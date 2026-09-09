@@ -2,6 +2,7 @@ import { getDb } from '@/db';
 import { contacts, outreachQueue, schedulerState, resume, settings } from '@/db/schema';
 import { eq, sql, count } from 'drizzle-orm';
 import type { DashboardStats, SchedulerConfig, AppSettings } from '@/types';
+import { getCandidateProfile } from '@/lib/candidate-profile/candidate-profile-service';
 import { isLeaseActive } from '@/lib/scheduler/worker-lease';
 import {
   reconcileDailyQuota,
@@ -241,6 +242,7 @@ export function getAppSettings(): AppSettings {
     resumeFilename: currentResume?.filename ?? null,
     resumeVersion: currentResume?.version ?? null,
     resumeProfile: profile,
+    candidateProfile: getCandidateProfile(db),
   };
 }
 

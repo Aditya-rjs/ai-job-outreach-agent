@@ -4,8 +4,8 @@ import { resume, contacts } from '@/db/schema';
 import { eq, and, sql, inArray } from 'drizzle-orm';
 import { initializeDatabase } from '@/db/migrate';
 import { generatePersonalizedEmail } from '@/lib/ai/email-generator';
-import { getUserVerifiedLinks } from '@/lib/resume/profile-links';
-import type { ApiResponse, StructuredResumeProfile, Contact } from '@/types';
+import { getCandidateProfile, isCandidateProfileConfigured } from '@/lib/candidate-profile/candidate-profile-service';
+import type { ApiResponse, Contact, VerifiedProfileLinks } from '@/types';
 
 let initialized = false;
 function ensureInitialized() {
@@ -20,29 +20,24 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     ensureInitialized();
     const db = getDb();
 
-    // 1. Check if active resume exists
-    const resumeRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();
-    if (!resumeRecord || !resumeRecord.parsedData) {
+    // 1. Fetch persistent candidate profile
+    const profile = getCandidateProfile(db);
+    if (!isCandidateProfileConfigured(profile)) {
       return NextResponse.json(
         {
           success: false,
-          error: 'No active resume found. Please upload a resume in Settings before generating outreach emails.',
+          error: 'No active candidate profile found. Please fill in your profile in Settings before generating outreach emails.',
         },
         { status: 400 }
       );
     }
 
-    let profile: StructuredResumeProfile;
-    try {
-      profile = JSON.parse(resumeRecord.parsedData);
-    } catch {
-      return NextResponse.json(
-        { success: false, error: 'Failed to read structured resume profile. Please re-upload your resume.' },
-        { status: 500 }
-      );
-    }
-
-    const verifiedLinks = getUserVerifiedLinks(db);
+    const verifiedLinks: VerifiedProfileLinks = {
+      linkedin: profile.linkedin || null,
+      github: profile.github || null,
+      portfolio: profile.portfolio || null,
+      other: profile.otherLink || null,
+    };
 
     const body = await request.json().catch(() => ({}));
     const { contactId, batchId, forceRegenerate } = body;
@@ -125,7 +120,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
     let generatedCount = 0;
     let failedCount = 0;
-    const resumeVersion = resumeRecord.version || resumeRecord.uploadedAt;
+    const resumeVersion = profile.version;
 
     const strategiesList = [
       'project-focused',
