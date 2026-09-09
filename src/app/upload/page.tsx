@@ -4,7 +4,6 @@ import { useState, useRef } from 'react';
 import {
   Upload as UploadIcon,
   FileSpreadsheet,
-  FileText,
   CheckCircle2,
   AlertCircle,
   Loader2,
@@ -54,8 +53,8 @@ export default function UploadPage() {
     setUploadResult(null);
 
     const ext = file.name.toLowerCase().slice(file.name.lastIndexOf('.'));
-    if (ext !== '.csv' && ext !== '.pdf') {
-      setErrorMessage(`Invalid file format "${ext}". Only CSV and PDF files are supported.`);
+    if (ext !== '.csv' && ext !== '.xlsx') {
+      setErrorMessage(`Invalid file format "${ext}". Only CSV (.csv) and Excel (.xlsx) files are supported.`);
       return;
     }
 
@@ -279,7 +278,7 @@ export default function UploadPage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".csv,.pdf,text/csv,application/pdf"
+                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 className="hidden"
                 onChange={handleFileInputChange}
               />
@@ -293,7 +292,7 @@ export default function UploadPage() {
                   <p className="text-sm font-semibold text-foreground">{selectedFile.name}</p>
                   <p className="text-xs text-muted-foreground">
                     {(selectedFile.size / 1024).toFixed(1)} KB —{' '}
-                    {selectedFile.name.endsWith('.csv') ? 'CSV Spreadsheet' : 'PDF Document'}
+                    {selectedFile.name.endsWith('.csv') ? 'CSV Spreadsheet' : 'Excel (.xlsx) Spreadsheet'}
                   </p>
                   <div className="flex gap-2 justify-center pt-2">
                     <Button size="sm" onClick={handleUploadAndProcess}>
@@ -310,7 +309,7 @@ export default function UploadPage() {
                     Drag and drop your file here
                   </h3>
                   <p className="text-xs text-muted-foreground max-w-sm">
-                    Supports CSV spreadsheets and PDF contact documents up to 10 MB. Inconsistent
+                    Supports CSV spreadsheets and Excel (.xlsx) files up to 10 MB. Inconsistent
                     columns and headers are automatically detected and mapped.
                   </p>
                   <Button
@@ -351,19 +350,19 @@ export default function UploadPage() {
         <Card>
           <CardHeader>
             <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-red-50 p-2">
-                <FileText className="h-5 w-5 text-red-600" />
+              <div className="rounded-lg bg-blue-50 p-2">
+                <FileSpreadsheet className="h-5 w-5 text-blue-600" />
               </div>
               <div>
-                <CardTitle className="text-base">PDF Documents</CardTitle>
-                <CardDescription>Text and scanned PDFs with OCR</CardDescription>
+                <CardTitle className="text-base">Excel (.xlsx) Files</CardTitle>
+                <CardDescription>Modern Microsoft Excel workbooks</CardDescription>
               </div>
             </div>
           </CardHeader>
           <CardContent className="text-xs text-muted-foreground space-y-1.5">
-            <p>• Extracts text from digital and tabular PDF contact lists.</p>
-            <p>• Automatically applies OCR fallback for image-based or scanned PDFs.</p>
-            <p>• Preserves company name, contact person, and verified email address.</p>
+            <p>• Native multi-column tabular parsing with precise row-by-row mapping.</p>
+            <p>• Cleanly separates Name, Title, and Company columns without field-shifting.</p>
+            <p>• Automatically uses the active/first worksheet with headers.</p>
           </CardContent>
         </Card>
       </div>

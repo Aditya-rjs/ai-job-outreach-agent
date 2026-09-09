@@ -1,4 +1,4 @@
-import { extractPdfText } from '@/lib/parsers/pdf-parser';
+import { extractPdfText } from './resume-pdf-extractor';
 import { callGemini, getGeminiClient } from '@/lib/ai/gemini-client';
 import type { StructuredResumeProfile } from '@/types';
 

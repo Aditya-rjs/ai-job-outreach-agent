@@ -4,7 +4,7 @@ import { eq, inArray, and, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { parseCSV } from '@/lib/parsers/csv-parser';
 import { getFieldMapping, applyFieldMapping, type NormalizedContactRecord } from '@/lib/parsers/field-mapper';
-import { parsePdf } from '@/lib/parsers/pdf-parser';
+import { parseExcel } from '@/lib/parsers/excel-parser';
 import { classifyCompanies, type CompanyClassificationResult } from '@/lib/ai/company-classifier';
 import { reconstructCanonicalContacts } from '@/lib/pipeline/canonical-ingestion';
 import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
@@ -68,10 +68,10 @@ export async function processBatchFile(
         const mapping = await getFieldMapping(parsedCsv.headers);
         rawRecords = applyFieldMapping(parsedCsv.rows, mapping);
       }
-    } else if (extension === '.pdf') {
-      rawRecords = await parsePdf(fileBuffer);
+    } else if (extension === '.xlsx') {
+      rawRecords = await parseExcel(fileBuffer);
     } else {
-      throw new Error(`Unsupported file extension: ${extension}`);
+      throw new Error(`Unsupported file type "${extension}". Only CSV (.csv) and Excel (.xlsx) files are allowed.`);
     }
 
     // Reconstruct tabular contact records: forward-fill company context, isolate transitions,

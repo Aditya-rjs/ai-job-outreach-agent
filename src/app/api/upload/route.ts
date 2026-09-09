@@ -50,9 +50,9 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
     // Check extension
     const ext = filename.toLowerCase().slice(filename.lastIndexOf('.'));
-    if (ext !== '.csv' && ext !== '.pdf') {
+    if (ext !== '.csv' && ext !== '.xlsx') {
       return NextResponse.json(
-        { success: false, error: `Unsupported file type "${ext}". Only CSV and PDF files are allowed.` },
+        { success: false, error: 'Unsupported file type. Only CSV (.csv) and Excel (.xlsx) files are allowed.' },
         { status: 400 }
       );
     }

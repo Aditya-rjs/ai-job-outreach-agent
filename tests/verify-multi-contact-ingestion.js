@@ -288,16 +288,16 @@ const explicitResult = runBatchProcessor(explicitCsv, 'explicit_test.csv');
 assert(explicitResult.relevantCompanies === 1, 'Explicit company names produce 1 relevant company');
 assert(explicitResult.emailsPending === 3, 'All 3 contacts queued');
 
-// ── TEST 11: PDF MULTI-CONTACT TABLE REPRESENTATION ─────────────────────
-console.log('\n--- Test 11: PDF Multi-Contact Table Extraction Representation ---');
-const pdfExtractedRows = [
+// ── TEST 11: MULTI-CONTACT TABLE REPRESENTATION (EXCEL/SPREADSHEET) ──────
+console.log('\n--- Test 11: Multi-Contact Table Representation (Excel/Spreadsheet) ---');
+const tableExtractedRows = [
   { companyName: 'Oracle', contactName: 'P1', email: 'p1@oracle.com' },
   { companyName: '', contactName: 'P2', email: 'p2@oracle.com' },
   { companyName: '', contactName: 'P3', email: 'p3@oracle.com' },
 ];
-const canonicalPdf = runCanonicalHelper('reconstruct', pdfExtractedRows);
-assert(canonicalPdf.length === 3, 'PDF rows reconstructed');
-assert(canonicalPdf.every(c => c.companyName === 'Oracle'), 'All PDF rows inherited "Oracle"');
+const canonicalTable = runCanonicalHelper('reconstruct', tableExtractedRows);
+assert(canonicalTable.length === 3, 'Table rows reconstructed');
+assert(canonicalTable.every(c => c.companyName === 'Oracle'), 'All table rows inherited "Oracle"');
 
 // ── TEST 12: MERGED CELL REPRESENTATION (SPREADSHEET/CSV) ───────────────
 console.log('\n--- Test 12: Merged Cell Representation ---');
