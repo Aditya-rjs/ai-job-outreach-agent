@@ -113,8 +113,9 @@ function heuristicGenerateEmail(
   const primaryEdu = details.education[0];
   const degree = primaryEdu?.degree || 'Computer Science Engineering graduate';
   const institution = primaryEdu?.institution || '';
-  const topLanguages = (details.skills?.languages || []).slice(0, 3).join(', ') || 'JavaScript, TypeScript, SQL';
-  const topFrameworks = (details.skills?.frameworks || []).slice(0, 3).join(', ') || 'React, Next.js, Node.js';
+  const skillsObj = details.skills as any;
+  const topLanguages = (skillsObj?.programmingLanguages || skillsObj?.languages || []).slice(0, 3).join(', ') || 'JavaScript, TypeScript, SQL';
+  const topFrameworks = (skillsObj?.webDevelopment || skillsObj?.frameworks || []).slice(0, 3).join(', ') || 'React, Next.js, Node.js';
   const topProject = details.projects[0]?.name || 'web-based software platforms';
   const projectTech = (details.projects[0]?.techStack || []).slice(0, 3).join(', ') || topFrameworks;
   const projectHighlight = details.projects[0]?.highlights?.[0] || details.projects[0]?.description || '';
@@ -244,12 +245,25 @@ function buildGenerationPrompt(
   }).filter(Boolean).join('\n');
 
   const skillsCategories: string[] = [];
-  if (details.skills?.languages?.length) skillsCategories.push(`- Languages: ${details.skills.languages.join(', ')}`);
-  if (details.skills?.frameworks?.length) skillsCategories.push(`- Frameworks & Libraries: ${details.skills.frameworks.join(', ')}`);
-  if (details.skills?.databases?.length) skillsCategories.push(`- Databases: ${details.skills.databases.join(', ')}`);
-  if (details.skills?.cloudDevOps?.length) skillsCategories.push(`- Cloud & DevOps: ${details.skills.cloudDevOps.join(', ')}`);
-  if (details.skills?.tools?.length) skillsCategories.push(`- Developer Tools: ${details.skills.tools.join(', ')}`);
-  if (details.skills?.other?.length) skillsCategories.push(`- Other Skills: ${details.skills.other.join(', ')}`);
+  const s = details.skills as any;
+  if (s?.programmingLanguages?.length) skillsCategories.push(`- Programming Languages: ${s.programmingLanguages.join(', ')}`);
+  if (s?.webDevelopment?.length) skillsCategories.push(`- Web Development: ${s.webDevelopment.join(', ')}`);
+  if (s?.databasesOrms?.length) skillsCategories.push(`- Databases & ORMs: ${s.databasesOrms.join(', ')}`);
+  if (s?.aiMl?.length) skillsCategories.push(`- AI/ML: ${s.aiMl.join(', ')}`);
+  if (s?.coreComputerScience?.length) skillsCategories.push(`- Core Computer Science: ${s.coreComputerScience.join(', ')}`);
+  if (s?.toolsApis?.length) skillsCategories.push(`- Tools & APIs: ${s.toolsApis.join(', ')}`);
+
+  // Fallback for legacy parsed ResumeSkills (when profile is StructuredResumeProfile from resume upload)
+  if (skillsCategories.length === 0) {
+    if (s?.languages?.length) skillsCategories.push(`- Programming Languages: ${s.languages.join(', ')}`);
+    if (s?.frameworks?.length) skillsCategories.push(`- Web Development: ${s.frameworks.join(', ')}`);
+    if (s?.databases?.length) skillsCategories.push(`- Databases & ORMs: ${s.databases.join(', ')}`);
+    if (s?.coreCs?.length) skillsCategories.push(`- Core Computer Science: ${s.coreCs.join(', ')}`);
+    if (s?.cloudDevOps?.length || s?.tools?.length) {
+      const combined = [...(s.cloudDevOps || []), ...(s.tools || [])];
+      if (combined.length) skillsCategories.push(`- Tools & APIs: ${combined.join(', ')}`);
+    }
+  }
 
   const experienceLines = details.experience.map((exp) => {
     const header = `- ${exp.role}${exp.company ? ` at ${exp.company}` : ''}${exp.duration ? ` (${exp.duration})` : ''}${exp.location ? `, ${exp.location}` : ''}`;

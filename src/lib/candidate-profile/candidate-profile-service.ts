@@ -5,13 +5,32 @@ import { invalidateStaleResumeContacts } from '@/lib/scheduler/queue-manager';
 import type { CandidateProfile, CandidateEducation, CandidateExperience, CandidateProject, CandidateSkills, CandidateAchievement } from '@/types';
 
 const DEFAULT_SKILLS: CandidateSkills = {
-  languages: [],
-  frameworks: [],
-  databases: [],
-  cloudDevOps: [],
-  tools: [],
-  other: [],
+  programmingLanguages: [],
+  webDevelopment: [],
+  databasesOrms: [],
+  aiMl: [],
+  coreComputerScience: [],
+  toolsApis: [],
 };
+
+function sanitizeCandidateSkills(rawSkills: unknown): CandidateSkills {
+  if (!rawSkills || typeof rawSkills !== 'object') {
+    return { ...DEFAULT_SKILLS };
+  }
+  const s = rawSkills as Record<string, unknown>;
+  const cleanArray = (val: unknown): string[] => {
+    if (!Array.isArray(val)) return [];
+    return val.map((x) => String(x).trim()).filter(Boolean);
+  };
+  return {
+    programmingLanguages: cleanArray(s.programmingLanguages),
+    webDevelopment: cleanArray(s.webDevelopment),
+    databasesOrms: cleanArray(s.databasesOrms),
+    aiMl: cleanArray(s.aiMl),
+    coreComputerScience: cleanArray(s.coreComputerScience),
+    toolsApis: cleanArray(s.toolsApis),
+  };
+}
 
 function sanitizeCandidateEducation(rawList: unknown[]): CandidateEducation[] {
   if (!Array.isArray(rawList)) return [];
@@ -102,14 +121,7 @@ export function getCandidateProfile(dbClient?: DbClient): CandidateProfile {
   let skills: CandidateSkills = { ...DEFAULT_SKILLS };
   try {
     const parsedSkills = JSON.parse(row.skills || '{}');
-    skills = {
-      languages: Array.isArray(parsedSkills.languages) ? parsedSkills.languages : [],
-      frameworks: Array.isArray(parsedSkills.frameworks) ? parsedSkills.frameworks : [],
-      databases: Array.isArray(parsedSkills.databases) ? parsedSkills.databases : [],
-      cloudDevOps: Array.isArray(parsedSkills.cloudDevOps) ? parsedSkills.cloudDevOps : [],
-      tools: Array.isArray(parsedSkills.tools) ? parsedSkills.tools : [],
-      other: Array.isArray(parsedSkills.other) ? parsedSkills.other : [],
-    };
+    skills = sanitizeCandidateSkills(parsedSkills);
   } catch {
     skills = { ...DEFAULT_SKILLS };
   }
@@ -168,7 +180,9 @@ export function saveCandidateProfile(
     : current.education;
   const nextExperience = updates.experience !== undefined ? updates.experience : current.experience;
   const nextProjects = updates.projects !== undefined ? updates.projects : current.projects;
-  const nextSkills = updates.skills !== undefined ? updates.skills : current.skills;
+  const nextSkills = updates.skills !== undefined
+    ? sanitizeCandidateSkills(updates.skills)
+    : current.skills;
   const nextAchievements = updates.achievements !== undefined ? updates.achievements : current.achievements;
 
   db.update(candidateProfile)
@@ -229,10 +243,12 @@ export function isCandidateProfileConfigured(profile: CandidateProfile): boolean
   const hasProj = profile.projects && profile.projects.length > 0;
   const hasSkills = Boolean(
     profile.skills && (
-      (profile.skills.languages?.length ?? 0) > 0 ||
-      (profile.skills.frameworks?.length ?? 0) > 0 ||
-      (profile.skills.databases?.length ?? 0) > 0 ||
-      (profile.skills.tools?.length ?? 0) > 0
+      (profile.skills.programmingLanguages?.length ?? 0) > 0 ||
+      (profile.skills.webDevelopment?.length ?? 0) > 0 ||
+      (profile.skills.databasesOrms?.length ?? 0) > 0 ||
+      (profile.skills.aiMl?.length ?? 0) > 0 ||
+      (profile.skills.coreComputerScience?.length ?? 0) > 0 ||
+      (profile.skills.toolsApis?.length ?? 0) > 0
     )
   );
 

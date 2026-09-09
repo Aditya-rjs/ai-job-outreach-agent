@@ -135,12 +135,12 @@ async function runTests() {
       },
     ],
     skills: {
-      languages: ['TypeScript', 'JavaScript', 'Python', 'SQL'],
-      frameworks: ['Next.js', 'React', 'Node.js', 'Express'],
-      databases: ['SQLite', 'PostgreSQL', 'Redis'],
-      cloudDevOps: ['Docker', 'AWS', 'Railway'],
-      tools: ['Git', 'Postman', 'Linux'],
-      other: ['RESTful APIs', 'Microservices', 'System Design'],
+      programmingLanguages: ['TypeScript', 'JavaScript', 'Python', 'SQL'],
+      webDevelopment: ['Next.js', 'React', 'Node.js', 'Express'],
+      databasesOrms: ['SQLite', 'PostgreSQL', 'Redis'],
+      aiMl: ['PyTorch', 'TensorFlow', 'LLMs'],
+      coreComputerScience: ['Data Structures & Algorithms', 'Operating Systems', 'DBMS'],
+      toolsApis: ['Git', 'Postman', 'Linux', 'Docker'],
     },
     achievements: [
       {
@@ -159,8 +159,33 @@ async function runTests() {
   if (saved.projects.length !== 1 || saved.projects[0].name !== 'AI Job Outreach Engine') {
     throw new Error('FAIL: Projects did not save correctly.');
   }
-  if (saved.skills.languages.length !== 4) {
-    throw new Error('FAIL: Skills did not save correctly.');
+  if (saved.skills.programmingLanguages.length !== 4) {
+    throw new Error('FAIL: programmingLanguages did not save correctly.');
+  }
+  if (saved.skills.webDevelopment.length !== 4) {
+    throw new Error('FAIL: webDevelopment did not save correctly.');
+  }
+  if (saved.skills.databasesOrms.length !== 3) {
+    throw new Error('FAIL: databasesOrms did not save correctly.');
+  }
+  if (saved.skills.aiMl.length !== 3) {
+    throw new Error('FAIL: aiMl did not save correctly.');
+  }
+  if (saved.skills.coreComputerScience.length !== 3) {
+    throw new Error('FAIL: coreComputerScience did not save correctly.');
+  }
+  if (saved.skills.toolsApis.length !== 4) {
+    throw new Error('FAIL: toolsApis did not save correctly.');
+  }
+  const savedSkillKeys = Object.keys(saved.skills);
+  if (savedSkillKeys.length !== 6) {
+    throw new Error(`FAIL: skills has ${savedSkillKeys.length} keys instead of exactly 6!`);
+  }
+  const legacyKeys = ['languages', 'frameworks', 'databases', 'cloudDevOps', 'tools', 'other'];
+  for (const lk of legacyKeys) {
+    if (lk in saved.skills) {
+      throw new Error(`FAIL: Legacy key '${lk}' found in saved candidate skills!`);
+    }
   }
   if (saved.linkedin !== 'https://linkedin.com/in/adityarajsingh-test') {
     throw new Error('FAIL: LinkedIn link did not save correctly.');

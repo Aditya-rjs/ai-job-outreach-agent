@@ -216,7 +216,7 @@ export function initializeDatabase() {
       education TEXT NOT NULL DEFAULT '[]',
       experience TEXT NOT NULL DEFAULT '[]',
       projects TEXT NOT NULL DEFAULT '[]',
-      skills TEXT NOT NULL DEFAULT '{"languages":[],"frameworks":[],"databases":[],"cloudDevOps":[],"tools":[],"other":[]}',
+      skills TEXT NOT NULL DEFAULT '{"programmingLanguages":[],"webDevelopment":[],"databasesOrms":[],"aiMl":[],"coreComputerScience":[],"toolsApis":[]}',
       achievements TEXT NOT NULL DEFAULT '[]',
       version TEXT NOT NULL DEFAULT '1',
       updated_at TEXT NOT NULL
@@ -248,7 +248,7 @@ export function initializeDatabase() {
             education TEXT NOT NULL DEFAULT '[]',
             experience TEXT NOT NULL DEFAULT '[]',
             projects TEXT NOT NULL DEFAULT '[]',
-            skills TEXT NOT NULL DEFAULT '{"languages":[],"frameworks":[],"databases":[],"cloudDevOps":[],"tools":[],"other":[]}',
+            skills TEXT NOT NULL DEFAULT '{"programmingLanguages":[],"webDevelopment":[],"databasesOrms":[],"aiMl":[],"coreComputerScience":[],"toolsApis":[]}',
             achievements TEXT NOT NULL DEFAULT '[]',
             version TEXT NOT NULL DEFAULT '1',
             updated_at TEXT NOT NULL
@@ -278,6 +278,34 @@ export function initializeDatabase() {
         `Failed to migrate candidate_profile table: ${migErr instanceof Error ? migErr.message : String(migErr)}`
       );
     }
+  }
+
+  // Clean initialization of candidate_profile skills JSON:
+  // If stored skills JSON contains old keys (languages, frameworks, cloudDevOps, etc.) and lacks the 6 approved keys,
+  // clean-initialize skills to the 6 approved categories starting empty without touching any other fields.
+  try {
+    const currentProfileRow = db.get<{ id: string; skills: string }>(
+      sql`SELECT id, skills FROM candidate_profile WHERE id = 'singleton'`
+    );
+    if (currentProfileRow && currentProfileRow.skills) {
+      const parsed = JSON.parse(currentProfileRow.skills);
+      const hasOldKeys = 'languages' in parsed || 'frameworks' in parsed || 'cloudDevOps' in parsed || 'tools' in parsed || 'other' in parsed;
+      const hasNewKeys = 'programmingLanguages' in parsed && 'webDevelopment' in parsed && 'databasesOrms' in parsed && 'aiMl' in parsed && 'coreComputerScience' in parsed && 'toolsApis' in parsed;
+      if (hasOldKeys && !hasNewKeys) {
+        const cleanSkillsJson = JSON.stringify({
+          programmingLanguages: [],
+          webDevelopment: [],
+          databasesOrms: [],
+          aiMl: [],
+          coreComputerScience: [],
+          toolsApis: [],
+        });
+        db.run(sql`UPDATE candidate_profile SET skills = ${cleanSkillsJson} WHERE id = 'singleton'`);
+        console.log('[migrate] Clean-initialized candidate_profile skills JSON to 6 approved categories.');
+      }
+    }
+  } catch (cleanSkillsErr) {
+    console.warn('[migrate] Note: candidate_profile skills clean-initialization check:', cleanSkillsErr);
   }
 
   db.run(sql`

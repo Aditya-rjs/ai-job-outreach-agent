@@ -104,7 +104,7 @@ async function runTests() {
     email: 'aditya.rjs003@gmail.com',
     phone: '+91 8582084779',
     education: [{ id: 'edu_1', degree: 'Bachelor of Technology (CSE)', institution: 'LNJPIT Chapra', year: '2026' }],
-    skills: { languages: ['JavaScript', 'Python', 'C++'], frameworks: ['React', 'Node.js', 'Express'], databases: [], cloudDevOps: [], tools: [], other: [] },
+    skills: { programmingLanguages: ['JavaScript', 'Python', 'C++'], webDevelopment: ['React', 'Node.js', 'Express'], databasesOrms: [], aiMl: [], coreComputerScience: [], toolsApis: [] },
     projects: [{ id: 'proj_1', name: 'Full-Stack Web Platform', description: 'Engineered responsive web applications', techStack: ['React', 'Node.js'], highlights: [] }],
   }, db);
 

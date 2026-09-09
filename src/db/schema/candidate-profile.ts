@@ -15,7 +15,7 @@ export const candidateProfile = sqliteTable('candidate_profile', {
   education: text('education').notNull().default('[]'),
   experience: text('experience').notNull().default('[]'),
   projects: text('projects').notNull().default('[]'),
-  skills: text('skills').notNull().default('{"languages":[],"frameworks":[],"databases":[],"cloudDevOps":[],"tools":[],"other":[]}'),
+  skills: text('skills').notNull().default('{"programmingLanguages":[],"webDevelopment":[],"databasesOrms":[],"aiMl":[],"coreComputerScience":[],"toolsApis":[]}'),
   achievements: text('achievements').notNull().default('[]'),
   version: text('version').notNull().default('1'),
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),

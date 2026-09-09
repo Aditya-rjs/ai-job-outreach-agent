@@ -663,7 +663,7 @@ async function runTests() {
   saveCandidateProfile({
     fullName: 'Aditya Raj Singh',
     education: [{ id: 'edu_1', degree: 'B.Tech CSE', institution: 'LNJPIT' }],
-    skills: { languages: ['TypeScript', 'Python'], frameworks: ['React', 'Next.js'], databases: [], cloudDevOps: [], tools: [], other: [] },
+    skills: { programmingLanguages: ['TypeScript', 'Python'], webDevelopment: ['React', 'Next.js'], databasesOrms: [], aiMl: [], coreComputerScience: [], toolsApis: [] },
     projects: [{ id: 'proj_1', name: 'Job Agent', techStack: ['TypeScript', 'Next.js'], highlights: [] }],
   }, db);
 

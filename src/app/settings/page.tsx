@@ -68,12 +68,12 @@ export default function SettingsPage() {
     experience: [],
     projects: [],
     skills: {
-      languages: [],
-      frameworks: [],
-      databases: [],
-      cloudDevOps: [],
-      tools: [],
-      other: [],
+      programmingLanguages: [],
+      webDevelopment: [],
+      databasesOrms: [],
+      aiMl: [],
+      coreComputerScience: [],
+      toolsApis: [],
     },
     achievements: [],
     version: '1',
@@ -100,12 +100,12 @@ export default function SettingsPage() {
 
   // Skills local state
   const [skillsState, setSkillsState] = useState<CandidateSkills>({
-    languages: [],
-    frameworks: [],
-    databases: [],
-    cloudDevOps: [],
-    tools: [],
-    other: [],
+    programmingLanguages: [],
+    webDevelopment: [],
+    databasesOrms: [],
+    aiMl: [],
+    coreComputerScience: [],
+    toolsApis: [],
   });
   const [newSkillInput, setNewSkillInput] = useState<{ [key: string]: string }>({});
 
@@ -229,12 +229,12 @@ export default function SettingsPage() {
               portfolio: p.portfolio || '',
             });
             setSkillsState(p.skills || {
-              languages: [],
-              frameworks: [],
-              databases: [],
-              cloudDevOps: [],
-              tools: [],
-              other: [],
+              programmingLanguages: [],
+              webDevelopment: [],
+              databasesOrms: [],
+              aiMl: [],
+              coreComputerScience: [],
+              toolsApis: [],
             });
           }
 
@@ -299,12 +299,12 @@ export default function SettingsPage() {
         portfolio: updatedProfile.portfolio || '',
       });
       setSkillsState(updatedProfile.skills || {
-        languages: [],
-        frameworks: [],
-        databases: [],
-        cloudDevOps: [],
-        tools: [],
-        other: [],
+        programmingLanguages: [],
+        webDevelopment: [],
+        databasesOrms: [],
+        aiMl: [],
+        coreComputerScience: [],
+        toolsApis: [],
       });
 
       if (successMsg) {
@@ -763,12 +763,12 @@ export default function SettingsPage() {
   }
 
   const skillCategoriesList: Array<{ key: keyof CandidateSkills; label: string; placeholder: string }> = [
-    { key: 'languages', label: 'Languages', placeholder: 'e.g. TypeScript, Python, C++, Go' },
-    { key: 'frameworks', label: 'Frameworks & Libraries', placeholder: 'e.g. Next.js, React, Node.js, Express' },
-    { key: 'databases', label: 'Databases', placeholder: 'e.g. PostgreSQL, SQLite, Redis, MongoDB' },
-    { key: 'cloudDevOps', label: 'Cloud & DevOps', placeholder: 'e.g. Docker, AWS, Railway, CI/CD' },
-    { key: 'tools', label: 'Developer Tools', placeholder: 'e.g. Git, Postman, Linux, TailwindCSS' },
-    { key: 'other', label: 'Other Skills', placeholder: 'e.g. REST APIs, Microservices, Agile' },
+    { key: 'programmingLanguages', label: 'Programming Languages', placeholder: 'e.g. TypeScript, Python, Java, C++, Go' },
+    { key: 'webDevelopment', label: 'Web Development', placeholder: 'e.g. React, Next.js, Node.js, Express, TailwindCSS' },
+    { key: 'databasesOrms', label: 'Databases & ORMs', placeholder: 'e.g. PostgreSQL, SQLite, Prisma, Drizzle, Redis, MongoDB' },
+    { key: 'aiMl', label: 'AI/ML', placeholder: 'e.g. PyTorch, TensorFlow, LLMs, LangChain, Hugging Face' },
+    { key: 'coreComputerScience', label: 'Core Computer Science', placeholder: 'e.g. Data Structures & Algorithms, OS, DBMS, Computer Networks' },
+    { key: 'toolsApis', label: 'Tools & APIs', placeholder: 'e.g. Git, Docker, REST APIs, Postman, Linux, GitHub Actions' },
   ];
 
   return (

@@ -152,9 +152,12 @@ async function runEndToEndIntegrationVerification() {
       fieldOfStudy: 'Computer Science',
       institution: 'State University',
       skills: {
-        languages: ['TypeScript', 'JavaScript', 'SQL', 'Python'],
-        frameworks: ['Next.js', 'React', 'Node.js', 'Express'],
-        tools: ['PostgreSQL'],
+        programmingLanguages: ['TypeScript', 'JavaScript', 'SQL', 'Python'],
+        webDevelopment: ['Next.js', 'React', 'Node.js', 'Express'],
+        databasesOrms: ['PostgreSQL'],
+        aiMl: [],
+        coreComputerScience: [],
+        toolsApis: [],
       },
       projects: [
         {

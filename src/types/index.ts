@@ -395,12 +395,12 @@ export interface CandidateProject {
 }
 
 export interface CandidateSkills {
-  languages: string[];
-  frameworks: string[];
-  databases?: string[];
-  cloudDevOps?: string[];
-  tools?: string[];
-  other?: string[];
+  programmingLanguages: string[];
+  webDevelopment: string[];
+  databasesOrms: string[];
+  aiMl: string[];
+  coreComputerScience: string[];
+  toolsApis: string[];
 }
 
 export interface CandidateAchievement {

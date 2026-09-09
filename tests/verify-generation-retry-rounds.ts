@@ -93,9 +93,12 @@ async function runAllTests() {
       fieldOfStudy: 'Computer Science',
       institution: 'University',
       skills: {
-        languages: ['TypeScript', 'JavaScript', 'Python'],
-        frameworks: ['Next.js', 'React', 'Node.js'],
-        tools: ['Git', 'Docker'],
+        programmingLanguages: ['TypeScript', 'JavaScript', 'Python'],
+        webDevelopment: ['Next.js', 'React', 'Node.js'],
+        databasesOrms: [],
+        aiMl: [],
+        coreComputerScience: [],
+        toolsApis: ['Git', 'Docker'],
       },
       projects: [
         {
