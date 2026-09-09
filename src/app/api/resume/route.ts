@@ -4,11 +4,12 @@ import { resume } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { initializeDatabase } from '@/db/migrate';
 import { parseAndStructureResume } from '@/lib/resume/resume-parser';
-import type { ApiResponse, ResumeData, StructuredResumeProfile } from '@/types';
+import type { ApiResponse, ResumeData, StructuredResumeProfile, VerifiedProfileLinks } from '@/types';
 import fs from 'fs';
 import path from 'path';
 import { getResumesDir } from '@/lib/config/paths';
 import { invalidateStaleResumeContacts } from '@/lib/scheduler/queue-manager';
+import { getUserVerifiedLinks } from '@/lib/resume/profile-links';
 
 let initialized = false;
 function ensureInitialized() {
@@ -21,17 +22,24 @@ function ensureInitialized() {
 const MAX_RESUME_SIZE = 10 * 1024 * 1024; // 10 MB
 
 export async function GET(): Promise<
-  NextResponse<ApiResponse<{ resume: ResumeData | null; profile: StructuredResumeProfile | null }>>
+  NextResponse<
+    ApiResponse<{
+      resume: ResumeData | null;
+      profile: StructuredResumeProfile | null;
+      verifiedLinks: VerifiedProfileLinks;
+    }>
+  >
 > {
   try {
     ensureInitialized();
     const db = getDb();
     const record = db.select().from(resume).where(eq(resume.id, 'current')).get();
+    const verifiedLinks = getUserVerifiedLinks();
 
     if (!record) {
       return NextResponse.json({
         success: true,
-        data: { resume: null, profile: null },
+        data: { resume: null, profile: null, verifiedLinks },
       });
     }
 
@@ -49,6 +57,7 @@ export async function GET(): Promise<
       data: {
         resume: record as ResumeData,
         profile,
+        verifiedLinks,
       },
     });
   } catch (error) {
@@ -62,7 +71,7 @@ export async function GET(): Promise<
 
 export async function POST(
   request: NextRequest
-): Promise<NextResponse<ApiResponse<{ resume: ResumeData; profile: StructuredResumeProfile }>>> {
+): Promise<NextResponse<ApiResponse<{ resume: ResumeData; profile: StructuredResumeProfile; verifiedLinks: VerifiedProfileLinks }>>> {
   try {
     ensureInitialized();
     const db = getDb();
@@ -141,6 +150,7 @@ export async function POST(
       data: {
         resume: recordData as ResumeData,
         profile,
+        verifiedLinks: getUserVerifiedLinks(),
       },
     });
   } catch (error) {

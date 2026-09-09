@@ -9,6 +9,7 @@ import { isAiProviderUnavailableError } from '@/lib/ai/ai-dispatcher';
 import { isAiOutputInvalidError } from '@/lib/ai/json-parser';
 import { normalizeGenerationError } from '@/lib/pipeline/generation-error-boundary';
 import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
+import { getUserVerifiedLinks } from '@/lib/resume/profile-links';
 import type { StructuredResumeProfile, Contact } from '@/types';
 
 export const GENERATION_LEASE_MS = 150 * 1000; // 150-second lease (headroom over 120s active turn budget)
@@ -341,6 +342,7 @@ export async function reconcilePendingEmailGenerations(options: {
     };
   }
 
+  const verifiedLinks = getUserVerifiedLinks(db);
   const resumeVersion = resumeRecord.version || resumeRecord.uploadedAt;
 
   // 4. Evaluate Round State: Active Generation Pass vs Generation Retry Pass
@@ -614,6 +616,7 @@ export async function reconcilePendingEmailGenerations(options: {
               recentEmails: recentBodies,
               isRetry: true,
               strictGemini: true,
+              verifiedLinks,
             });
           }
 
@@ -884,6 +887,7 @@ export async function reconcilePendingEmailGenerations(options: {
             recentEmails: recentBodies,
             isRetry: false,
             strictGemini: true,
+            verifiedLinks,
           });
         }
 

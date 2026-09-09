@@ -20,23 +20,62 @@ import {
   GraduationCap,
   Send,
   Unlink,
+  Award,
+  Briefcase,
+  ChevronDown,
+  ChevronUp,
+  Link as LinkIcon,
+  Save,
+  Layers,
+  Sparkles,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { formatDateTime } from '@/lib/utils';
-import type { ResumeData, StructuredResumeProfile, SchedulerConfig } from '@/types';
+import type { ResumeData, StructuredResumeProfile, SchedulerConfig, VerifiedProfileLinks } from '@/types';
 
 export default function SettingsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [resumeData, setResumeData] = useState<ResumeData | null>(null);
   const [profile, setProfile] = useState<StructuredResumeProfile | null>(null);
+  const [verifiedLinks, setVerifiedLinks] = useState<VerifiedProfileLinks>({
+    linkedin: '',
+    github: '',
+    portfolio: '',
+    other: '',
+  });
+  const [savingLinks, setSavingLinks] = useState(false);
+  const [showRawText, setShowRawText] = useState(false);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  const handleSaveLinks = async () => {
+    setSavingLinks(true);
+    setErrorMessage(null);
+    try {
+      const res = await fetch('/api/resume/links', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(verifiedLinks),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || 'Failed to save verified profile links.');
+      }
+      setVerifiedLinks(json.data);
+      setStatusMessage('Verified profile links saved successfully!');
+      setTimeout(() => setStatusMessage(null), 4000);
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Error saving verified links.');
+    } finally {
+      setSavingLinks(false);
+    }
+  };
 
   // Gmail states
   const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; email: string | null }>({
@@ -129,6 +168,9 @@ export default function SettingsPage() {
           if (resumeJson.success) {
             setResumeData(resumeJson.data.resume);
             setProfile(resumeJson.data.profile);
+            if (resumeJson.data.verifiedLinks) {
+              setVerifiedLinks(resumeJson.data.verifiedLinks);
+            }
           }
           if (gmailJson.success) {
             setGmailStatus(gmailJson.data);
@@ -184,6 +226,9 @@ export default function SettingsPage() {
 
       setResumeData(json.data.resume);
       setProfile(json.data.profile);
+      if (json.data.verifiedLinks) {
+        setVerifiedLinks(json.data.verifiedLinks);
+      }
       setStatusMessage('Resume parsed and candidate profile verified successfully!');
       setTimeout(() => setStatusMessage(null), 4000);
     } catch (err: unknown) {
@@ -434,7 +479,7 @@ export default function SettingsPage() {
       {/* Resume Section */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="rounded-lg bg-blue-50 p-2">
                 <FileText className="h-5 w-5 text-blue-600" />
@@ -446,14 +491,21 @@ export default function SettingsPage() {
                 </CardDescription>
               </div>
             </div>
-            {resumeData ? (
-              <Badge variant="success">Active Profile</Badge>
-            ) : (
-              <Badge variant="warning">No Resume Uploaded</Badge>
-            )}
+            <div className="flex items-center gap-2">
+              {resumeData ? (
+                <>
+                  <Badge variant="success">Active Profile</Badge>
+                  <Badge variant="secondary" className="border-emerald-200 bg-emerald-50 text-emerald-700 text-xs">
+                    Extraction Complete (Verified)
+                  </Badge>
+                </>
+              ) : (
+                <Badge variant="warning">No Resume Uploaded</Badge>
+              )}
+            </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-5">
           {loading ? (
             <div className="py-8 text-center text-xs text-muted-foreground">Loading profile...</div>
           ) : uploading ? (
@@ -462,7 +514,7 @@ export default function SettingsPage() {
               <p className="text-xs font-medium text-primary">{statusMessage || 'Processing resume...'}</p>
             </div>
           ) : resumeData && profile ? (
-            <div className="space-y-4">
+            <div className="space-y-6">
               {/* File metadata row */}
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/20 p-3 text-xs">
                 <div>
@@ -499,57 +551,372 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              {/* Profile Summary Card */}
+              {/* Extraction Counts Bar */}
+              {(() => {
+                const totalSkillsCount = [
+                  ...(profile.skills?.languages || []),
+                  ...(profile.skills?.frameworks || []),
+                  ...(profile.skills?.webTechnologies || []),
+                  ...(profile.skills?.backendTechnologies || []),
+                  ...(profile.skills?.databases || []),
+                  ...(profile.skills?.cloudDevOps || []),
+                  ...(profile.skills?.aiMl || []),
+                  ...(profile.skills?.developerTools || []),
+                  ...(profile.skills?.coreConcepts || []),
+                  ...(profile.skills?.other || []),
+                ].length;
+
+                return (
+                  <div className="rounded-lg border border-border/80 bg-slate-50/70 p-3">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 mb-2">
+                      <Layers className="h-3.5 w-3.5 text-primary" />
+                      <span>Extracted Candidate Facts Summary</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      <span className="rounded-md bg-white px-2.5 py-1 border border-border font-medium text-slate-700 shadow-xs">
+                        Education: <strong className="text-primary font-bold">{profile.education?.length || 0}</strong>
+                      </span>
+                      <span className="rounded-md bg-white px-2.5 py-1 border border-border font-medium text-slate-700 shadow-xs">
+                        Skills: <strong className="text-primary font-bold">{totalSkillsCount}</strong>
+                      </span>
+                      <span className="rounded-md bg-white px-2.5 py-1 border border-border font-medium text-slate-700 shadow-xs">
+                        Experience: <strong className="text-primary font-bold">{profile.experience?.length || 0}</strong>
+                      </span>
+                      <span className="rounded-md bg-white px-2.5 py-1 border border-border font-medium text-slate-700 shadow-xs">
+                        Projects: <strong className="text-primary font-bold">{profile.projects?.length || 0}</strong>
+                      </span>
+                      <span className="rounded-md bg-white px-2.5 py-1 border border-border font-medium text-slate-700 shadow-xs">
+                        Certifications: <strong className="text-primary font-bold">{profile.certifications?.length || 0}</strong>
+                      </span>
+                      <span className="rounded-md bg-white px-2.5 py-1 border border-border font-medium text-slate-700 shadow-xs">
+                        Achievements: <strong className="text-primary font-bold">{profile.achievements?.length || 0}</strong>
+                      </span>
+                      <span className="rounded-md bg-white px-2.5 py-1 border border-border font-medium text-slate-700 shadow-xs">
+                        Leadership: <strong className="text-primary font-bold">{profile.leadership?.length || 0}</strong>
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* User-Verified Profile Links Editor (Persisted separately from Resume PDF) */}
+              <div className="rounded-xl border border-blue-200 bg-blue-50/30 p-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <div className="rounded-md bg-blue-100 p-1.5 text-blue-700">
+                      <LinkIcon className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                        User-Verified Professional Links
+                      </h4>
+                      <p className="text-[11px] text-muted-foreground">
+                        Maintained separately from your resume PDF. Safely referenced in outreach emails and signatures.
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={handleSaveLinks}
+                    disabled={savingLinks}
+                    className="gap-1.5 text-xs shrink-0"
+                  >
+                    {savingLinks ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                    Save Verified Links
+                  </Button>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2 pt-1">
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-700 block mb-1">LinkedIn Profile</label>
+                    <input
+                      type="url"
+                      value={verifiedLinks.linkedin || ''}
+                      onChange={(e) => setVerifiedLinks({ ...verifiedLinks, linkedin: e.target.value })}
+                      placeholder="https://linkedin.com/in/username"
+                      className="h-8 w-full rounded-md border border-border bg-white px-2.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-700 block mb-1">GitHub Profile</label>
+                    <input
+                      type="url"
+                      value={verifiedLinks.github || ''}
+                      onChange={(e) => setVerifiedLinks({ ...verifiedLinks, github: e.target.value })}
+                      placeholder="https://github.com/username"
+                      className="h-8 w-full rounded-md border border-border bg-white px-2.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-700 block mb-1">Portfolio / Personal Website</label>
+                    <input
+                      type="url"
+                      value={verifiedLinks.portfolio || ''}
+                      onChange={(e) => setVerifiedLinks({ ...verifiedLinks, portfolio: e.target.value })}
+                      placeholder="https://yourportfolio.dev"
+                      className="h-8 w-full rounded-md border border-border bg-white px-2.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-700 block mb-1">Other Professional Link</label>
+                    <input
+                      type="url"
+                      value={verifiedLinks.other || ''}
+                      onChange={(e) => setVerifiedLinks({ ...verifiedLinks, other: e.target.value })}
+                      placeholder="https://leetcode.com/username or blog"
+                      className="h-8 w-full rounded-md border border-border bg-white px-2.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Profile Details & Summary */}
               <div className="rounded-xl border border-border bg-card p-4 space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-border pb-3 gap-2">
                   <div>
-                    <h3 className="text-base font-bold text-foreground">{profile.name}</h3>
-                    <p className="text-xs text-muted-foreground">{profile.summary}</p>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <GraduationCap className="h-4 w-4 text-primary" />
-                    <span>
-                      {profile.education[0]?.degree || 'Computer Science'} • {profile.education[0]?.institution || 'University'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Categorized Skills */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                    <Code2 className="h-3.5 w-3.5 text-primary" />
-                    <span>Verified Skills (Source of Truth)</span>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[
-                      ...profile.skills.languages,
-                      ...profile.skills.frameworks,
-                      ...profile.skills.databases,
-                      ...profile.skills.cloudDevOps,
-                    ].map((skill) => (
-                      <Badge key={skill} variant="secondary" className="text-[11px]">
-                        {skill}
-                      </Badge>
-                    ))}
+                    <h3 className="text-lg font-bold text-foreground">{profile.name}</h3>
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground mt-0.5">
+                      {profile.email && <span>{profile.email}</span>}
+                      {profile.phone && <span>• {profile.phone}</span>}
+                      {profile.location && <span>• {profile.location}</span>}
+                    </div>
+                    {profile.summary && (
+                      <p className="text-xs text-slate-600 mt-2 leading-relaxed">{profile.summary}</p>
+                    )}
                   </div>
                 </div>
 
-                {/* Featured Projects */}
-                {profile.projects && profile.projects.length > 0 && (
-                  <div className="space-y-2 pt-1 border-t border-border">
+                {/* Education Section */}
+                {profile.education && profile.education.length > 0 && (
+                  <div className="space-y-2">
                     <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                      <FolderGit2 className="h-3.5 w-3.5 text-primary" />
-                      <span>Featured Projects</span>
+                      <GraduationCap className="h-4 w-4 text-primary" />
+                      <span>Education</span>
                     </div>
                     <div className="grid gap-2 sm:grid-cols-2">
-                      {profile.projects.slice(0, 2).map((p) => (
-                        <div key={p.title} className="rounded-lg border border-border/80 bg-muted/10 p-2.5 text-xs">
-                          <p className="font-medium text-foreground">{p.title}</p>
-                          <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">
-                            {p.description || p.highlights?.[0] || 'Technical software project.'}
-                          </p>
-                          <div className="flex flex-wrap gap-1 mt-1.5">
-                            {p.techStack.slice(0, 3).map((t) => (
+                      {profile.education.map((edu, idx) => (
+                        <div key={idx} className="rounded-lg border border-border/80 bg-muted/10 p-3 text-xs space-y-1">
+                          <p className="font-semibold text-foreground">{edu.degree}</p>
+                          <p className="text-muted-foreground">{edu.institution}</p>
+                          <div className="flex items-center gap-2 text-[11px] text-muted-foreground pt-0.5">
+                            {edu.year && <span>{edu.year}</span>}
+                            {edu.score && <span className="font-medium text-slate-700">• Grade: {edu.score}</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Categorized Skills Section */}
+                <div className="space-y-3 pt-2 border-t border-border">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                    <Code2 className="h-4 w-4 text-primary" />
+                    <span>Categorized Technical Skills (Source of Truth)</span>
+                  </div>
+
+                  <div className="grid gap-2.5 sm:grid-cols-2 text-xs">
+                    {profile.skills?.languages?.length > 0 && (
+                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Programming Languages</span>
+                        <div className="flex flex-wrap gap-1">
+                          {profile.skills.languages.map((s) => (
+                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {profile.skills?.frameworks?.length > 0 && (
+                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Frameworks & Libraries</span>
+                        <div className="flex flex-wrap gap-1">
+                          {profile.skills.frameworks.map((s) => (
+                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {profile.skills?.webTechnologies && profile.skills.webTechnologies.length > 0 && (
+                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Web Technologies</span>
+                        <div className="flex flex-wrap gap-1">
+                          {profile.skills.webTechnologies.map((s: string) => (
+                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {profile.skills?.backendTechnologies && profile.skills.backendTechnologies.length > 0 && (
+                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Backend & APIs</span>
+                        <div className="flex flex-wrap gap-1">
+                          {profile.skills.backendTechnologies.map((s: string) => (
+                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {profile.skills?.databases && profile.skills.databases.length > 0 && (
+                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Databases & Storage</span>
+                        <div className="flex flex-wrap gap-1">
+                          {profile.skills.databases.map((s: string) => (
+                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {profile.skills?.cloudDevOps && profile.skills.cloudDevOps.length > 0 && (
+                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Cloud & DevOps</span>
+                        <div className="flex flex-wrap gap-1">
+                          {profile.skills.cloudDevOps.map((s: string) => (
+                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {profile.skills?.aiMl && profile.skills.aiMl.length > 0 && (
+                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">AI & Machine Learning</span>
+                        <div className="flex flex-wrap gap-1">
+                          {profile.skills.aiMl.map((s: string) => (
+                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {profile.skills?.developerTools && profile.skills.developerTools.length > 0 && (
+                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Developer Tools & VCS</span>
+                        <div className="flex flex-wrap gap-1">
+                          {profile.skills.developerTools.map((s: string) => (
+                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {profile.skills?.coreConcepts && profile.skills.coreConcepts.length > 0 && (
+                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Core Computer Science</span>
+                        <div className="flex flex-wrap gap-1">
+                          {profile.skills.coreConcepts.map((s: string) => (
+                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {profile.skills?.other && profile.skills.other.length > 0 && (
+                      <div className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1.5">
+                        <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Other Skills</span>
+                        <div className="flex flex-wrap gap-1">
+                          {profile.skills.other.map((s: string) => (
+                            <Badge key={s} variant="secondary" className="text-[11px]">{s}</Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Experience Section */}
+                {profile.experience && profile.experience.length > 0 && (
+                  <div className="space-y-3 pt-2 border-t border-border">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                      <Briefcase className="h-4 w-4 text-primary" />
+                      <span>Experience</span>
+                    </div>
+                    <div className="space-y-3">
+                      {profile.experience.map((exp, idx) => (
+                        <div key={idx} className="rounded-lg border border-border/80 bg-muted/10 p-3 text-xs space-y-2">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                            <div>
+                              <p className="font-bold text-foreground">{exp.title}</p>
+                              <p className="text-muted-foreground">{exp.company}{exp.location ? ` • ${exp.location}` : ''}</p>
+                            </div>
+                            <span className="text-[11px] text-muted-foreground font-mono">
+                              {exp.startDate || ''} – {exp.endDate || 'Present'}
+                            </span>
+                          </div>
+                          {exp.bullets && exp.bullets.length > 0 && (
+                            <ul className="list-disc list-inside space-y-1 text-slate-700 text-[11px]">
+                              {exp.bullets.map((bullet, bIdx) => (
+                                <li key={bIdx} className="leading-relaxed">{bullet}</li>
+                              ))}
+                            </ul>
+                          )}
+                          {exp.technologies && exp.technologies.length > 0 && (
+                            <div className="flex flex-wrap gap-1 pt-1">
+                              {exp.technologies.map((t) => (
+                                <span key={t} className="text-[10px] text-slate-600 bg-white border border-border px-1.5 py-0.5 rounded">
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Projects Section */}
+                {profile.projects && profile.projects.length > 0 && (
+                  <div className="space-y-3 pt-2 border-t border-border">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                      <FolderGit2 className="h-4 w-4 text-primary" />
+                      <span>Technical Projects ({profile.projects.length})</span>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {profile.projects.map((p, idx) => (
+                        <div key={idx} className="rounded-lg border border-border/80 bg-muted/10 p-3 text-xs space-y-2 flex flex-col justify-between">
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between gap-1">
+                              <p className="font-bold text-foreground">{p.title}</p>
+                              <div className="flex items-center gap-1.5">
+                                {p.liveUrl && (
+                                  <a href={p.liveUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline text-[10px] flex items-center gap-0.5">
+                                    Demo
+                                  </a>
+                                )}
+                                {p.githubUrl && (
+                                  <a href={p.githubUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline text-[10px] flex items-center gap-0.5">
+                                    Code
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                            {p.description && (
+                              <p className="text-[11px] text-slate-700 leading-relaxed">{p.description}</p>
+                            )}
+                            {p.highlights && p.highlights.length > 0 && (
+                              <ul className="list-disc list-inside space-y-0.5 text-slate-600 text-[11px] pt-1">
+                                {p.highlights.map((h, hIdx) => (
+                                  <li key={hIdx}>{h}</li>
+                                ))}
+                              </ul>
+                            )}
+                            {p.metrics && p.metrics.length > 0 && (
+                              <div className="pt-1">
+                                {p.metrics.map((m, mIdx) => (
+                                  <span key={mIdx} className="inline-block text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mr-1 mb-1">
+                                    {m}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap gap-1 pt-2 border-t border-border/40">
+                            {p.techStack.map((t) => (
                               <span key={t} className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                                 {t}
                               </span>
@@ -560,14 +927,123 @@ export default function SettingsPage() {
                     </div>
                   </div>
                 )}
+
+                {/* Achievements & Certifications */}
+                {((profile.achievements && profile.achievements.length > 0) ||
+                  (profile.certifications && profile.certifications.length > 0)) && (
+                  <div className="space-y-3 pt-2 border-t border-border">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                      <Award className="h-4 w-4 text-primary" />
+                      <span>Achievements & Certifications</span>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2 text-xs">
+                      {profile.achievements && profile.achievements.length > 0 && (
+                        <div className="rounded-lg border border-border/60 bg-muted/5 p-3 space-y-1.5">
+                          <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Key Achievements</p>
+                          <ul className="list-disc list-inside space-y-1 text-slate-700 text-[11px]">
+                            {profile.achievements.map((ach, idx) => (
+                              <li key={idx}>
+                                {typeof ach === 'string' ? ach : (
+                                  <>
+                                    <strong>{ach.title}</strong>
+                                    {ach.description ? ` — ${ach.description}` : ''}
+                                    {ach.year ? ` (${ach.year})` : ''}
+                                  </>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {profile.certifications && profile.certifications.length > 0 && (
+                        <div className="rounded-lg border border-border/60 bg-muted/5 p-3 space-y-1.5">
+                          <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Certifications</p>
+                          <ul className="list-disc list-inside space-y-1 text-slate-700 text-[11px]">
+                            {profile.certifications.map((cert, idx) => (
+                              <li key={idx}>
+                                {typeof cert === 'string' ? cert : (
+                                  <>
+                                    <strong>{cert.name}</strong>
+                                    {cert.issuer ? ` (${cert.issuer})` : ''}
+                                    {cert.year ? ` [${cert.year}]` : ''}
+                                  </>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Leadership & Extra-Curricular */}
+                {profile.leadership && profile.leadership.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-border">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                      <Sparkles className="h-4 w-4 text-primary" />
+                      <span>Leadership & Extra-Curricular</span>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2 text-xs">
+                      {profile.leadership.map((lead, idx) => (
+                        <div key={idx} className="rounded-lg border border-border/60 bg-muted/5 p-2.5 space-y-1">
+                          <p className="font-semibold text-foreground">{lead.role}</p>
+                          <p className="text-muted-foreground">{lead.organization}{lead.period ? ` • ${lead.period}` : ''}</p>
+                          {lead.description && <p className="text-[11px] text-slate-600 leading-relaxed">{lead.description}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
+
+              {/* Collapsible Read-Only Raw Extracted Resume Text */}
+              {resumeData.parsedText && (
+                <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                        Extracted Resume Text (Read-Only)
+                      </h4>
+                      <p className="text-[11px] text-muted-foreground">
+                        Clean normalized text extracted directly from the PDF document ({resumeData.parsedText.length} characters)
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowRawText(!showRawText)}
+                      className="gap-1.5 text-xs"
+                    >
+                      {showRawText ? (
+                        <>
+                          <ChevronUp className="h-3.5 w-3.5" />
+                          Hide Raw Text
+                        </>
+                      ) : (
+                        <>
+                          <ChevronDown className="h-3.5 w-3.5" />
+                          View Raw Text
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  {showRawText && (
+                    <div className="rounded-lg border border-border bg-slate-900 text-slate-100 p-3 max-h-96 overflow-y-auto font-mono text-[11px] leading-relaxed">
+                      <pre className="whitespace-pre-wrap">{resumeData.parsedText}</pre>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-border py-8 px-4 text-center">
               <Upload className="h-6 w-6 text-muted-foreground mb-2" />
               <p className="text-sm font-medium text-foreground">Upload your resume</p>
               <p className="text-xs text-muted-foreground max-w-sm mt-1">
-                Upload a PDF resume. The AI will extract your verified skills and background to power genuine,
+                Upload a PDF resume. The AI will extract your verified skills, projects, and background to power genuine,
                 personalized outreach emails without hallucinations.
               </p>
               <Button

@@ -206,41 +206,133 @@ export interface SchedulerConfig {
   schedulerStatus: 'running' | 'paused' | 'stopped' | 'waiting' | 'quota_reached';
 }
 
-// Structured Resume Profile
+// User-verified profile links (distinct from resume-derived facts)
+export interface VerifiedProfileLinks {
+  linkedin?: string | null;
+  github?: string | null;
+  portfolio?: string | null;
+  other?: string | null;
+}
+
+export interface ResumeEducation {
+  degree: string;
+  fieldOfStudy?: string | null;
+  institution: string;
+  boardOrUniversity?: string | null;
+  year?: string;
+  gpa?: string;
+  score?: string;
+  relevantCoursework?: string[];
+  otherDetails?: string | null;
+}
+
+export interface ResumeSkills {
+  languages: string[];
+  frameworks: string[];
+  databases: string[];
+  cloudDevOps: string[];
+  tools: string[];
+  frontend?: string[];
+  backend?: string[];
+  webTechnologies?: string[];
+  backendTechnologies?: string[];
+  developerTools?: string[];
+  coreConcepts?: string[];
+  aiMl?: string[];
+  dataScience?: string[];
+  apisIntegrations?: string[];
+  coreCs?: string[];
+  other: string[];
+}
+
+export interface ResumeExperience {
+  role: string;
+  title?: string;
+  company: string;
+  employmentType?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  duration?: string;
+  location?: string | null;
+  description?: string;
+  responsibilities?: string[];
+  highlights: string[];
+  bullets?: string[];
+  technologies?: string[];
+  tools?: string[];
+  metrics?: string[];
+}
+
+export interface ResumeProject {
+  title: string;
+  duration?: string | null;
+  description?: string;
+  problemSolved?: string | null;
+  techStack: string[];
+  frameworks?: string[];
+  databases?: string[];
+  apis?: string[];
+  architecture?: string | null;
+  implementationDetails?: string | null;
+  highlights: string[];
+  metrics?: string[];
+  deployment?: string | null;
+  liveUrl?: string | null;
+  githubUrl?: string | null;
+}
+
+export interface ResumeCertification {
+  name: string;
+  issuer?: string | null;
+  date?: string | null;
+  year?: string | null;
+  credentialId?: string | null;
+  url?: string | null;
+}
+
+export interface ResumeAchievement {
+  title: string;
+  description?: string | null;
+  event?: string | null;
+  rank?: string | null;
+  count?: string | null;
+  date?: string | null;
+  year?: string | null;
+  metrics?: string | null;
+}
+
+export interface ResumeLeadership {
+  position?: string;
+  role?: string;
+  organization: string;
+  duration?: string | null;
+  period?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  description?: string | null;
+  responsibilities?: string[];
+  highlights?: string[];
+}
+
+export interface ResumeCustomSection {
+  heading: string;
+  content: string[];
+}
+
+// Structured Resume Profile (strictly resume-extracted facts)
 export interface StructuredResumeProfile {
   name: string;
   email: string | null;
   phone: string | null;
   location: string | null;
-  education: Array<{
-    degree: string;
-    institution: string;
-    year?: string;
-    gpa?: string;
-  }>;
-  skills: {
-    languages: string[];
-    frameworks: string[];
-    databases: string[];
-    cloudDevOps: string[];
-    tools: string[];
-    other: string[];
-  };
-  experience: Array<{
-    role: string;
-    company: string;
-    duration?: string;
-    description?: string;
-    highlights: string[];
-  }>;
-  projects: Array<{
-    title: string;
-    description?: string;
-    techStack: string[];
-    highlights: string[];
-  }>;
-  certifications: string[];
-  achievements: string[];
+  education: ResumeEducation[];
+  skills: ResumeSkills;
+  experience: ResumeExperience[];
+  projects: ResumeProject[];
+  certifications: Array<string | ResumeCertification>;
+  achievements: Array<string | ResumeAchievement>;
+  leadership?: ResumeLeadership[];
+  customSections?: ResumeCustomSection[];
   summary: string;
 }
 

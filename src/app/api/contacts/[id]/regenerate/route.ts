@@ -4,6 +4,7 @@ import { resume, contacts } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { initializeDatabase } from '@/db/migrate';
 import { generatePersonalizedEmail } from '@/lib/ai/email-generator';
+import { getUserVerifiedLinks } from '@/lib/resume/profile-links';
 import type { ApiResponse, StructuredResumeProfile, Contact } from '@/types';
 
 let initialized = false;
@@ -33,6 +34,7 @@ export async function POST(
     }
 
     const profile: StructuredResumeProfile = JSON.parse(resumeRecord.parsedData);
+    const verifiedLinks = getUserVerifiedLinks(db);
 
     // 2. Fetch contact
     const contact = db.select().from(contacts).where(eq(contacts.id, id)).get();
@@ -76,6 +78,7 @@ export async function POST(
       relevanceReason: contact.relevanceReason,
       recentEmails: recentEmailBodies,
       preferredStrategy,
+      verifiedLinks,
     });
 
     const now = new Date().toISOString();

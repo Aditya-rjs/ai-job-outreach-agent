@@ -4,6 +4,7 @@ import { resume, contacts } from '@/db/schema';
 import { eq, and, sql, inArray } from 'drizzle-orm';
 import { initializeDatabase } from '@/db/migrate';
 import { generatePersonalizedEmail } from '@/lib/ai/email-generator';
+import { getUserVerifiedLinks } from '@/lib/resume/profile-links';
 import type { ApiResponse, StructuredResumeProfile, Contact } from '@/types';
 
 let initialized = false;
@@ -40,6 +41,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         { status: 500 }
       );
     }
+
+    const verifiedLinks = getUserVerifiedLinks(db);
 
     const body = await request.json().catch(() => ({}));
     const { contactId, batchId, forceRegenerate } = body;
@@ -178,6 +181,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
           relevanceReason: contact.relevanceReason,
           recentEmails: recentEmailBodies,
           preferredStrategy,
+          verifiedLinks,
         });
 
         const finishTimestamp = new Date().toISOString();
