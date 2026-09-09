@@ -102,7 +102,6 @@ async function runTests() {
         degree: 'B.Tech',
         fieldOfStudy: 'Computer Science and Engineering',
         year: '2021 - 2025',
-        gpa: '8.5 CGPA',
         highlights: ['Data Structures & Algorithms', 'Operating Systems', 'Distinction'],
       },
     ],
@@ -183,10 +182,47 @@ async function runTests() {
   }
   console.log('✓ getCandidateProfile() and saveCandidateProfile() operate purely via local SQLite.');
 
+  // Test 4b: Verify Legacy Stored GPA/Score Sanitization
+  console.log('\n[Test 4b] Testing legacy stored education JSON with GPA/score sanitization...');
+  // Manually write an education entry containing legacy gpa and score properties directly to SQLite
+  const legacyEduJson = JSON.stringify([
+    {
+      id: 'edu_legacy_test',
+      institution: 'Legacy Tech Institute',
+      degree: 'B.S.',
+      fieldOfStudy: 'Computer Science',
+      year: '2020 - 2024',
+      gpa: '9.5 CGPA',
+      score: '95%',
+      highlights: ['Algorithms', 'Systems'],
+    },
+  ]);
+  db.run(sql`UPDATE candidate_profile SET education = ${legacyEduJson} WHERE id = 'singleton'`);
+
+  const sanitizedProfile = getCandidateProfile(db);
+  const sanitizedEdu = sanitizedProfile.education[0];
+  if (!sanitizedEdu) {
+    throw new Error('FAIL: Sanitized education entry was not retrieved.');
+  }
+  if ((sanitizedEdu as any).gpa !== undefined) {
+    throw new Error('FAIL: Legacy gpa was not sanitized from candidate education!');
+  }
+  if ((sanitizedEdu as any).score !== undefined) {
+    throw new Error('FAIL: Legacy score was not sanitized from candidate education!');
+  }
+  if (sanitizedEdu.institution !== 'Legacy Tech Institute' || sanitizedEdu.degree !== 'B.S.') {
+    throw new Error('FAIL: Approved education fields were corrupted during sanitization.');
+  }
+  console.log('✓ Verified: Legacy gpa/score in stored education JSON is strictly sanitized and omitted from CandidateProfile.');
+
+  // Restore the test payload profile for subsequent tests
+  saveCandidateProfile(testPayload, db);
+  const restoredProfile = getCandidateProfile(db);
+
   // Test 5: Email Generation Grounding with CandidateProfile
   console.log('\n[Test 5] Testing email generation grounding against manual candidate profile...');
   const emailResult = await generatePersonalizedEmail({
-    profile: reloaded,
+    profile: restoredProfile,
     companyName: 'Stripe',
     contactName: 'Sarah Jenkins',
     designation: 'Head of Engineering Talent',

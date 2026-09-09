@@ -13,9 +13,29 @@ const DEFAULT_SKILLS: CandidateSkills = {
   other: [],
 };
 
+function sanitizeCandidateEducation(rawList: unknown[]): CandidateEducation[] {
+  if (!Array.isArray(rawList)) return [];
+  return rawList.map((e: any) => {
+    const item: CandidateEducation = {
+      id: typeof e.id === 'string' && e.id ? e.id : `edu_${Date.now()}`,
+      institution: typeof e.institution === 'string' ? e.institution.trim() : '',
+      degree: typeof e.degree === 'string' ? e.degree.trim() : '',
+    };
+    if (typeof e.fieldOfStudy === 'string' && e.fieldOfStudy.trim()) {
+      item.fieldOfStudy = e.fieldOfStudy.trim();
+    }
+    if (typeof e.year === 'string' && e.year.trim()) {
+      item.year = e.year.trim();
+    }
+    if (Array.isArray(e.highlights)) {
+      item.highlights = e.highlights.map((h: unknown) => String(h).trim()).filter(Boolean);
+    }
+    return item;
+  });
+}
+
 export function getCandidateProfile(dbClient?: DbClient): CandidateProfile {
   const db = dbClient || getDb();
-
   let row = db.select().from(candidateProfile).where(eq(candidateProfile.id, 'singleton')).get();
 
   if (!row) {
@@ -60,7 +80,7 @@ export function getCandidateProfile(dbClient?: DbClient): CandidateProfile {
 
   let education: CandidateEducation[] = [];
   try {
-    education = JSON.parse(row.education || '[]');
+    education = sanitizeCandidateEducation(JSON.parse(row.education || '[]'));
   } catch {
     education = [];
   }
@@ -143,7 +163,9 @@ export function saveCandidateProfile(
   const nextGithub = updates.github !== undefined ? updates.github.trim() : current.github;
   const nextPortfolio = updates.portfolio !== undefined ? updates.portfolio.trim() : current.portfolio;
 
-  const nextEducation = updates.education !== undefined ? updates.education : current.education;
+  const nextEducation = updates.education !== undefined
+    ? sanitizeCandidateEducation(updates.education)
+    : current.education;
   const nextExperience = updates.experience !== undefined ? updates.experience : current.experience;
   const nextProjects = updates.projects !== undefined ? updates.projects : current.projects;
   const nextSkills = updates.skills !== undefined ? updates.skills : current.skills;

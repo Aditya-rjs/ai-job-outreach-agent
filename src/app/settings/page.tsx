@@ -121,7 +121,6 @@ export default function SettingsPage() {
     degree: '',
     fieldOfStudy: '',
     year: '',
-    gpa: '',
     highlights: [],
   });
   const [eduHighlightsText, setEduHighlightsText] = useState('');
@@ -375,7 +374,6 @@ export default function SettingsPage() {
       degree: '',
       fieldOfStudy: '',
       year: '',
-      gpa: '',
       highlights: [],
     });
     setEduHighlightsText('');
@@ -385,7 +383,14 @@ export default function SettingsPage() {
 
   const openEditEducation = (idx: number) => {
     const item = profile.education[idx];
-    setEduForm(item);
+    setEduForm({
+      id: item.id,
+      institution: item.institution || '',
+      degree: item.degree || '',
+      fieldOfStudy: item.fieldOfStudy || '',
+      year: item.year || '',
+      highlights: item.highlights || [],
+    });
     setEduHighlightsText((item.highlights || []).join('\n'));
     setEditingIndex(idx);
     setActiveModal('education');
@@ -403,7 +408,6 @@ export default function SettingsPage() {
       degree: (eduForm.degree || '').trim(),
       fieldOfStudy: (eduForm.fieldOfStudy || '').trim(),
       year: (eduForm.year || '').trim(),
-      gpa: (eduForm.gpa || '').trim(),
       highlights,
     };
 
@@ -1003,7 +1007,6 @@ export default function SettingsPage() {
 
                   <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
                     {edu.year && <Badge variant="outline">Year: {edu.year}</Badge>}
-                    {edu.gpa && <Badge variant="outline">GPA/Score: {edu.gpa}</Badge>}
                   </div>
 
                   {edu.highlights && edu.highlights.length > 0 && (
@@ -1633,27 +1636,15 @@ export default function SettingsPage() {
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Year / Duration</label>
-                  <input
-                    type="text"
-                    value={eduForm.year || ''}
-                    onChange={(e) => setEduForm({ ...eduForm, year: e.target.value })}
-                    placeholder="2021 - 2025"
-                    className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">GPA / Percentage</label>
-                  <input
-                    type="text"
-                    value={eduForm.gpa || ''}
-                    onChange={(e) => setEduForm({ ...eduForm, gpa: e.target.value })}
-                    placeholder="8.5 CGPA or 85%"
-                    className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                </div>
+              <div>
+                <label className="text-xs font-semibold text-muted-foreground uppercase">Year / Duration</label>
+                <input
+                  type="text"
+                  value={eduForm.year || ''}
+                  onChange={(e) => setEduForm({ ...eduForm, year: e.target.value })}
+                  placeholder="2021 - 2025"
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
               </div>
               <div>
                 <label className="text-xs font-semibold text-muted-foreground uppercase">

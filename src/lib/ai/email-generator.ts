@@ -31,13 +31,13 @@ function getProfileDetails(profile: CandidateProfile | StructuredResumeProfile, 
   const name = ('fullName' in profile && profile.fullName) ? profile.fullName : ((profile as any).name || 'Candidate');
   const email = profile.email || '';
   const phone = profile.phone || '';
-
+  const isCandidateProfile = 'fullName' in profile;
   const education = (profile.education || []).map((e: any) => ({
     degree: e.degree || '',
     institution: e.institution || '',
     fieldOfStudy: e.fieldOfStudy || '',
     year: e.year || '',
-    score: e.score || e.gpa || '',
+    score: isCandidateProfile ? '' : (e.score || e.gpa || ''),
     highlights: (e.highlights || e.relevantCoursework || []) as string[],
   }));
 

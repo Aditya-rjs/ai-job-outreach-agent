@@ -368,7 +368,6 @@ export interface CandidateEducation {
   degree: string;
   fieldOfStudy?: string;
   year?: string;
-  gpa?: string;
   highlights?: string[];
 }
 
