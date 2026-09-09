@@ -12,7 +12,6 @@ export const candidateProfile = sqliteTable('candidate_profile', {
   linkedin: text('linkedin').notNull().default(''),
   github: text('github').notNull().default(''),
   portfolio: text('portfolio').notNull().default(''),
-  otherLink: text('other_link').notNull().default(''),
   education: text('education').notNull().default('[]'),
   experience: text('experience').notNull().default('[]'),
   projects: text('projects').notNull().default('[]'),

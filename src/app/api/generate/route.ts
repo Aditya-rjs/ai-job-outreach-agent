@@ -36,7 +36,6 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       linkedin: profile.linkedin || null,
       github: profile.github || null,
       portfolio: profile.portfolio || null,
-      other: profile.otherLink || null,
     };
 
     const body = await request.json().catch(() => ({}));

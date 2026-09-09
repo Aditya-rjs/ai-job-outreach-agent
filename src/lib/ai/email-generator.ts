@@ -70,11 +70,10 @@ function getProfileDetails(profile: CandidateProfile | StructuredResumeProfile, 
 
   const skills = profile.skills || {};
 
-  const effectiveLinks: VerifiedProfileLinks = {
+  const effectiveLinks = {
     linkedin: (verifiedLinks?.linkedin || ('linkedin' in profile ? profile.linkedin : '')) || null,
     github: (verifiedLinks?.github || ('github' in profile ? profile.github : '')) || null,
     portfolio: (verifiedLinks?.portfolio || ('portfolio' in profile ? profile.portfolio : '')) || null,
-    other: (verifiedLinks?.other || ('otherLink' in profile ? profile.otherLink : '')) || null,
   };
 
   return {
@@ -279,7 +278,6 @@ function buildGenerationPrompt(
   if (details.effectiveLinks?.linkedin) verifiedLinkLines.push(`- LinkedIn: ${details.effectiveLinks.linkedin}`);
   if (details.effectiveLinks?.github) verifiedLinkLines.push(`- GitHub: ${details.effectiveLinks.github}`);
   if (details.effectiveLinks?.portfolio) verifiedLinkLines.push(`- Portfolio: ${details.effectiveLinks.portfolio}`);
-  if (details.effectiveLinks?.other) verifiedLinkLines.push(`- Other: ${details.effectiveLinks.other}`);
 
   return `You are a professional career communication specialist writing a personalized, high-conviction job-outreach email from an engineering candidate to an HR recruiter or hiring manager.
 

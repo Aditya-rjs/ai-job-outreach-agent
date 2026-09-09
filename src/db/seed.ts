@@ -70,7 +70,6 @@ export function seedDatabase() {
     const linkLinkedin = db.select().from(settings).where(eq(settings.key, 'profile_link_linkedin')).get()?.value || '';
     const linkGithub = db.select().from(settings).where(eq(settings.key, 'profile_link_github')).get()?.value || '';
     const linkPortfolio = db.select().from(settings).where(eq(settings.key, 'profile_link_portfolio')).get()?.value || '';
-    const linkOther = db.select().from(settings).where(eq(settings.key, 'profile_link_other')).get()?.value || '';
 
     db.insert(candidateProfile)
       .values({
@@ -85,7 +84,6 @@ export function seedDatabase() {
         linkedin: linkLinkedin,
         github: linkGithub,
         portfolio: linkPortfolio,
-        otherLink: linkOther,
         education: '[]',
         experience: '[]',
         projects: '[]',

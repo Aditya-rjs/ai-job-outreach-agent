@@ -37,7 +37,6 @@ export async function POST(
       linkedin: profile.linkedin || null,
       github: profile.github || null,
       portfolio: profile.portfolio || null,
-      other: profile.otherLink || null,
     };
 
     // 2. Fetch contact

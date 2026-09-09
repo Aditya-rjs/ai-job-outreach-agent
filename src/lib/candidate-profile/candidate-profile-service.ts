@@ -23,7 +23,6 @@ export function getCandidateProfile(dbClient?: DbClient): CandidateProfile {
     const linkLinkedin = db.select().from(settings).where(eq(settings.key, 'profile_link_linkedin')).get()?.value || '';
     const linkGithub = db.select().from(settings).where(eq(settings.key, 'profile_link_github')).get()?.value || '';
     const linkPortfolio = db.select().from(settings).where(eq(settings.key, 'profile_link_portfolio')).get()?.value || '';
-    const linkOther = db.select().from(settings).where(eq(settings.key, 'profile_link_other')).get()?.value || '';
 
     const defaultSkillsJson = JSON.stringify(DEFAULT_SKILLS);
     const nowIso = new Date().toISOString();
@@ -41,7 +40,6 @@ export function getCandidateProfile(dbClient?: DbClient): CandidateProfile {
         linkedin: linkLinkedin,
         github: linkGithub,
         portfolio: linkPortfolio,
-        otherLink: linkOther,
         education: '[]',
         experience: '[]',
         projects: '[]',
@@ -114,7 +112,6 @@ export function getCandidateProfile(dbClient?: DbClient): CandidateProfile {
     linkedin: row.linkedin || '',
     github: row.github || '',
     portfolio: row.portfolio || '',
-    otherLink: row.otherLink || '',
     education,
     experience,
     projects,
@@ -145,7 +142,6 @@ export function saveCandidateProfile(
   const nextLinkedin = updates.linkedin !== undefined ? updates.linkedin.trim() : current.linkedin;
   const nextGithub = updates.github !== undefined ? updates.github.trim() : current.github;
   const nextPortfolio = updates.portfolio !== undefined ? updates.portfolio.trim() : current.portfolio;
-  const nextOtherLink = updates.otherLink !== undefined ? updates.otherLink.trim() : current.otherLink;
 
   const nextEducation = updates.education !== undefined ? updates.education : current.education;
   const nextExperience = updates.experience !== undefined ? updates.experience : current.experience;
@@ -165,7 +161,6 @@ export function saveCandidateProfile(
       linkedin: nextLinkedin,
       github: nextGithub,
       portfolio: nextPortfolio,
-      otherLink: nextOtherLink,
       education: JSON.stringify(nextEducation),
       experience: JSON.stringify(nextExperience),
       projects: JSON.stringify(nextProjects),
@@ -182,7 +177,6 @@ export function saveCandidateProfile(
     { key: 'profile_link_linkedin', val: nextLinkedin },
     { key: 'profile_link_github', val: nextGithub },
     { key: 'profile_link_portfolio', val: nextPortfolio },
-    { key: 'profile_link_other', val: nextOtherLink },
   ];
 
   for (const { key, val } of linkPairs) {

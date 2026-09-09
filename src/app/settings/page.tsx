@@ -64,7 +64,6 @@ export default function SettingsPage() {
     linkedin: '',
     github: '',
     portfolio: '',
-    otherLink: '',
     education: [],
     experience: [],
     projects: [],
@@ -97,7 +96,6 @@ export default function SettingsPage() {
     linkedin: '',
     github: '',
     portfolio: '',
-    otherLink: '',
   });
 
   // Skills local state
@@ -230,7 +228,6 @@ export default function SettingsPage() {
               linkedin: p.linkedin || '',
               github: p.github || '',
               portfolio: p.portfolio || '',
-              otherLink: p.otherLink || '',
             });
             setSkillsState(p.skills || {
               languages: [],
@@ -301,7 +298,6 @@ export default function SettingsPage() {
         linkedin: updatedProfile.linkedin || '',
         github: updatedProfile.github || '',
         portfolio: updatedProfile.portfolio || '',
-        otherLink: updatedProfile.otherLink || '',
       });
       setSkillsState(updatedProfile.skills || {
         languages: [],
@@ -909,7 +905,7 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSaveLinks} className="space-y-4">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <div>
                 <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">LinkedIn URL</label>
                 <input
@@ -937,16 +933,6 @@ export default function SettingsPage() {
                   value={linksForm.portfolio}
                   onChange={(e) => setLinksForm({ ...linksForm, portfolio: e.target.value })}
                   placeholder="https://yourportfolio.dev"
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Other Link / Blog</label>
-                <input
-                  type="url"
-                  value={linksForm.otherLink}
-                  onChange={(e) => setLinksForm({ ...linksForm, otherLink: e.target.value })}
-                  placeholder="https://yourblog.com"
                   className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>

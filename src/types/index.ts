@@ -422,7 +422,6 @@ export interface CandidateProfile {
   linkedin: string;
   github: string;
   portfolio: string;
-  otherLink: string;
   education: CandidateEducation[];
   experience: CandidateExperience[];
   projects: CandidateProject[];

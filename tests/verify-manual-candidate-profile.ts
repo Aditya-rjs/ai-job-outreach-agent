@@ -47,8 +47,8 @@ async function runTests() {
     console.log('✓ Verified: No legacy parsedData contamination.');
   }
 
-  // Test 2b: Verify candidate_profile schema has NO location and NO summary columns
-  console.log('\n[Test 2b] Verifying candidate_profile schema strictly lacks location and summary...');
+  // Test 2b: Verify candidate_profile schema has NO location, NO summary, and NO other_link columns
+  console.log('\n[Test 2b] Verifying candidate_profile schema strictly lacks location, summary, and other_link...');
   const tableColumns = db.all<{ name: string }>(sql`PRAGMA table_info(candidate_profile)`);
   const colNames = tableColumns.map((c) => c.name);
   if (colNames.includes('location')) {
@@ -56,6 +56,9 @@ async function runTests() {
   }
   if (colNames.includes('summary')) {
     throw new Error('FAIL: candidate_profile still has summary column in SQLite table!');
+  }
+  if (colNames.includes('other_link')) {
+    throw new Error('FAIL: candidate_profile still has other_link column in SQLite table!');
   }
   const requiredPersonalCols = [
     'full_name',
@@ -71,7 +74,13 @@ async function runTests() {
       throw new Error(`FAIL: candidate_profile missing expected column ${col}!`);
     }
   }
-  console.log('✓ Verified: SQLite schema strictly contains only the 7 approved personal fields (no location, no summary).');
+  const requiredLinkCols = ['linkedin', 'github', 'portfolio'];
+  for (const col of requiredLinkCols) {
+    if (!colNames.includes(col)) {
+      throw new Error(`FAIL: candidate_profile missing expected link column ${col}!`);
+    }
+  }
+  console.log('✓ Verified: SQLite schema strictly contains only the 7 approved personal fields and 3 approved link fields (no location, no summary, no other_link).');
 
   // Test 3: Verify Saving & Updating Authoritative Candidate Profile
   console.log('\n[Test 3] Testing manual profile save and persistence...');
@@ -86,7 +95,6 @@ async function runTests() {
     linkedin: 'https://linkedin.com/in/adityarajsingh-test',
     github: 'https://github.com/adityasingh-test',
     portfolio: 'https://adityasingh.dev',
-    otherLink: 'https://blog.adityasingh.dev',
     education: [
       {
         id: 'edu_1',

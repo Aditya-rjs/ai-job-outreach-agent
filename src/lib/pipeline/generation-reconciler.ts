@@ -333,7 +333,6 @@ export async function reconcilePendingEmailGenerations(options: {
     linkedin: profile.linkedin || null,
     github: profile.github || null,
     portfolio: profile.portfolio || null,
-    other: profile.otherLink || null,
   };
   const resumeRecord = db.select().from(resume).where(eq(resume.id, 'current')).get();
   const resumeVersion = resumeRecord?.version || resumeRecord?.uploadedAt || profile.version;

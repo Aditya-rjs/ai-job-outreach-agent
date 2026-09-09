@@ -213,7 +213,6 @@ export function initializeDatabase() {
       linkedin TEXT NOT NULL DEFAULT '',
       github TEXT NOT NULL DEFAULT '',
       portfolio TEXT NOT NULL DEFAULT '',
-      other_link TEXT NOT NULL DEFAULT '',
       education TEXT NOT NULL DEFAULT '[]',
       experience TEXT NOT NULL DEFAULT '[]',
       projects TEXT NOT NULL DEFAULT '[]',
@@ -224,12 +223,13 @@ export function initializeDatabase() {
     )
   `);
 
-  // Safe migration for existing database instances: remove unrequested location & summary columns
+  // Safe migration for existing database instances: remove unrequested location, summary & other_link columns
   const tableInfo = db.all<{ name: string }>(sql`PRAGMA table_info(candidate_profile)`);
   const hasLocation = tableInfo.some((col) => col.name === 'location');
   const hasSummary = tableInfo.some((col) => col.name === 'summary');
+  const hasOtherLink = tableInfo.some((col) => col.name === 'other_link');
 
-  if (hasLocation || hasSummary) {
+  if (hasLocation || hasSummary || hasOtherLink) {
     try {
       db.transaction(() => {
         db.run(sql`
@@ -245,7 +245,6 @@ export function initializeDatabase() {
             linkedin TEXT NOT NULL DEFAULT '',
             github TEXT NOT NULL DEFAULT '',
             portfolio TEXT NOT NULL DEFAULT '',
-            other_link TEXT NOT NULL DEFAULT '',
             education TEXT NOT NULL DEFAULT '[]',
             experience TEXT NOT NULL DEFAULT '[]',
             projects TEXT NOT NULL DEFAULT '[]',
@@ -259,12 +258,12 @@ export function initializeDatabase() {
         db.run(sql`
           INSERT INTO candidate_profile_clean (
             id, full_name, email, phone, degree, field_of_study, institution,
-            graduation_year, linkedin, github, portfolio, other_link,
+            graduation_year, linkedin, github, portfolio,
             education, experience, projects, skills, achievements, version, updated_at
           )
           SELECT
             id, full_name, email, phone, degree, field_of_study, institution,
-            graduation_year, linkedin, github, portfolio, other_link,
+            graduation_year, linkedin, github, portfolio,
             education, experience, projects, skills, achievements, version, updated_at
           FROM candidate_profile
         `);
@@ -272,9 +271,9 @@ export function initializeDatabase() {
         db.run(sql`DROP TABLE candidate_profile`);
         db.run(sql`ALTER TABLE candidate_profile_clean RENAME TO candidate_profile`);
       });
-      console.log('[migrate] Safely migrated candidate_profile: removed location and summary columns while preserving all profile data.');
+      console.log('[migrate] Safely migrated candidate_profile: removed location, summary, and other_link columns while preserving all profile data.');
     } catch (migErr) {
-      console.error('[migrate] CRITICAL ERROR: Failed to migrate candidate_profile schema (location/summary removal):', migErr);
+      console.error('[migrate] CRITICAL ERROR: Failed to migrate candidate_profile schema (location/summary/other_link removal):', migErr);
       throw new Error(
         `Failed to migrate candidate_profile table: ${migErr instanceof Error ? migErr.message : String(migErr)}`
       );
