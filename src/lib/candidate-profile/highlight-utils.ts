@@ -15,7 +15,7 @@
  */
 
 export const LIST_MARKER_REGEX =
-  /^(\d+[\.\)\:]|\d+\s*[\-\–]|\(\d+\)|\[\d+\]|(?:[a-zA-Z]|[ivxIVX]+)[\.\)]|\((?:[a-zA-Z]|[ivxIVX]+)\)|[•\-\*–—\+])(?:\s+|$)/;
+  /^(\d+[\)\:]|\d+\.(?!\d)|\d+\s*[\-\–]|\(\d+\)|\[\d+\]|(?:[a-zA-Z]|[ivxIVX]+)\)|\((?:[a-zA-Z]|[ivxIVX]+)\)|(?:[a-zA-Z]|[ivxIVX]+)\.(?=\s)|[•\-\*–—\+])(?:\s*|$)/;
 
 /**
  * Checks whether a single trimmed line begins with a list marker.
