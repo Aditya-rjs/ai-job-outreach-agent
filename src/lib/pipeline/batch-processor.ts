@@ -5,9 +5,10 @@ import { ulid } from 'ulid';
 import { parseCSV } from '@/lib/parsers/csv-parser';
 import { getFieldMapping, applyFieldMapping, type NormalizedContactRecord } from '@/lib/parsers/field-mapper';
 import { parsePdf } from '@/lib/parsers/pdf-parser';
-import { classifyCompanies } from '@/lib/ai/company-classifier';
+import { classifyCompanies, type CompanyClassificationResult } from '@/lib/ai/company-classifier';
 import { reconstructCanonicalContacts } from '@/lib/pipeline/canonical-ingestion';
 import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
+import { searchCompanyDatabaseBatch } from '@/lib/kb/relevant-companies-kb';
 
 export interface BatchProcessingResult {
   batchId: string;
@@ -243,8 +244,38 @@ export async function processBatchFile(
       }
     }
 
-    const companiesToClassify = Array.from(uniqueCompanies.values());
-    const classificationMap = await classifyCompanies(companiesToClassify);
+    // 5a. Search Relevant Company Knowledge Base (FOUND / NOT FOUND)
+    const distinctRawNames = Array.from(uniqueCompanies.values()).map((u) => u.companyName);
+    const kbMatches = searchCompanyDatabaseBatch(distinctRawNames, db);
+
+    const classificationMap = new Map<string, CompanyClassificationResult>();
+    const companiesToClassify: (typeof uniqueCompanies extends Map<string, infer V> ? V : never)[] = [];
+
+    for (const company of uniqueCompanies.values()) {
+      if (kbMatches.has(company.normalizedName)) {
+        const match = kbMatches.get(company.normalizedName)!;
+        classificationMap.set(company.normalizedName, {
+          companyName: company.companyName,
+          normalizedName: company.normalizedName,
+          relevant: true,
+          confidence: 1.0,
+          reason: `Relevant — Known Company Knowledge Base: ${match.canonicalName}`,
+          status: 'RELEVANT',
+          source: 'gemini',
+          geminiModel: 'knowledge-base',
+          retryCount: 0,
+        });
+      } else {
+        companiesToClassify.push(company);
+      }
+    }
+
+    if (companiesToClassify.length > 0) {
+      const aiResultsMap = await classifyCompanies(companiesToClassify);
+      for (const [norm, res] of aiResultsMap.entries()) {
+        classificationMap.set(norm, res);
+      }
+    }
 
     // 6. Assign classification and determine final status
     let relevantCompaniesCount = 0;

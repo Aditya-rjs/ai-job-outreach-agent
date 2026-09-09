@@ -239,6 +239,29 @@ export function initializeDatabase() {
     )
   `);
 
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS relevant_companies (
+      id TEXT PRIMARY KEY,
+      canonical_name TEXT NOT NULL,
+      normalized_canonical_name TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+  db.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_relcomp_norm ON relevant_companies(normalized_canonical_name)`);
+
+  db.run(sql`
+    CREATE TABLE IF NOT EXISTS relevant_company_aliases (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES relevant_companies(id) ON DELETE CASCADE,
+      alias_name TEXT NOT NULL,
+      normalized_alias_name TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL
+    )
+  `);
+  db.run(sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_relcomp_aliases_norm ON relevant_company_aliases(normalized_alias_name)`);
+  db.run(sql`CREATE INDEX IF NOT EXISTS idx_relcomp_aliases_comp_id ON relevant_company_aliases(company_id)`);
+
   // Safe ALTER TABLE statements for existing databases
   try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN classification_source TEXT NOT NULL DEFAULT 'gemini'`); } catch {}
   try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN gemini_model TEXT NOT NULL DEFAULT 'gemini-3.8-flash'`); } catch {}

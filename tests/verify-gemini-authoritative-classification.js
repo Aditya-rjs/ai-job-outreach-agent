@@ -47,6 +47,10 @@ runClassifierHelper('init', {});
 
 // Clean DB cache for test companies to ensure test isolation
 db.prepare('DELETE FROM company_classifications').run();
+try {
+  db.prepare('DELETE FROM relevant_company_aliases').run();
+  db.prepare('DELETE FROM relevant_companies').run();
+} catch {}
 
 // ── 1. HCL, Infosys, TCS, Microsoft/Google Classified by Gemini ────────
 console.log('\n--- Test 1: HCL, Infosys, TCS, Microsoft, Google Classified by Gemini ---');

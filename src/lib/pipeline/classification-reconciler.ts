@@ -13,6 +13,8 @@ import { categorizeGeminiError, globalGeminiLimiter } from '@/lib/ai/gemini-clie
 import { isOpenRouterConfigured, isOpenRouterError } from '@/lib/ai/openrouter-client';
 import { isAiProviderUnavailableError } from '@/lib/ai/ai-dispatcher';
 import { normalizeCompanyName, formatCompanyDisplayName } from '@/lib/utils/company';
+import { searchCompanyDatabaseBatch, resolveCanonicalAndPersist } from '@/lib/kb/relevant-companies-kb';
+import { generateCanonicalCompanyNames } from '@/lib/ai/canonical-name-generator';
 
 export interface ReconcileResult {
   processed: number;
@@ -232,6 +234,27 @@ export function discoverAndSeedOrphanedCompanies(
     existingMap.set(r.companyName.trim().toLowerCase(), r);
     const n = normalizeCompanyName(r.companyName);
     if (n) existingMap.set(n, r);
+  }
+
+  // Check Relevant Company Knowledge Base first (FOUND -> RELEVANT -> 0 AI calls)
+  const kbMatches = searchCompanyDatabaseBatch(Array.from(companyMap.values()), db);
+  for (const [norm, rawName] of Array.from(companyMap.entries())) {
+    if (kbMatches.has(norm)) {
+      const match = kbMatches.get(norm)!;
+      const newlyPromoted = cascadeClassificationToContacts(db, {
+        companyName: formatCompanyDisplayName(rawName),
+        normalizedName: norm,
+        relevant: true,
+        confidence: 1.0,
+        reason: `Relevant — Known Company Knowledge Base: ${match.canonicalName}`,
+        status: 'RELEVANT',
+        source: 'gemini',
+        geminiModel: 'knowledge-base',
+        retryCount: 0,
+      });
+      cascaded += newlyPromoted;
+      companyMap.delete(norm);
+    }
   }
 
   for (const [norm, rawName] of companyMap.entries()) {
@@ -632,6 +655,23 @@ async function reconcileSingleBatch(
     try {
       const results = await classifyWithGeminiBatch(chunkInputs, geminiCallerOverride, { isRetry: true });
 
+      // Persist newly confirmed RELEVANT companies to Relevant Company KB
+      const relevantResults = results.filter((r) => r.status === 'RELEVANT');
+      if (relevantResults.length > 0) {
+        try {
+          const canonicalMap = await generateCanonicalCompanyNames(
+            relevantResults.map((r) => r.companyName)
+          );
+          for (const rel of relevantResults) {
+            const canonical = canonicalMap.get(formatCompanyDisplayName(rel.companyName)) || rel.companyName;
+            const persisted = resolveCanonicalAndPersist(canonical, rel.companyName, db);
+            rel.reason += ` (KB Canonical: ${persisted.canonicalName})`;
+          }
+        } catch (kbErr) {
+          console.warn('[ClassificationReconciler] Notice while persisting to RelevantCompanyKB:', kbErr);
+        }
+      }
+
       for (const res of results) {
         activeClassificationOperations.delete(res.normalizedName);
 
@@ -927,6 +967,24 @@ async function reconcileGlobalClassifications(
 
     try {
       const results = await classifyWithGeminiBatch(chunkInputs, geminiCallerOverride, { isRetry: true });
+
+      // Persist newly confirmed RELEVANT companies to Relevant Company KB
+      const relevantResults = results.filter((r) => r.status === 'RELEVANT');
+      if (relevantResults.length > 0) {
+        try {
+          const canonicalMap = await generateCanonicalCompanyNames(
+            relevantResults.map((r) => r.companyName)
+          );
+          for (const rel of relevantResults) {
+            const canonical = canonicalMap.get(formatCompanyDisplayName(rel.companyName)) || rel.companyName;
+            const persisted = resolveCanonicalAndPersist(canonical, rel.companyName, db);
+            rel.reason += ` (KB Canonical: ${persisted.canonicalName})`;
+          }
+        } catch (kbErr) {
+          console.warn('[ClassificationReconciler] Notice while persisting to RelevantCompanyKB:', kbErr);
+        }
+      }
+
       for (const res of results) {
         activeClassificationOperations.delete(res.normalizedName);
 

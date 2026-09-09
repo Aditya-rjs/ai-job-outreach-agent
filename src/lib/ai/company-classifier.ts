@@ -6,6 +6,8 @@ import { callAi, type AiCallResult } from './ai-dispatcher';
 import { isOpenRouterConfigured, isOpenRouterError } from './openrouter-client';
 
 import { normalizeCompanyName, formatCompanyDisplayName } from '@/lib/utils/company';
+import { searchCompanyDatabaseBatch, resolveCanonicalAndPersist } from '@/lib/kb/relevant-companies-kb';
+import { generateCanonicalCompanyNames } from './canonical-name-generator';
 
 export type ClassificationStatus = 'RELEVANT' | 'IRRELEVANT' | 'NEEDS_REVIEW' | 'PENDING' | 'RETRY_WAITING' | 'FAILED';
 export type ClassificationSource = 'gemini' | 'openrouter';
@@ -327,10 +329,37 @@ export async function classifyCompanies(
   const finalMap = new Map<string, CompanyClassificationResult>();
   const toLookupInDb: CompanyEvaluationInput[] = [];
 
+  // 0. Search Relevant Company Knowledge Base (FOUND -> RELEVANT -> 0 AI calls)
+  const kbMatches = searchCompanyDatabaseBatch(companies.map((c) => c.companyName));
+  for (const c of companies) {
+    const normalized = c.normalizedName ? c.normalizedName.toLowerCase().trim() : normalizeCompanyName(c.companyName);
+    if (normalized && kbMatches.has(normalized)) {
+      const match = kbMatches.get(normalized)!;
+      const kbResult: CompanyClassificationResult = {
+        companyName: c.companyName,
+        normalizedName: normalized,
+        relevant: true,
+        confidence: 1.0,
+        status: 'RELEVANT',
+        source: 'gemini',
+        geminiModel: 'knowledge-base',
+        retryCount: 0,
+        reason: `Relevant — Known Company Knowledge Base: ${match.canonicalName}`,
+      };
+      finalMap.set(normalized, kbResult);
+      memoryCache.set(normalized, kbResult);
+    }
+  }
+
   // 1. Check in-memory cache
   for (const c of companies) {
     const normalized = c.normalizedName ? c.normalizedName.toLowerCase().trim() : normalizeCompanyName(c.companyName);
     if (!normalized) continue;
+
+    if (finalMap.has(normalized)) {
+      // Already satisfied by Relevant Company Knowledge Base
+      continue;
+    }
 
     const display = formatCompanyDisplayName(c.companyName);
     const item: CompanyEvaluationInput = {
@@ -386,6 +415,24 @@ export async function classifyCompanies(
           finalMap.set(res.normalizedName, res);
           memoryCache.set(res.normalizedName, res);
           newlyClassified.push(res);
+        }
+
+        // For newly confirmed RELEVANT companies: generate canonical name & persist to KB
+        const relevantResults = aiResults.filter((r) => r.status === 'RELEVANT');
+        if (relevantResults.length > 0) {
+          try {
+            const canonicalMap = await generateCanonicalCompanyNames(
+              relevantResults.map((r) => r.companyName),
+              geminiClientOverride || undefined
+            );
+            for (const rel of relevantResults) {
+              const canonical = canonicalMap.get(formatCompanyDisplayName(rel.companyName)) || rel.companyName;
+              const persisted = resolveCanonicalAndPersist(canonical, rel.companyName);
+              rel.reason += ` (KB Canonical: ${persisted.canonicalName})`;
+            }
+          } catch (kbErr) {
+            console.warn('[CompanyClassifier] Notice during KB persistence:', kbErr);
+          }
         }
         continue;
       } catch (err: unknown) {
