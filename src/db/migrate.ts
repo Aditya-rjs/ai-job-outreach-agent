@@ -206,12 +206,10 @@ export function initializeDatabase() {
       full_name TEXT NOT NULL DEFAULT '',
       email TEXT NOT NULL DEFAULT '',
       phone TEXT NOT NULL DEFAULT '',
-      location TEXT NOT NULL DEFAULT '',
       degree TEXT NOT NULL DEFAULT '',
       field_of_study TEXT NOT NULL DEFAULT '',
       institution TEXT NOT NULL DEFAULT '',
       graduation_year TEXT NOT NULL DEFAULT '',
-      summary TEXT NOT NULL DEFAULT '',
       linkedin TEXT NOT NULL DEFAULT '',
       github TEXT NOT NULL DEFAULT '',
       portfolio TEXT NOT NULL DEFAULT '',
@@ -225,6 +223,63 @@ export function initializeDatabase() {
       updated_at TEXT NOT NULL
     )
   `);
+
+  // Safe migration for existing database instances: remove unrequested location & summary columns
+  const tableInfo = db.all<{ name: string }>(sql`PRAGMA table_info(candidate_profile)`);
+  const hasLocation = tableInfo.some((col) => col.name === 'location');
+  const hasSummary = tableInfo.some((col) => col.name === 'summary');
+
+  if (hasLocation || hasSummary) {
+    try {
+      db.transaction(() => {
+        db.run(sql`
+          CREATE TABLE candidate_profile_clean (
+            id TEXT PRIMARY KEY DEFAULT 'singleton',
+            full_name TEXT NOT NULL DEFAULT '',
+            email TEXT NOT NULL DEFAULT '',
+            phone TEXT NOT NULL DEFAULT '',
+            degree TEXT NOT NULL DEFAULT '',
+            field_of_study TEXT NOT NULL DEFAULT '',
+            institution TEXT NOT NULL DEFAULT '',
+            graduation_year TEXT NOT NULL DEFAULT '',
+            linkedin TEXT NOT NULL DEFAULT '',
+            github TEXT NOT NULL DEFAULT '',
+            portfolio TEXT NOT NULL DEFAULT '',
+            other_link TEXT NOT NULL DEFAULT '',
+            education TEXT NOT NULL DEFAULT '[]',
+            experience TEXT NOT NULL DEFAULT '[]',
+            projects TEXT NOT NULL DEFAULT '[]',
+            skills TEXT NOT NULL DEFAULT '{"languages":[],"frameworks":[],"databases":[],"cloudDevOps":[],"tools":[],"other":[]}',
+            achievements TEXT NOT NULL DEFAULT '[]',
+            version TEXT NOT NULL DEFAULT '1',
+            updated_at TEXT NOT NULL
+          )
+        `);
+
+        db.run(sql`
+          INSERT INTO candidate_profile_clean (
+            id, full_name, email, phone, degree, field_of_study, institution,
+            graduation_year, linkedin, github, portfolio, other_link,
+            education, experience, projects, skills, achievements, version, updated_at
+          )
+          SELECT
+            id, full_name, email, phone, degree, field_of_study, institution,
+            graduation_year, linkedin, github, portfolio, other_link,
+            education, experience, projects, skills, achievements, version, updated_at
+          FROM candidate_profile
+        `);
+
+        db.run(sql`DROP TABLE candidate_profile`);
+        db.run(sql`ALTER TABLE candidate_profile_clean RENAME TO candidate_profile`);
+      });
+      console.log('[migrate] Safely migrated candidate_profile: removed location and summary columns while preserving all profile data.');
+    } catch (migErr) {
+      console.error('[migrate] CRITICAL ERROR: Failed to migrate candidate_profile schema (location/summary removal):', migErr);
+      throw new Error(
+        `Failed to migrate candidate_profile table: ${migErr instanceof Error ? migErr.message : String(migErr)}`
+      );
+    }
+  }
 
   db.run(sql`
     CREATE TABLE IF NOT EXISTS ai_provider_state (

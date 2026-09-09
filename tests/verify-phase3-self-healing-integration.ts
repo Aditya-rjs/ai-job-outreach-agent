@@ -151,7 +151,6 @@ async function runEndToEndIntegrationVerification() {
       degree: 'B.S.',
       fieldOfStudy: 'Computer Science',
       institution: 'State University',
-      summary: 'Senior Full Stack Engineer with TypeScript, Next.js, Node.js, and PostgreSQL expertise.',
       skills: {
         languages: ['TypeScript', 'JavaScript', 'SQL', 'Python'],
         frameworks: ['Next.js', 'React', 'Node.js', 'Express'],

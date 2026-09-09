@@ -34,12 +34,10 @@ export function getCandidateProfile(dbClient?: DbClient): CandidateProfile {
         fullName: '',
         email: '',
         phone: '',
-        location: '',
         degree: '',
         fieldOfStudy: '',
         institution: '',
         graduationYear: '',
-        summary: '',
         linkedin: linkLinkedin,
         github: linkGithub,
         portfolio: linkPortfolio,
@@ -109,12 +107,10 @@ export function getCandidateProfile(dbClient?: DbClient): CandidateProfile {
     fullName: row.fullName || '',
     email: row.email || '',
     phone: row.phone || '',
-    location: row.location || '',
     degree: row.degree || '',
     fieldOfStudy: row.fieldOfStudy || '',
     institution: row.institution || '',
     graduationYear: row.graduationYear || '',
-    summary: row.summary || '',
     linkedin: row.linkedin || '',
     github: row.github || '',
     portfolio: row.portfolio || '',
@@ -141,12 +137,10 @@ export function saveCandidateProfile(
   const nextFullName = updates.fullName !== undefined ? updates.fullName.trim() : current.fullName;
   const nextEmail = updates.email !== undefined ? updates.email.trim() : current.email;
   const nextPhone = updates.phone !== undefined ? updates.phone.trim() : current.phone;
-  const nextLocation = updates.location !== undefined ? updates.location.trim() : current.location;
   const nextDegree = updates.degree !== undefined ? updates.degree.trim() : current.degree;
   const nextFieldOfStudy = updates.fieldOfStudy !== undefined ? updates.fieldOfStudy.trim() : current.fieldOfStudy;
   const nextInstitution = updates.institution !== undefined ? updates.institution.trim() : current.institution;
   const nextGraduationYear = updates.graduationYear !== undefined ? updates.graduationYear.trim() : current.graduationYear;
-  const nextSummary = updates.summary !== undefined ? updates.summary.trim() : current.summary;
 
   const nextLinkedin = updates.linkedin !== undefined ? updates.linkedin.trim() : current.linkedin;
   const nextGithub = updates.github !== undefined ? updates.github.trim() : current.github;
@@ -164,12 +158,10 @@ export function saveCandidateProfile(
       fullName: nextFullName,
       email: nextEmail,
       phone: nextPhone,
-      location: nextLocation,
       degree: nextDegree,
       fieldOfStudy: nextFieldOfStudy,
       institution: nextInstitution,
       graduationYear: nextGraduationYear,
-      summary: nextSummary,
       linkedin: nextLinkedin,
       github: nextGithub,
       portfolio: nextPortfolio,
@@ -216,7 +208,6 @@ export function saveCandidateProfile(
 export function isCandidateProfileConfigured(profile: CandidateProfile): boolean {
   if (!profile) return false;
   const hasName = Boolean(profile.fullName && profile.fullName.trim());
-  const hasSummary = Boolean(profile.summary && profile.summary.trim());
   const hasEdu = profile.education && profile.education.length > 0;
   const hasExp = profile.experience && profile.experience.length > 0;
   const hasProj = profile.projects && profile.projects.length > 0;
@@ -229,5 +220,5 @@ export function isCandidateProfileConfigured(profile: CandidateProfile): boolean
     )
   );
 
-  return hasName || hasSummary || hasEdu || hasExp || hasProj || hasSkills;
+  return hasName || hasEdu || hasExp || hasProj || hasSkills;
 }

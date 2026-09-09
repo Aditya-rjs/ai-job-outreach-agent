@@ -47,18 +47,42 @@ async function runTests() {
     console.log('✓ Verified: No legacy parsedData contamination.');
   }
 
+  // Test 2b: Verify candidate_profile schema has NO location and NO summary columns
+  console.log('\n[Test 2b] Verifying candidate_profile schema strictly lacks location and summary...');
+  const tableColumns = db.all<{ name: string }>(sql`PRAGMA table_info(candidate_profile)`);
+  const colNames = tableColumns.map((c) => c.name);
+  if (colNames.includes('location')) {
+    throw new Error('FAIL: candidate_profile still has location column in SQLite table!');
+  }
+  if (colNames.includes('summary')) {
+    throw new Error('FAIL: candidate_profile still has summary column in SQLite table!');
+  }
+  const requiredPersonalCols = [
+    'full_name',
+    'email',
+    'phone',
+    'degree',
+    'field_of_study',
+    'institution',
+    'graduation_year',
+  ];
+  for (const col of requiredPersonalCols) {
+    if (!colNames.includes(col)) {
+      throw new Error(`FAIL: candidate_profile missing expected column ${col}!`);
+    }
+  }
+  console.log('✓ Verified: SQLite schema strictly contains only the 7 approved personal fields (no location, no summary).');
+
   // Test 3: Verify Saving & Updating Authoritative Candidate Profile
   console.log('\n[Test 3] Testing manual profile save and persistence...');
   const testPayload: Partial<CandidateProfile> = {
     fullName: 'Aditya Raj Singh',
     email: 'aditya.singh@example.com',
     phone: '+91 9876543210',
-    location: 'Patna, Bihar, India',
     degree: 'B.Tech',
     fieldOfStudy: 'Computer Science and Engineering',
     institution: 'LNJPIT Chapra',
     graduationYear: '2025',
-    summary: 'Full-stack software engineer with deep focus on Next.js, TypeScript, and distributed systems.',
     linkedin: 'https://linkedin.com/in/adityarajsingh-test',
     github: 'https://github.com/adityasingh-test',
     portfolio: 'https://adityasingh.dev',

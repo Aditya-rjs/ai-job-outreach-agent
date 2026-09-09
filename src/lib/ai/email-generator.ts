@@ -31,7 +31,6 @@ function getProfileDetails(profile: CandidateProfile | StructuredResumeProfile, 
   const name = ('fullName' in profile && profile.fullName) ? profile.fullName : ((profile as any).name || 'Candidate');
   const email = profile.email || '';
   const phone = profile.phone || '';
-  const summary = profile.summary || '';
 
   const education = (profile.education || []).map((e: any) => ({
     degree: e.degree || '',
@@ -82,7 +81,6 @@ function getProfileDetails(profile: CandidateProfile | StructuredResumeProfile, 
     name,
     email,
     phone,
-    summary,
     education,
     experience,
     projects,
@@ -289,7 +287,6 @@ function buildGenerationPrompt(
 - Name: ${details.name}
 ${details.email ? `- Email: ${details.email}` : ''}
 ${details.phone ? `- Phone: ${details.phone}` : ''}
-${details.summary ? `- Background Summary: ${details.summary}` : ''}
 
 Education:
 ${eduLines || '- Engineering graduate'}

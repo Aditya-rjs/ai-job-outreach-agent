@@ -92,7 +92,6 @@ async function runAllTests() {
       degree: 'B.Tech',
       fieldOfStudy: 'Computer Science',
       institution: 'University',
-      summary: 'Full Stack Engineer with experience in React and Node',
       skills: {
         languages: ['TypeScript', 'JavaScript', 'Python'],
         frameworks: ['Next.js', 'React', 'Node.js'],

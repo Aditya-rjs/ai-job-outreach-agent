@@ -96,7 +96,6 @@ async function runAllTests() {
       degree: 'B.S.',
       fieldOfStudy: 'Computer Science',
       institution: 'State University',
-      summary: 'Full Stack Engineer with React, Node, Python, SQLite experience.',
       skills: {
         languages: ['TypeScript', 'JavaScript', 'Python'],
         frameworks: ['React', 'Node.js'],

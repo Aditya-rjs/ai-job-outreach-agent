@@ -415,12 +415,10 @@ export interface CandidateProfile {
   fullName: string;
   email: string;
   phone: string;
-  location: string;
   degree: string;
   fieldOfStudy: string;
   institution: string;
   graduationYear: string;
-  summary: string;
   linkedin: string;
   github: string;
   portfolio: string;

@@ -57,12 +57,10 @@ export default function SettingsPage() {
     fullName: '',
     email: '',
     phone: '',
-    location: '',
     degree: '',
     fieldOfStudy: '',
     institution: '',
     graduationYear: '',
-    summary: '',
     linkedin: '',
     github: '',
     portfolio: '',
@@ -88,12 +86,10 @@ export default function SettingsPage() {
     fullName: '',
     email: '',
     phone: '',
-    location: '',
     degree: '',
     fieldOfStudy: '',
     institution: '',
     graduationYear: '',
-    summary: '',
   });
 
   // Local form state for Links
@@ -225,12 +221,10 @@ export default function SettingsPage() {
               fullName: p.fullName || '',
               email: p.email || '',
               phone: p.phone || '',
-              location: p.location || '',
               degree: p.degree || '',
               fieldOfStudy: p.fieldOfStudy || '',
               institution: p.institution || '',
               graduationYear: p.graduationYear || '',
-              summary: p.summary || '',
             });
             setLinksForm({
               linkedin: p.linkedin || '',
@@ -298,12 +292,10 @@ export default function SettingsPage() {
         fullName: updatedProfile.fullName || '',
         email: updatedProfile.email || '',
         phone: updatedProfile.phone || '',
-        location: updatedProfile.location || '',
         degree: updatedProfile.degree || '',
         fieldOfStudy: updatedProfile.fieldOfStudy || '',
         institution: updatedProfile.institution || '',
         graduationYear: updatedProfile.graduationYear || '',
-        summary: updatedProfile.summary || '',
       });
       setLinksForm({
         linkedin: updatedProfile.linkedin || '',
@@ -851,16 +843,6 @@ export default function SettingsPage() {
                 />
               </div>
               <div>
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Location</label>
-                <input
-                  type="text"
-                  value={personalForm.location}
-                  onChange={(e) => setPersonalForm({ ...personalForm, location: e.target.value })}
-                  placeholder="Patna, Bihar, India"
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-              <div>
                 <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Primary Degree</label>
                 <input
                   type="text"
@@ -900,19 +882,6 @@ export default function SettingsPage() {
                   className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                Professional Summary / Career Objective
-              </label>
-              <textarea
-                rows={3}
-                value={personalForm.summary}
-                onChange={(e) => setPersonalForm({ ...personalForm, summary: e.target.value })}
-                placeholder="Software Engineering graduate passionate about full-stack architecture, distributed systems, and building scalable web applications..."
-                className="mt-1 w-full rounded-md border border-border bg-background p-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              />
             </div>
 
             <div className="flex justify-end">
