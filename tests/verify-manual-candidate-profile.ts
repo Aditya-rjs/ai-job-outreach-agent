@@ -9,6 +9,11 @@ import {
 } from '../src/lib/candidate-profile/candidate-profile-service';
 import { generatePersonalizedEmail } from '../src/lib/ai/email-generator';
 import type { CandidateProfile } from '../src/types';
+import {
+  parseRawHighlightsText,
+  normalizeHighlightItems,
+  hasListMarker,
+} from '../src/lib/candidate-profile/highlight-utils';
 import fs from 'fs';
 import path from 'path';
 
@@ -283,6 +288,92 @@ async function runTests() {
   } else {
     console.log('Notice: No resume uploaded yet in test DB (expected on fresh test).');
   }
+
+  // Test 7: Multiline Highlights & Marker Parsing Verification
+  console.log('\n[Test 7] Verifying multiline highlight parsing & non-destructive in-memory normalization...');
+
+  // 7a: List marker detection
+  if (!hasListMarker('1) Engineered a full-stack platform')) throw new Error('FAIL: 1) not recognized as marker');
+  if (!hasListMarker('2. Built an autonomous pipeline')) throw new Error('FAIL: 2. not recognized as marker');
+  if (!hasListMarker('(3) Implemented OAuth')) throw new Error('FAIL: (3) not recognized as marker');
+  if (!hasListMarker('[4] Developed worker')) throw new Error('FAIL: [4] not recognized as marker');
+  if (!hasListMarker('a) Sub-point')) throw new Error('FAIL: a) not recognized as marker');
+  if (!hasListMarker('- Dash bullet')) throw new Error('FAIL: - not recognized as marker');
+  if (!hasListMarker('• Bullet point')) throw new Error('FAIL: • not recognized as marker');
+  if (hasListMarker('classification and personalized outreach')) throw new Error('FAIL: False positive on continuation line');
+  if (hasListMarker('35% reduction in latency')) throw new Error('FAIL: False positive on 35% latency');
+  if (hasListMarker('2024 graduate')) throw new Error('FAIL: False positive on 2024 graduate');
+  console.log('  ✓ Marker detection accurately identifies list markers without false positives on continuation text.');
+
+  // 7b: Future saves - parseRawHighlightsText
+  const rawTextareaInput = `1) Engineered a full-stack AI-powered job outreach platform using Next.js, React, and TypeScript,
+automating company classification and personalized outreach.
+
+2) Built an autonomous multi-stage AI pipeline with Google Gemini and OpenRouter fallback.
+
+3) Implemented secure Gmail OAuth 2.0 with credential encryption and persistent queues.
+
+4) Developed a fault-tolerant background worker with crash recovery.`;
+
+  const parsedItems = parseRawHighlightsText(rawTextareaInput);
+  if (parsedItems.length !== 4) {
+    throw new Error(`FAIL: Expected 4 parsed items, got ${parsedItems.length}`);
+  }
+  if (!parsedItems[0].includes('\n')) {
+    throw new Error('FAIL: Continuation newline was not preserved in parsed item 0');
+  }
+  if (parsedItems[0].includes('TypeScript, automating')) {
+    throw new Error('FAIL: Continuation newline was incorrectly converted to space in parsed item 0');
+  }
+  if (!parsedItems[0].startsWith('1) Engineered')) {
+    throw new Error('FAIL: User marker 1) was not preserved in parsed item 0');
+  }
+  if (!parsedItems[1].startsWith('2) Built')) {
+    throw new Error('FAIL: User marker 2) was not preserved in parsed item 1');
+  }
+  console.log('  ✓ parseRawHighlightsText preserves user markers and embedded newlines (\\n) without converting to space.');
+
+  // 7c: Plain lists with no markers
+  const plainCoursework = `Data Structures & Algorithms\nDatabase Management Systems\nOperating Systems`;
+  const parsedPlain = parseRawHighlightsText(plainCoursework);
+  if (parsedPlain.length !== 3) {
+    throw new Error(`FAIL: Expected 3 plain coursework items, got ${parsedPlain.length}`);
+  }
+  console.log('  ✓ Unmarked lists preserve each non-empty line as a distinct highlight.');
+
+  // 7d: Existing fragmented data normalization in memory
+  const fragmentedExistingArray = [
+    '1) Engineered a full-stack AI-powered job outreach platform using Next.js, React, and TypeScript,',
+    'automating company classification and personalized outreach.',
+    '2) Built an autonomous multi-stage AI pipeline with Google Gemini and OpenRouter fallback.',
+    '3) Implemented secure Gmail OAuth 2.0 with credential encryption and persistent queues.',
+    '4) Developed a fault-tolerant background worker with crash recovery.',
+  ];
+  const originalCopy = [...fragmentedExistingArray];
+  const normalizedExisting = normalizeHighlightItems(fragmentedExistingArray);
+
+  if (normalizedExisting.length !== 4) {
+    throw new Error(`FAIL: Expected 4 normalized items from fragmented array, got ${normalizedExisting.length}`);
+  }
+  if (!normalizedExisting[0].includes('\n')) {
+    throw new Error('FAIL: Normalized item 0 did not join continuation fragment with newline');
+  }
+  if (normalizedExisting[0].includes('TypeScript, automating')) {
+    throw new Error('FAIL: Fragmented continuation line was joined with space instead of newline');
+  }
+  // Verify non-destructive
+  if (JSON.stringify(fragmentedExistingArray) !== JSON.stringify(originalCopy)) {
+    throw new Error('FAIL: normalizeHighlightItems modified the input array in-place');
+  }
+  console.log('  ✓ normalizeHighlightItems safely normalizes fragmented existing arrays in-memory without mutating data.');
+
+  // 7e: Plain array without markers remains untouched
+  const plainSkills = ['React', 'Node.js', 'PostgreSQL'];
+  const normalizedPlain = normalizeHighlightItems(plainSkills);
+  if (normalizedPlain.length !== 3 || normalizedPlain[0] !== 'React') {
+    throw new Error('FAIL: Plain array without markers was altered by normalizeHighlightItems');
+  }
+  console.log('  ✓ normalizeHighlightItems leaves plain un-marked arrays completely intact.');
 
   console.log('\n===============================================================');
   console.log('  ALL MANUAL CANDIDATE PROFILE ARCHITECTURE TESTS PASSED!     ');

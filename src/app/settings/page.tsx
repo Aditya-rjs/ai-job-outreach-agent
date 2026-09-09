@@ -38,6 +38,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { formatDateTime } from '@/lib/utils';
+import { parseRawHighlightsText, normalizeHighlightItems } from '@/lib/candidate-profile/highlight-utils';
 import type {
   ResumeData,
   CandidateProfile,
@@ -391,16 +392,14 @@ export default function SettingsPage() {
       year: item.year || '',
       highlights: item.highlights || [],
     });
-    setEduHighlightsText((item.highlights || []).join('\n'));
+    const normalized = normalizeHighlightItems(item.highlights || []);
+    setEduHighlightsText(normalized.join('\n'));
     setEditingIndex(idx);
     setActiveModal('education');
   };
 
   const handleSaveEducationModal = async () => {
-    const highlights = eduHighlightsText
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const highlights = parseRawHighlightsText(eduHighlightsText);
 
     const item: CandidateEducation = {
       id: eduForm.id || `edu_${Date.now()}`,
@@ -452,17 +451,15 @@ export default function SettingsPage() {
   const openEditExperience = (idx: number) => {
     const item = profile.experience[idx];
     setExpForm(item);
-    setExpHighlightsText((item.highlights || []).join('\n'));
+    const normalized = normalizeHighlightItems(item.highlights || []);
+    setExpHighlightsText(normalized.join('\n'));
     setExpTechText((item.technologies || []).join(', '));
     setEditingIndex(idx);
     setActiveModal('experience');
   };
 
   const handleSaveExperienceModal = async () => {
-    const highlights = expHighlightsText
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const highlights = parseRawHighlightsText(expHighlightsText);
     const technologies = expTechText
       .split(',')
       .map((s) => s.trim())
@@ -521,7 +518,8 @@ export default function SettingsPage() {
     const item = profile.projects[idx];
     setProjForm(item);
     setProjTechText((item.techStack || []).join(', '));
-    setProjHighlightsText((item.highlights || []).join('\n'));
+    const normalized = normalizeHighlightItems(item.highlights || []);
+    setProjHighlightsText(normalized.join('\n'));
     setEditingIndex(idx);
     setActiveModal('project');
   };
@@ -531,10 +529,7 @@ export default function SettingsPage() {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    const highlights = projHighlightsText
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const highlights = parseRawHighlightsText(projHighlightsText);
 
     const item: CandidateProject = {
       id: projForm.id || `proj_${Date.now()}`,
@@ -1011,8 +1006,8 @@ export default function SettingsPage() {
 
                   {edu.highlights && edu.highlights.length > 0 && (
                     <ul className="mt-3 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
-                      {edu.highlights.map((h, hIdx) => (
-                        <li key={hIdx}>{h}</li>
+                      {normalizeHighlightItems(edu.highlights).map((h, hIdx) => (
+                        <li key={hIdx} className="whitespace-pre-line">{h}</li>
                       ))}
                     </ul>
                   )}
@@ -1079,8 +1074,8 @@ export default function SettingsPage() {
 
                   {exp.highlights && exp.highlights.length > 0 && (
                     <ul className="mt-3 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
-                      {exp.highlights.map((h, hIdx) => (
-                        <li key={hIdx}>{h}</li>
+                      {normalizeHighlightItems(exp.highlights).map((h, hIdx) => (
+                        <li key={hIdx} className="whitespace-pre-line">{h}</li>
                       ))}
                     </ul>
                   )}
@@ -1172,8 +1167,8 @@ export default function SettingsPage() {
 
                   {proj.highlights && proj.highlights.length > 0 && (
                     <ul className="mt-3 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
-                      {proj.highlights.map((h, hIdx) => (
-                        <li key={hIdx}>{h}</li>
+                      {normalizeHighlightItems(proj.highlights).map((h, hIdx) => (
+                        <li key={hIdx} className="whitespace-pre-line">{h}</li>
                       ))}
                     </ul>
                   )}
@@ -1319,7 +1314,7 @@ export default function SettingsPage() {
                         {ach.year && <span className="text-xs text-muted-foreground">({ach.year})</span>}
                       </div>
                       {ach.description && (
-                        <p className="mt-1 text-xs text-muted-foreground">{ach.description}</p>
+                        <p className="mt-1 text-xs text-muted-foreground whitespace-pre-line">{ach.description}</p>
                       )}
                     </div>
                     <div className="flex items-center gap-1">

@@ -9,6 +9,7 @@ import {
   type ParsedEmailOutput,
 } from './json-parser';
 import type { StructuredResumeProfile, CandidateProfile, GeneratedEmailResult, VerifiedProfileLinks } from '@/types';
+import { normalizeHighlightItems } from '@/lib/candidate-profile/highlight-utils';
 
 export { AiOutputInvalidError, isAiOutputInvalidError, extractAndParseEmailJson, type ParsedEmailOutput };
 
@@ -38,7 +39,7 @@ function getProfileDetails(profile: CandidateProfile | StructuredResumeProfile, 
     fieldOfStudy: e.fieldOfStudy || '',
     year: e.year || '',
     score: isCandidateProfile ? '' : (e.score || e.gpa || ''),
-    highlights: (e.highlights || e.relevantCoursework || []) as string[],
+    highlights: normalizeHighlightItems((e.highlights || e.relevantCoursework || []) as string[]),
   }));
 
   const experience = (profile.experience || []).map((exp: any) => ({
@@ -46,7 +47,7 @@ function getProfileDetails(profile: CandidateProfile | StructuredResumeProfile, 
     company: exp.company || '',
     duration: exp.duration || (exp.startDate ? `${exp.startDate} – ${exp.endDate || 'Present'}` : ''),
     location: exp.location || '',
-    highlights: (exp.highlights || exp.bullets || exp.responsibilities || []) as string[],
+    highlights: normalizeHighlightItems((exp.highlights || exp.bullets || exp.responsibilities || []) as string[]),
     technologies: (exp.technologies || exp.tools || []) as string[],
   }));
 
@@ -54,7 +55,7 @@ function getProfileDetails(profile: CandidateProfile | StructuredResumeProfile, 
     name: p.name || p.title || '',
     techStack: (p.techStack || p.frameworks || []) as string[],
     description: p.description || '',
-    highlights: (p.highlights || p.bullets || []) as string[],
+    highlights: normalizeHighlightItems((p.highlights || p.bullets || []) as string[]),
     liveUrl: p.liveUrl || '',
     githubUrl: p.githubUrl || '',
   }));
@@ -118,7 +119,8 @@ function heuristicGenerateEmail(
   const topFrameworks = (skillsObj?.webDevelopment || skillsObj?.frameworks || []).slice(0, 3).join(', ') || 'React, Next.js, Node.js';
   const topProject = details.projects[0]?.name || 'web-based software platforms';
   const projectTech = (details.projects[0]?.techStack || []).slice(0, 3).join(', ') || topFrameworks;
-  const projectHighlight = details.projects[0]?.highlights?.[0] || details.projects[0]?.description || '';
+  const rawProjectHighlight = details.projects[0]?.highlights?.[0] || details.projects[0]?.description || '';
+  const projectHighlight = rawProjectHighlight.replace(/\r?\n+/g, ' ');
 
   const greeting = contactName && contactName.trim()
     ? `Dear ${contactName.trim()},`
@@ -241,7 +243,14 @@ function buildGenerationPrompt(
     const parts = [e.degree ? `${e.degree}${e.institution ? ` from ${e.institution}` : ''}` : e.institution];
     if (e.year) parts.push(`(${e.year})`);
     if (e.score) parts.push(`[Grade/Score: ${e.score}]`);
-    return `- ${parts.join(' ')}`;
+    const header = `- ${parts.join(' ')}`;
+    if (e.highlights && e.highlights.length > 0) {
+      const bullets = e.highlights.map((h) =>
+        h.split('\n').map((line, idx) => idx === 0 ? `  * ${line}` : `    ${line}`).join('\n')
+      ).join('\n');
+      return `${header}\n${bullets}`;
+    }
+    return header;
   }).filter(Boolean).join('\n');
 
   const skillsCategories: string[] = [];
@@ -267,7 +276,9 @@ function buildGenerationPrompt(
 
   const experienceLines = details.experience.map((exp) => {
     const header = `- ${exp.role}${exp.company ? ` at ${exp.company}` : ''}${exp.duration ? ` (${exp.duration})` : ''}${exp.location ? `, ${exp.location}` : ''}`;
-    const bullets = exp.highlights.map((b) => `  * ${b}`).join('\n');
+    const bullets = exp.highlights.map((b) =>
+      b.split('\n').map((line, idx) => idx === 0 ? `  * ${line}` : `    ${line}`).join('\n')
+    ).join('\n');
     const tools = exp.technologies?.length ? `  * Tech/Tools: ${exp.technologies.join(', ')}` : '';
     return [header, bullets, tools].filter(Boolean).join('\n');
   }).join('\n\n');
@@ -275,7 +286,9 @@ function buildGenerationPrompt(
   const projectLines = details.projects.map((p) => {
     const header = `- ${p.name}${p.techStack?.length ? ` [Tech: ${p.techStack.join(', ')}]` : ''}`;
     const desc = p.description ? `  * Summary: ${p.description}` : '';
-    const highlights = p.highlights.map((h) => `  * ${h}`).join('\n');
+    const highlights = p.highlights.map((h) =>
+      h.split('\n').map((line, idx) => idx === 0 ? `  * ${line}` : `    ${line}`).join('\n')
+    ).join('\n');
     const links = [
       p.liveUrl ? `Live: ${p.liveUrl}` : '',
       p.githubUrl ? `GitHub: ${p.githubUrl}` : '',
