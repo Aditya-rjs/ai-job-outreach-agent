@@ -601,21 +601,30 @@ export function getGeminiTelemetry(): GeminiTelemetry {
 }
 
 
+export interface GeminiDocumentAttachment {
+  mimeType: string;
+  data: Buffer | string;
+  filename?: string;
+}
+
+export interface GeminiCallOptions {
+  model?: string;
+  temperature?: number;
+  maxRetries?: number;
+  timeoutMs?: number;
+  priority?: number;
+  taskName?: string;
+  document?: GeminiDocumentAttachment;
+}
+
 /**
  * Calls Gemini with automatic retries for transient errors.
  * Routes all traffic through the GlobalGeminiRateLimiter with strict priority management.
- * Uses gemini-3.8-flash as the sole stable default model.
+ * Uses configured GEMINI_MODEL or gemini-3.8-flash as default.
  */
 export async function callGemini(
   prompt: string,
-  options: {
-    model?: string;
-    temperature?: number;
-    maxRetries?: number;
-    timeoutMs?: number;
-    priority?: number;
-    taskName?: string;
-  } = {}
+  options: GeminiCallOptions = {}
 ): Promise<string> {
   const priority = options.priority ?? GEMINI_PRIORITIES.EMAIL_GENERATION;
   const taskName = options.taskName ?? 'gemini-call';
@@ -638,10 +647,24 @@ export async function callGemini(
         const abortController = new AbortController();
         const timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
 
+        const contents: any[] = [];
+        if (options.document) {
+          const base64Data = Buffer.isBuffer(options.document.data)
+            ? options.document.data.toString('base64')
+            : options.document.data;
+          contents.push({
+            inlineData: {
+              mimeType: options.document.mimeType,
+              data: base64Data,
+            },
+          });
+        }
+        contents.push(prompt);
+
         const response = await Promise.race([
           client.models.generateContent({
             model,
-            contents: prompt,
+            contents: contents.length === 1 ? contents[0] : contents,
             config: {
               temperature: options.temperature ?? 0.1,
             },

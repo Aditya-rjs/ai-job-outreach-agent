@@ -1,11 +1,18 @@
 import { sanitizeSecretText } from './gemini-client';
 
+export interface OpenRouterDocumentAttachment {
+  mimeType: string;
+  data: Buffer | string;
+  filename?: string;
+}
+
 export interface OpenRouterCallOptions {
   model?: string;
   temperature?: number;
   maxRetries?: number;
   timeoutMs?: number;
   taskName?: string;
+  document?: OpenRouterDocumentAttachment;
 }
 
 export interface OpenRouterCallResult {
@@ -18,12 +25,14 @@ export class OpenRouterError extends Error {
   public readonly provider = 'openrouter' as const;
   public readonly statusCode?: number;
   public readonly isRateLimit: boolean;
+  public readonly isDocumentUnsupported?: boolean;
 
-  constructor(message: string, statusCode?: number, isRateLimit: boolean = false) {
+  constructor(message: string, statusCode?: number, isRateLimit: boolean = false, isDocumentUnsupported: boolean = false) {
     super(message);
     this.name = 'OpenRouterError';
     this.statusCode = statusCode;
     this.isRateLimit = isRateLimit;
+    this.isDocumentUnsupported = isDocumentUnsupported;
     Object.setPrototypeOf(this, OpenRouterError.prototype);
   }
 }
@@ -132,6 +141,27 @@ export async function callOpenRouter(
     try {
       const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || 'http://localhost:3000';
 
+      let userMessageContent: unknown = prompt;
+      if (options.document) {
+        const base64Data = Buffer.isBuffer(options.document.data)
+          ? options.document.data.toString('base64')
+          : options.document.data;
+        const filename = options.document.filename || 'resume.pdf';
+        userMessageContent = [
+          {
+            type: 'file',
+            file: {
+              filename,
+              file_data: `data:${options.document.mimeType};base64,${base64Data}`,
+            },
+          },
+          {
+            type: 'text',
+            text: prompt,
+          },
+        ];
+      }
+
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -145,7 +175,7 @@ export async function callOpenRouter(
           messages: [
             {
               role: 'user',
-              content: prompt,
+              content: userMessageContent,
             },
           ],
           temperature,
@@ -160,6 +190,21 @@ export async function callOpenRouter(
         const sanitizedBody = sanitizeSecretText(errorBody);
         const statusText = response.statusText || 'Error';
         const msg = `OpenRouter API HTTP ${response.status} (${statusText}): ${sanitizedBody}`;
+
+        // Check if model rejected file/document input
+        const isDocUnsupported =
+          options.document &&
+          response.status === 400 &&
+          (/file/i.test(sanitizedBody) || /document/i.test(sanitizedBody) || /unsupported.*type/i.test(sanitizedBody) || /not support/i.test(sanitizedBody));
+
+        if (isDocUnsupported) {
+          throw new OpenRouterError(
+            `OpenRouter route/model '${model}' does not support PDF/file input: ${sanitizedBody}`,
+            response.status,
+            false,
+            true
+          );
+        }
 
         // Rate limit 429
         if (response.status === 429) {
@@ -197,8 +242,8 @@ export async function callOpenRouter(
       const errMessage = err instanceof Error ? err.message : String(err);
       const sanitized = sanitizeSecretText(errMessage);
 
-      // Do not retry authentication errors or explicit 401/403
-      if (/401|403|unauthorized|authentication rejected/i.test(sanitized)) {
+      // Do not retry authentication errors, explicit 401/403, or unsupported document format
+      if (/401|403|unauthorized|authentication rejected/i.test(sanitized) || (err instanceof OpenRouterError && err.isDocumentUnsupported)) {
         break;
       }
 

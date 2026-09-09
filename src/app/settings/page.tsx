@@ -28,6 +28,8 @@ import {
   Save,
   Layers,
   Sparkles,
+  ExternalLink,
+  Download,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -47,7 +49,6 @@ export default function SettingsPage() {
     other: '',
   });
   const [savingLinks, setSavingLinks] = useState(false);
-  const [showRawText, setShowRawText] = useState(false);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -58,7 +59,7 @@ export default function SettingsPage() {
   const handleReparseResume = async () => {
     setReanalyzing(true);
     setErrorMessage(null);
-    setStatusMessage('Re-analyzing stored resume text with AI candidate profile structuring...');
+    setStatusMessage('Re-analyzing stored original resume PDF with Direct Multimodal AI...');
     try {
       const res = await fetch('/api/resume', {
         method: 'POST',
@@ -74,7 +75,7 @@ export default function SettingsPage() {
       if (json.data.verifiedLinks) {
         setVerifiedLinks(json.data.verifiedLinks);
       }
-      setStatusMessage('Resume re-analyzed and candidate profile updated successfully!');
+      setStatusMessage('Resume PDF re-analyzed via Direct Multimodal AI and candidate profile updated successfully!');
       setTimeout(() => setStatusMessage(null), 4000);
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : 'Error re-analyzing resume.');
@@ -1161,45 +1162,59 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              {/* Collapsible Read-Only Raw Extracted Resume Text */}
-              {resumeData.parsedText && (
-                <div className="rounded-xl border border-border bg-card p-4 space-y-3">
-                  <div className="flex items-center justify-between">
+              {/* Source Resume Document Card (Direct Multimodal AI) */}
+              <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-lg bg-blue-50 p-2.5 text-blue-600">
+                      <FileText className="h-5 w-5" />
+                    </div>
                     <div>
-                      <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                        Extracted Resume Text (Read-Only)
-                      </h4>
-                      <p className="text-[11px] text-muted-foreground">
-                        Clean normalized text extracted directly from the PDF document ({resumeData.parsedText.length} characters)
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                          Source Resume Document
+                        </h4>
+                        <Badge variant="secondary" className="border-blue-200 bg-blue-50 text-blue-700 text-[10px] font-semibold gap-1">
+                          <Sparkles className="h-3 w-3 text-blue-600" />
+                          Analyzed via Direct Multimodal AI
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-foreground font-medium mt-0.5">
+                        {resumeData.filename}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        Uploaded: {formatDateTime(resumeData.uploadedAt)}
+                        {resumeData.version && (
+                          <span className="font-mono ml-2">(v: {resumeData.version.slice(0, 19)})</span>
+                        )}
                       </p>
                     </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowRawText(!showRawText)}
-                      className="gap-1.5 text-xs"
-                    >
-                      {showRawText ? (
-                        <>
-                          <ChevronUp className="h-3.5 w-3.5" />
-                          Hide Raw Text
-                        </>
-                      ) : (
-                        <>
-                          <ChevronDown className="h-3.5 w-3.5" />
-                          View Raw Text
-                        </>
-                      )}
-                    </Button>
                   </div>
-
-                  {showRawText && (
-                    <div className="rounded-lg border border-border bg-slate-900 text-slate-100 p-3 max-h-96 overflow-y-auto font-mono text-[11px] leading-relaxed">
-                      <pre className="whitespace-pre-wrap">{resumeData.parsedText}</pre>
-                    </div>
-                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <a
+                      href="/api/resume/file"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex"
+                    >
+                      <Button variant="outline" size="sm" className="gap-1.5 text-xs">
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        Preview PDF
+                      </Button>
+                    </a>
+                    <a
+                      href="/api/resume/file?download=true"
+                      download
+                      className="inline-flex"
+                    >
+                      <Button variant="outline" size="sm" className="gap-1.5 text-xs">
+                        <Download className="h-3.5 w-3.5" />
+                        Download PDF
+                      </Button>
+                    </a>
+                  </div>
                 </div>
-              )}
+              </div>
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-border py-8 px-4 text-center">

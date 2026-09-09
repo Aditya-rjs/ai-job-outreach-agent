@@ -41,6 +41,12 @@ export {
 
 export type AiProvider = 'gemini' | 'openrouter';
 
+export interface AiDocumentAttachment {
+  mimeType: string;
+  data: Buffer | string;
+  filename?: string;
+}
+
 export interface AiCallOptions {
   temperature?: number;
   priority?: number;
@@ -48,6 +54,7 @@ export interface AiCallOptions {
   model?: string;
   timeoutMs?: number;
   maxRetries?: number;
+  document?: AiDocumentAttachment;
 }
 
 export interface AiCallResult {
@@ -176,6 +183,7 @@ async function executeOpenRouterDispatch(
       temperature: options.temperature,
       timeoutMs: options.timeoutMs,
       taskName: options.taskName,
+      document: options.document,
     });
 
     try {
@@ -221,6 +229,7 @@ async function executeOpenRouterDispatch(
           taskName: options.taskName,
           timeoutMs: options.timeoutMs,
           maxRetries: options.maxRetries,
+          document: options.document,
         });
 
         try {
@@ -330,6 +339,7 @@ export async function callAi(
         taskName: options.taskName,
         timeoutMs: options.timeoutMs,
         maxRetries: options.maxRetries,
+        document: options.document,
       });
 
       try {

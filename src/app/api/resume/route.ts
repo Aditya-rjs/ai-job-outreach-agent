@@ -3,7 +3,7 @@ import { getDb } from '@/db';
 import { resume } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { initializeDatabase } from '@/db/migrate';
-import { parseAndStructureResume, structureResumeText } from '@/lib/resume/resume-parser';
+import { parseAndStructureResume, structureResumeFromPdf } from '@/lib/resume/resume-parser';
 import type { ApiResponse, ResumeData, StructuredResumeProfile, VerifiedProfileLinks } from '@/types';
 import fs from 'fs';
 import path from 'path';
@@ -61,9 +61,9 @@ export async function GET(): Promise<
       },
     });
   } catch (error) {
-    console.error('Fetch resume error:', error);
+    console.error('Resume GET error:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to retrieve resume information.' },
+      { success: false, error: 'Failed to fetch resume data' },
       { status: 500 }
     );
   }
@@ -76,20 +76,35 @@ export async function POST(
     ensureInitialized();
     const db = getDb();
 
-    // Check if this is a JSON request to re-analyze existing stored parsedText
+    // Check if this is a JSON request to re-analyze existing stored original resume PDF
     const contentType = request.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
       const body = await request.json().catch(() => ({}));
       if (body.action === 'reparse') {
         const record = db.select().from(resume).where(eq(resume.id, 'current')).get();
-        if (!record || !record.parsedText || record.parsedText.trim().length === 0) {
+        if (!record || !record.filePath) {
           return NextResponse.json(
-            { success: false, error: 'No existing resume text found to re-analyze. Please upload a resume PDF first.' },
+            { success: false, error: 'No existing resume found to re-analyze. Please upload a resume PDF first.' },
             { status: 400 }
           );
         }
 
-        const profile = await structureResumeText(record.parsedText);
+        const resumesDir = getResumesDir();
+        let targetFilePath = record.filePath;
+        if (!fs.existsSync(targetFilePath)) {
+          targetFilePath = path.join(resumesDir, path.basename(record.filePath));
+        }
+
+        if (!fs.existsSync(targetFilePath)) {
+          return NextResponse.json(
+            { success: false, error: 'Original resume PDF file not found on disk. Please upload your resume PDF.' },
+            { status: 404 }
+          );
+        }
+
+        // Canonical re-analysis: Reads the ORIGINAL PDF directly from disk
+        const pdfBuffer = fs.readFileSync(targetFilePath);
+        const profile = await structureResumeFromPdf(pdfBuffer, record.filename);
         const version = new Date().toISOString();
 
         db.update(resume)

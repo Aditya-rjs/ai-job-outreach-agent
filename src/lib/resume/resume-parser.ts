@@ -616,8 +616,16 @@ ${rawText.slice(0, 30000)}
   const cleaned = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
   const parsed = JSON.parse(cleaned);
 
+  return normalizeStructuredProfile(parsed);
+}
+
+/**
+ * Normalizes a raw parsed JSON object into a verified StructuredResumeProfile.
+ * Guarantees schema adherence and populates bullets alongside highlights for parity.
+ */
+export function normalizeStructuredProfile(parsed: Record<string, any>): StructuredResumeProfile {
   if (!parsed || typeof parsed !== 'object') {
-    throw new Error('AI response is not a valid JSON object');
+    throw new Error('Parsed profile is not a valid object');
   }
 
   // Normalize education
@@ -629,12 +637,13 @@ ${rawText.slice(0, 30000)}
         boardOrUniversity: e.boardOrUniversity ? String(e.boardOrUniversity).trim() : undefined,
         year: e.year ? String(e.year).trim() : undefined,
         gpa: e.gpa ? String(e.gpa).trim() : undefined,
+        score: e.score ? String(e.score).trim() : (e.gpa ? String(e.gpa).trim() : undefined),
         relevantCoursework: Array.isArray(e.relevantCoursework) ? e.relevantCoursework.map(String) : undefined,
         otherDetails: e.otherDetails ? String(e.otherDetails).trim() : undefined,
       }))
     : [];
 
-  // Normalize skills
+  // Normalize skills using canonical ResumeSkills schema (no duplicate legacy aliases written)
   const skills: ResumeSkills = {
     languages: Array.isArray(parsed.skills?.languages) ? parsed.skills.languages.map(String) : [],
     frameworks: Array.isArray(parsed.skills?.frameworks) ? parsed.skills.frameworks.map(String) : [],
@@ -652,40 +661,57 @@ ${rawText.slice(0, 30000)}
 
   // Normalize experience
   const experience: ResumeExperience[] = Array.isArray(parsed.experience)
-    ? parsed.experience.map((exp: Record<string, any>) => ({
-        role: String(exp.role || '').trim(),
-        company: String(exp.company || '').trim(),
-        employmentType: exp.employmentType ? String(exp.employmentType).trim() : undefined,
-        startDate: exp.startDate ? String(exp.startDate).trim() : undefined,
-        endDate: exp.endDate ? String(exp.endDate).trim() : undefined,
-        duration: exp.duration ? String(exp.duration).trim() : undefined,
-        location: exp.location ? String(exp.location).trim() : undefined,
-        description: exp.description ? String(exp.description).trim() : undefined,
-        responsibilities: Array.isArray(exp.responsibilities) ? exp.responsibilities.map(String) : undefined,
-        highlights: Array.isArray(exp.highlights) ? exp.highlights.map(String) : [],
-        technologies: Array.isArray(exp.technologies) ? exp.technologies.map(String) : undefined,
-        tools: Array.isArray(exp.tools) ? exp.tools.map(String) : undefined,
-        metrics: Array.isArray(exp.metrics) ? exp.metrics.map(String) : undefined,
-      }))
+    ? parsed.experience.map((exp: Record<string, any>) => {
+        const rawHighlights = Array.isArray(exp.highlights) ? exp.highlights.map(String) : [];
+        const rawBullets = Array.isArray(exp.bullets) ? exp.bullets.map(String) : [];
+        const combined = rawBullets.length > 0 ? rawBullets : rawHighlights;
+
+        return {
+          role: String(exp.role || '').trim(),
+          title: exp.title ? String(exp.title).trim() : String(exp.role || '').trim(),
+          company: String(exp.company || '').trim(),
+          employmentType: exp.employmentType ? String(exp.employmentType).trim() : undefined,
+          startDate: exp.startDate ? String(exp.startDate).trim() : undefined,
+          endDate: exp.endDate ? String(exp.endDate).trim() : undefined,
+          duration: exp.duration ? String(exp.duration).trim() : undefined,
+          location: exp.location ? String(exp.location).trim() : undefined,
+          description: exp.description ? String(exp.description).trim() : undefined,
+          responsibilities: Array.isArray(exp.responsibilities) ? exp.responsibilities.map(String) : undefined,
+          highlights: combined,
+          bullets: combined,
+          technologies: Array.isArray(exp.technologies) ? exp.technologies.map(String) : undefined,
+          tools: Array.isArray(exp.tools) ? exp.tools.map(String) : undefined,
+          metrics: Array.isArray(exp.metrics) ? exp.metrics.map(String) : undefined,
+        };
+      })
     : [];
 
   // Normalize projects
   const projects: ResumeProject[] = Array.isArray(parsed.projects)
-    ? parsed.projects.map((p: Record<string, any>) => ({
-        title: String(p.title || '').trim(),
-        duration: p.duration ? String(p.duration).trim() : null,
-        description: p.description ? String(p.description).trim() : undefined,
-        problemSolved: p.problemSolved ? String(p.problemSolved).trim() : null,
-        techStack: Array.isArray(p.techStack) ? p.techStack.map(String) : [],
-        frameworks: Array.isArray(p.frameworks) ? p.frameworks.map(String) : undefined,
-        databases: Array.isArray(p.databases) ? p.databases.map(String) : undefined,
-        apis: Array.isArray(p.apis) ? p.apis.map(String) : undefined,
-        architecture: p.architecture ? String(p.architecture).trim() : null,
-        implementationDetails: p.implementationDetails ? String(p.implementationDetails).trim() : null,
-        highlights: Array.isArray(p.highlights) ? p.highlights.map(String) : [],
-        metrics: Array.isArray(p.metrics) ? p.metrics.map(String) : undefined,
-        deployment: p.deployment ? String(p.deployment).trim() : null,
-      }))
+    ? parsed.projects.map((p: Record<string, any>) => {
+        const rawHighlights = Array.isArray(p.highlights) ? p.highlights.map(String) : [];
+        const rawBullets = Array.isArray(p.bullets) ? p.bullets.map(String) : [];
+        const combined = rawBullets.length > 0 ? rawBullets : rawHighlights;
+
+        return {
+          title: String(p.title || '').trim(),
+          duration: p.duration ? String(p.duration).trim() : null,
+          description: p.description ? String(p.description).trim() : undefined,
+          problemSolved: p.problemSolved ? String(p.problemSolved).trim() : null,
+          techStack: Array.isArray(p.techStack) ? p.techStack.map(String) : [],
+          frameworks: Array.isArray(p.frameworks) ? p.frameworks.map(String) : undefined,
+          databases: Array.isArray(p.databases) ? p.databases.map(String) : undefined,
+          apis: Array.isArray(p.apis) ? p.apis.map(String) : undefined,
+          architecture: p.architecture ? String(p.architecture).trim() : null,
+          implementationDetails: p.implementationDetails ? String(p.implementationDetails).trim() : null,
+          highlights: combined,
+          bullets: combined,
+          metrics: Array.isArray(p.metrics) ? p.metrics.map(String) : undefined,
+          deployment: p.deployment ? String(p.deployment).trim() : null,
+          liveUrl: p.liveUrl ? String(p.liveUrl).trim() : null,
+          githubUrl: p.githubUrl ? String(p.githubUrl).trim() : null,
+        };
+      })
     : [];
 
   // Normalize certifications
@@ -724,6 +750,7 @@ ${rawText.slice(0, 30000)}
   const leadership: ResumeLeadership[] = Array.isArray(parsed.leadership)
     ? parsed.leadership.map((lead: Record<string, any>) => ({
         position: String(lead.position || '').trim(),
+        role: lead.role ? String(lead.role).trim() : String(lead.position || '').trim(),
         organization: String(lead.organization || '').trim(),
         duration: lead.duration ? String(lead.duration).trim() : null,
         startDate: lead.startDate ? String(lead.startDate).trim() : null,
@@ -754,8 +781,149 @@ ${rawText.slice(0, 30000)}
 }
 
 /**
+ * Structures an original resume PDF directly into a verified candidate profile
+ * using multimodal visual document understanding (Gemini primary, OpenRouter file-capable secondary).
+ * Strictly complies with the no-degradation policy: never falls back to lossy plain-text parsing.
+ */
+export async function structureResumeFromPdf(
+  pdfBuffer: Buffer,
+  filename: string = 'resume.pdf'
+): Promise<StructuredResumeProfile> {
+  if (!pdfBuffer || pdfBuffer.length === 0) {
+    throw new Error('Resume PDF buffer is empty.');
+  }
+
+  const prompt = `You are an expert high-fidelity multimodal resume document understanding engine.
+Analyze the attached original resume PDF document directly using its visual 2D layout, multi-column tables, typography, font styling, dividers, dates, and bullet points.
+
+CRITICAL DOCUMENT UNDERSTANDING RULES:
+1. Direct 2D Layout Comprehension:
+   - Do NOT merge adjacent columns or table cells into continuous text strings.
+   - For Education tables (Degree/Class, Board/University, Percentage/CGPA, Year), preserve each cell in its separate, correct field.
+2. Experience:
+   - Extract EVERY separate internship and job.
+   - Preserve exact company name, exact job title/role, employment type (Internship vs Full-Time), duration/dates, location, and individual bullet points.
+   - Do NOT combine multiple internships into one.
+3. Projects:
+   - Extract EVERY distinct project with its exact title, technologies used, and bullet highlights.
+   - NEVER create a generic or placeholder project such as "Technical Project". Only extract actual projects explicitly present in the document.
+4. Achievements:
+   - Preserve full, complete achievement statements without truncating or splitting them into fragments.
+5. Positions of Responsibility / Leadership:
+   - Extract student coordinator, club lead, and training/placement coordinator roles.
+6. Technical Skills:
+   - Categorize all explicitly stated skills into the canonical schema: languages, frontend, backend, frameworks, databases, aiMl, dataScience, cloudDevOps, tools, apisIntegrations, coreCs, other.
+   - Do NOT omit skills present on the resume.
+7. Strict Anti-Hallucination:
+   - Extract ONLY facts explicitly stated in the PDF.
+   - NEVER invent job titles, companies, dates, metrics, or technologies. If a field is absent, leave it null or empty array.
+   - Never turn an internship into full-time employment.
+8. Output valid JSON only, without markdown fences or preamble.
+
+Target JSON Schema:
+{
+  "name": "Candidate full name",
+  "email": "candidate email or null",
+  "phone": "candidate phone or null",
+  "location": "candidate location or null",
+  "education": [
+    {
+      "degree": "Degree / Qualification (e.g. Bachelor of Technology)",
+      "fieldOfStudy": "Field of study or null",
+      "institution": "Institution / School name",
+      "boardOrUniversity": "University / Board name (e.g. CBSE, Bihar Engineering University)",
+      "year": "Passing / Duration year (e.g. 2021, 2022-2026)",
+      "gpa": "Score / Percentage / CGPA (e.g. 85.2%, 7.00)",
+      "relevantCoursework": ["Data Structures", "DBMS", ...]
+    }
+  ],
+  "skills": {
+    "languages": ["C", "C++", "Python", "JavaScript", "TypeScript", ...],
+    "frontend": ["React.js", "HTML5", "CSS3", "Tailwind CSS", ...],
+    "backend": ["Node.js", "Express.js", ...],
+    "frameworks": ["React", "Next.js", ...],
+    "databases": ["PostgreSQL", "MongoDB", "SQLite", "Drizzle ORM", ...],
+    "aiMl": ["Gemini API", "OpenRouter", ...],
+    "dataScience": ["Pandas", "NumPy", ...],
+    "cloudDevOps": ["Docker", "Git", "GitHub", ...],
+    "tools": ["Git", "GitHub", "VS Code", "Postman", ...],
+    "apisIntegrations": ["REST APIs", "OAuth 2.0", ...],
+    "coreCs": ["Data Structures & Algorithms", "OOP", "DBMS", "Operating Systems", ...],
+    "other": []
+  },
+  "experience": [
+    {
+      "role": "Exact role (e.g. Web Development Intern)",
+      "company": "Exact company name (e.g. Invigo Infotech)",
+      "employmentType": "Internship / Full-time",
+      "startDate": "Start date if stated",
+      "endDate": "End date if stated",
+      "duration": "Duration (e.g. Dec 2025 – Jan 2026)",
+      "location": "Location if stated",
+      "description": "Short description if stated",
+      "responsibilities": ["bullet 1", "bullet 2"],
+      "highlights": ["bullet 1", "bullet 2"],
+      "bullets": ["bullet 1", "bullet 2"],
+      "technologies": ["React", "Tailwind CSS", ...],
+      "tools": ["Git", "VS Code"]
+    }
+  ],
+  "projects": [
+    {
+      "title": "Exact project title (e.g. AI Job Outreach Agent)",
+      "duration": "Dates if stated",
+      "description": "Overview of project",
+      "problemSolved": "Problem solved if stated",
+      "techStack": ["Next.js", "TypeScript", "SQLite", "Drizzle ORM"],
+      "highlights": ["bullet 1", "bullet 2"],
+      "bullets": ["bullet 1", "bullet 2"],
+      "metrics": []
+    }
+  ],
+  "certifications": [
+    { "name": "Certification name", "issuer": "Issuer", "date": "Date" }
+  ],
+  "achievements": [
+    { "title": "Achievement title", "description": "Complete description", "rank": "Rank if stated" }
+  ],
+  "leadership": [
+    { "position": "Position / Role", "organization": "Organization", "duration": "Duration", "highlights": ["bullet 1"] }
+  ],
+  "summary": "Concise factual summary."
+}`;
+
+  if (!getGeminiClient() && !isOpenRouterConfigured()) {
+    if (process.env.ALLOW_OFFLINE_HEURISTIC_PARSER === 'true') {
+      console.warn('[ResumeParser] Offline heuristic fallback explicitly allowed by test flag.');
+      const fallbackText = await extractPdfText(pdfBuffer);
+      return heuristicParseResume(fallbackText);
+    }
+    throw new Error(
+      'AI resume structuring requires a multimodal provider capable of processing PDF documents. Gemini is unavailable and OpenRouter does not have a PDF-capable model configured.'
+    );
+  }
+
+  const aiRes = await callAi(prompt, {
+    temperature: 0.1,
+    priority: GEMINI_PRIORITIES.COMPANY_CLASSIFICATION,
+    taskName: 'resume-structuring-pdf',
+    document: {
+      mimeType: 'application/pdf',
+      data: pdfBuffer,
+      filename,
+    },
+  });
+
+  const responseText = aiRes.text;
+  const cleaned = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
+  const parsed = JSON.parse(cleaned);
+
+  return normalizeStructuredProfile(parsed);
+}
+
+/**
  * Structures raw resume text into a verified candidate profile.
- * Attempts AI structuring first (Gemini/OpenRouter), falling back to heuristic parsing if unavailable.
+ * Retained for backward-compatibility and diagnostic tools.
  */
 export async function structureResumeText(rawText: string): Promise<StructuredResumeProfile> {
   if (!rawText || rawText.trim().length === 0) {
@@ -766,7 +934,7 @@ export async function structureResumeText(rawText: string): Promise<StructuredRe
     try {
       return await structureResumeWithAI(rawText);
     } catch (aiErr) {
-      console.warn('[ResumeParser] AI resume structuring failed, falling back to section-aware heuristic parsing:', aiErr);
+      console.warn('[ResumeParser] AI resume structuring from text failed, falling back to section-aware heuristic parsing:', aiErr);
     }
   }
 
@@ -775,15 +943,20 @@ export async function structureResumeText(rawText: string): Promise<StructuredRe
 
 /**
  * Main resume parsing and structuring entry point from a PDF buffer.
+ * Performs direct multimodal PDF structuring as primary source of truth,
+ * with optional diagnostic text extraction.
  */
 export async function parseAndStructureResume(
-  buffer: Buffer
+  buffer: Buffer,
+  filename?: string
 ): Promise<{ rawText: string; profile: StructuredResumeProfile }> {
-  const rawText = await extractPdfText(buffer);
-  if (!rawText || rawText.trim().length === 0) {
-    throw new Error('Unable to extract text from the provided resume PDF. Please ensure the file is not empty.');
+  let rawText = '';
+  try {
+    rawText = await extractPdfText(buffer);
+  } catch (err) {
+    console.warn('[ResumeParser] Diagnostic text extraction warning:', err);
   }
 
-  const profile = await structureResumeText(rawText);
+  const profile = await structureResumeFromPdf(buffer, filename);
   return { rawText, profile };
 }
