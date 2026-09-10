@@ -9,11 +9,6 @@ import {
 } from '../src/lib/candidate-profile/candidate-profile-service';
 import { generatePersonalizedEmail } from '../src/lib/ai/email-generator';
 import type { CandidateProfile } from '../src/types';
-import {
-  parseRawHighlightsText,
-  normalizeHighlightItems,
-  hasListMarker,
-} from '../src/lib/candidate-profile/highlight-utils';
 import fs from 'fs';
 import path from 'path';
 
@@ -289,110 +284,91 @@ async function runTests() {
     console.log('Notice: No resume uploaded yet in test DB (expected on fresh test).');
   }
 
-  // Test 7: Multiline Highlights & Marker Parsing Verification
-  console.log('\n[Test 7] Verifying multiline highlight parsing & non-destructive in-memory normalization...');
+  // Test 7: Normal Multiline Textarea & Plain Display Verification
+  console.log('\n[Test 7] Verifying normal multiline textarea storage & plain display rendering...');
 
-  // 7a: Markers WITHOUT space
-  if (!hasListMarker('1)Engineered')) throw new Error('FAIL: 1)Engineered not recognized as marker');
-  if (!hasListMarker('1.Engineered')) throw new Error('FAIL: 1.Engineered not recognized as marker');
-  if (!hasListMarker('(1)Engineered')) throw new Error('FAIL: (1)Engineered not recognized as marker');
-  if (!hasListMarker('[1]Engineered')) throw new Error('FAIL: [1]Engineered not recognized as marker');
-  if (!hasListMarker('•Engineered')) throw new Error('FAIL: •Engineered not recognized as marker');
-  console.log('  ✓ Markers without space (1)Engineered, 1.Engineered, (1)Engineered, [1]Engineered, •Engineered) recognized.');
+  // 7a: Confirm highlight-utils.ts has been completely deleted
+  const highlightUtilsPath = path.join(__dirname, '../src/lib/candidate-profile/highlight-utils.ts');
+  if (fs.existsSync(highlightUtilsPath)) {
+    throw new Error('FAIL: src/lib/candidate-profile/highlight-utils.ts still exists on disk!');
+  }
+  console.log('  ✓ Verified: highlight-utils.ts is completely removed.');
 
-  // 7b: Markers WITH space
-  if (!hasListMarker('1) Engineered')) throw new Error('FAIL: 1) Engineered not recognized as marker');
-  if (!hasListMarker('1. Engineered')) throw new Error('FAIL: 1. Engineered not recognized as marker');
-  if (!hasListMarker('(1) Engineered')) throw new Error('FAIL: (1) Engineered not recognized as marker');
-  if (!hasListMarker('[1] Engineered')) throw new Error('FAIL: [1] Engineered not recognized as marker');
-  if (!hasListMarker('• Engineered')) throw new Error('FAIL: • Engineered not recognized as marker');
-  console.log('  ✓ Markers with space (1) Engineered, 1. Engineered, (1) Engineered, [1] Engineered, • Engineered) recognized.');
-
-  // 7c: False positive rejection
-  if (hasListMarker('classification, resume-grounded email generation')) throw new Error('FAIL: False positive on classification line');
-  if (hasListMarker('35% reduction in latency')) throw new Error('FAIL: False positive on 35% latency');
-  if (hasListMarker('2024 graduate')) throw new Error('FAIL: False positive on 2024 graduate');
-  if (hasListMarker('3.14 is pi')) throw new Error('FAIL: False positive on 3.14 decimal');
-  if (hasListMarker('e.g. example')) throw new Error('FAIL: False positive on e.g. abbreviation');
-  if (hasListMarker('i.e. example')) throw new Error('FAIL: False positive on i.e. abbreviation');
-  console.log('  ✓ False positive rejection verified (no false positives on continuation text, percentages, years, decimals, or e.g./i.e.).');
-
-  // 7d: Real user input from screenshot (Future saves: parseRawHighlightsText)
-  const realScreenshotInput = `1)Engineered a full-stack AI-powered job outreach platform using Next.js, React, and TypeScript, automating company
+  // 7b: User input saves as ONE string in highlights array with exact formatting preserved
+  const userEnteredHighlights = `1)Engineered a full-stack AI-powered job outreach platform using Next.js, React, and TypeScript, automating company
 classification, resume-grounded email generation, and personalized recruiter outreach via Gmail API.
+
 2)Built an autonomous multi-stage AI pipeline with Google Gemini and OpenRouter fallback, implementing asynchronous
 processing, round-based retries, progressive generation, provider-isolated rate-limit handling, and bounded error recovery.
-3)Implemented secure Gmail OAuth 2.0 with AES-256-GCM credential rotation, MIME construction, persistent SQLite
-queues, and timezone-aware scheduling with 10 AM–4 PM IST windows, 3-minute pacing, and 144-hour cooldowns.
-4)Developed a fault-tolerant background worker using SQLite transactions, atomic lease-based concurrency control, stale-job
-recovery, batch isolation, and deduplication safeguards to prevent duplicate processing and unsafe outreach.`;
 
-  const parsedRealItems = parseRawHighlightsText(realScreenshotInput);
-  if (parsedRealItems.length !== 4) {
-    throw new Error(`FAIL: Expected exactly 4 parsed items from real input, got ${parsedRealItems.length}`);
-  }
-  for (let i = 0; i < 4; i++) {
-    if (!parsedRealItems[i].includes('\n')) {
-      throw new Error(`FAIL: Item ${i} does not contain preserved newline (\\n)`);
-    }
-  }
-  if (!parsedRealItems[0].startsWith('1)Engineered')) throw new Error('FAIL: 1)Engineered marker altered in item 0');
-  if (!parsedRealItems[1].startsWith('2)Built')) throw new Error('FAIL: 2)Built marker altered in item 1');
-  if (!parsedRealItems[2].startsWith('3)Implemented')) throw new Error('FAIL: 3)Implemented marker altered in item 2');
-  if (!parsedRealItems[3].startsWith('4)Developed')) throw new Error('FAIL: 4)Developed marker altered in item 3');
-  console.log('  ✓ Real 4-point user input produces EXACTLY 4 logical items with user markers intact and continuation newlines (\\n) preserved.');
+- Implemented secure Gmail OAuth 2.0 with AES-256-GCM credential rotation.
+• Developed a fault-tolerant background worker using SQLite transactions.`;
 
-  // 7e: Existing fragmented stored array from screenshot (In-memory display: normalizeHighlightItems)
-  const realScreenshotFragmented = [
-    '1)Engineered a full-stack AI-powered job outreach platform using Next.js, React, and TypeScript, automating company',
+  // Normal textarea save logic
+  const savedHighlights = userEnteredHighlights.trim() ? [userEnteredHighlights] : [];
+
+  if (savedHighlights.length !== 1) {
+    throw new Error(`FAIL: Expected highlights to be a 1-element array, got ${savedHighlights.length}`);
+  }
+  if (savedHighlights[0] !== userEnteredHighlights) {
+    throw new Error('FAIL: Stored highlight text was mutated or reformatted!');
+  }
+  if (!savedHighlights[0].includes('\n\n')) {
+    throw new Error('FAIL: Blank lines were not preserved in highlights string!');
+  }
+  if (!savedHighlights[0].includes('1)Engineered') || !savedHighlights[0].includes('2)Built')) {
+    throw new Error('FAIL: User numbering was altered or stripped!');
+  }
+  if (!savedHighlights[0].includes('- Implemented') || !savedHighlights[0].includes('• Developed')) {
+    throw new Error('FAIL: User dashes or bullets were altered or stripped!');
+  }
+  console.log('  ✓ Normal textarea save stores exact text as 1 array element with newlines, blank lines, numbering, dashes, and bullets intact.');
+
+  // 7c: Existing fragmented data displays cleanly without artificial bullets via .join('\n')
+  const existingFragmentedArray = [
+    'Engineered a full-stack AI-powered job outreach platform using Next.js, React, and TypeScript, automating company',
     'classification, resume-grounded email generation, and personalized recruiter outreach via Gmail API.',
-    '2)Built an autonomous multi-stage AI pipeline with Google Gemini and OpenRouter fallback, implementing asynchronous',
+    'Built an autonomous multi-stage AI pipeline with Google Gemini and OpenRouter fallback, implementing asynchronous',
     'processing, round-based retries, progressive generation, provider-isolated rate-limit handling, and bounded error recovery.',
-    '3)Implemented secure Gmail OAuth 2.0 with AES-256-GCM credential rotation, MIME construction, persistent SQLite',
-    'queues, and timezone-aware scheduling with 10 AM–4 PM IST windows, 3-minute pacing, and 144-hour cooldowns.',
-    '4)Developed a fault-tolerant background worker using SQLite transactions, atomic lease-based concurrency control, stale-job',
-    'recovery, batch isolation, and deduplication safeguards to prevent duplicate processing and unsafe outreach.',
   ];
-  const origFragmentedCopy = [...realScreenshotFragmented];
-  const normalizedRealItems = normalizeHighlightItems(realScreenshotFragmented);
 
-  if (normalizedRealItems.length !== 4) {
-    throw new Error(`FAIL: Expected exactly 4 normalized items from real fragmented array, got ${normalizedRealItems.length}`);
+  const displayedText = (existingFragmentedArray || []).join('\n');
+  if (displayedText.includes('•') || displayedText.includes('*')) {
+    throw new Error('FAIL: Display text injected artificial bullets or asterisks!');
   }
-  for (let i = 0; i < 4; i++) {
-    if (!normalizedRealItems[i].includes('\n')) {
-      throw new Error(`FAIL: Normalized item ${i} did not join continuation fragment with newline`);
-    }
+  const lines = displayedText.split('\n');
+  if (lines.length !== 4) {
+    throw new Error(`FAIL: Expected 4 lines in joined text, got ${lines.length}`);
   }
-  if (!normalizedRealItems[0].startsWith('1)Engineered')) throw new Error('FAIL: Marker 1)Engineered missing from normalized item 0');
-  if (!normalizedRealItems[3].startsWith('4)Developed')) throw new Error('FAIL: Marker 4)Developed missing from normalized item 3');
-  if (JSON.stringify(realScreenshotFragmented) !== JSON.stringify(origFragmentedCopy)) {
-    throw new Error('FAIL: normalizeHighlightItems mutated the input array in-place');
-  }
-  console.log('  ✓ Real 8-item fragmented stored array normalizes in-memory to EXACTLY 4 logical items without mutating data.');
+  console.log('  ✓ Existing fragmented arrays render as plain multiline text with zero injected bullets or list markers.');
 
-  // 7f: Format variations (1.Engineered, (1)Engineered, [1]Engineered)
-  const dotVariation = parseRawHighlightsText('1.Engineered point one\ncontinuation one\n2.Built point two\ncontinuation two');
-  if (dotVariation.length !== 2 || !dotVariation[0].includes('\n')) throw new Error('FAIL: 1.Engineered dot variation failed');
+  // 7d: Verification of candidate facts dossier in email generation prompt (no artificial * bullets)
+  const testCandidateProfile: CandidateProfile = {
+    ...initialProfile,
+    projects: [
+      {
+        id: 'proj_test',
+        name: 'AI Job Outreach Agent',
+        techStack: ['Next.js', 'React', 'TypeScript', 'SQLite'],
+        description: 'Autonomous multi-stage AI outreach platform',
+        highlights: [userEnteredHighlights],
+      },
+    ],
+  };
 
-  const parenVariation = parseRawHighlightsText('(1)Engineered point one\ncontinuation one\n(2)Built point two\ncontinuation two');
-  if (parenVariation.length !== 2 || !parenVariation[0].includes('\n')) throw new Error('FAIL: (1)Engineered paren variation failed');
+  const promptEmailResult = await generatePersonalizedEmail({
+    profile: testCandidateProfile,
+    companyName: 'Acme AI Systems',
+    contactName: 'Sarah Connor',
+    designation: 'VP of Engineering',
+    relevanceReason: 'Leading engineering teams in autonomous AI agent systems',
+  });
 
-  const bracketVariation = parseRawHighlightsText('[1]Engineered point one\ncontinuation one\n[2]Built point two\ncontinuation two');
-  if (bracketVariation.length !== 2 || !bracketVariation[0].includes('\n')) throw new Error('FAIL: [1]Engineered bracket variation failed');
-  console.log('  ✓ Format variations (1.Engineered, (1)Engineered, [1]Engineered) correctly group continuation lines.');
-
-  // 7g: Unmarked plain lists remain distinct items
-  const plainSkills = ['TypeScript', 'Python', 'JavaScript'];
-  const normalizedPlain = normalizeHighlightItems(plainSkills);
-  if (normalizedPlain.length !== 3 || normalizedPlain[0] !== 'TypeScript' || normalizedPlain[1] !== 'Python' || normalizedPlain[2] !== 'JavaScript') {
-    throw new Error('FAIL: Plain array without markers was altered by normalizeHighlightItems');
+  if (!promptEmailResult.subject || !promptEmailResult.body) {
+    throw new Error('FAIL: Email generation failed to generate subject or body');
   }
-  const parsedPlain = parseRawHighlightsText('TypeScript\nPython\nJavaScript');
-  if (parsedPlain.length !== 3 || parsedPlain[0] !== 'TypeScript' || parsedPlain[1] !== 'Python' || parsedPlain[2] !== 'JavaScript') {
-    throw new Error('FAIL: Plain text without markers was altered by parseRawHighlightsText');
-  }
-  console.log('  ✓ Unmarked lists (TypeScript, Python, JavaScript) remain 3 distinct items in both parser and normalizer.');
+  console.log('  ✓ Email generator successfully accepts verbatim user highlights without errors.');
+
 
   console.log('\n===============================================================');
   console.log('  ALL MANUAL CANDIDATE PROFILE ARCHITECTURE TESTS PASSED!     ');

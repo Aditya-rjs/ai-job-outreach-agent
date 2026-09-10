@@ -9,7 +9,6 @@ import {
   type ParsedEmailOutput,
 } from './json-parser';
 import type { StructuredResumeProfile, CandidateProfile, GeneratedEmailResult, VerifiedProfileLinks } from '@/types';
-import { normalizeHighlightItems } from '@/lib/candidate-profile/highlight-utils';
 
 export { AiOutputInvalidError, isAiOutputInvalidError, extractAndParseEmailJson, type ParsedEmailOutput };
 
@@ -39,7 +38,7 @@ function getProfileDetails(profile: CandidateProfile | StructuredResumeProfile, 
     fieldOfStudy: e.fieldOfStudy || '',
     year: e.year || '',
     score: isCandidateProfile ? '' : (e.score || e.gpa || ''),
-    highlights: normalizeHighlightItems((e.highlights || e.relevantCoursework || []) as string[]),
+    highlights: (e.highlights || e.relevantCoursework || []) as string[],
   }));
 
   const experience = (profile.experience || []).map((exp: any) => ({
@@ -47,7 +46,7 @@ function getProfileDetails(profile: CandidateProfile | StructuredResumeProfile, 
     company: exp.company || '',
     duration: exp.duration || (exp.startDate ? `${exp.startDate} – ${exp.endDate || 'Present'}` : ''),
     location: exp.location || '',
-    highlights: normalizeHighlightItems((exp.highlights || exp.bullets || exp.responsibilities || []) as string[]),
+    highlights: (exp.highlights || exp.bullets || exp.responsibilities || []) as string[],
     technologies: (exp.technologies || exp.tools || []) as string[],
   }));
 
@@ -55,7 +54,7 @@ function getProfileDetails(profile: CandidateProfile | StructuredResumeProfile, 
     name: p.name || p.title || '',
     techStack: (p.techStack || p.frameworks || []) as string[],
     description: p.description || '',
-    highlights: normalizeHighlightItems((p.highlights || p.bullets || []) as string[]),
+    highlights: (p.highlights || p.bullets || []) as string[],
     liveUrl: p.liveUrl || '',
     githubUrl: p.githubUrl || '',
   }));
@@ -245,10 +244,8 @@ function buildGenerationPrompt(
     if (e.score) parts.push(`[Grade/Score: ${e.score}]`);
     const header = `- ${parts.join(' ')}`;
     if (e.highlights && e.highlights.length > 0) {
-      const bullets = e.highlights.map((h) =>
-        h.split('\n').map((line, idx) => idx === 0 ? `  * ${line}` : `    ${line}`).join('\n')
-      ).join('\n');
-      return `${header}\n${bullets}`;
+      const text = e.highlights.join('\n');
+      return `${header}\n  Highlights/Details:\n  ${text.split('\n').join('\n  ')}`;
     }
     return header;
   }).filter(Boolean).join('\n');
@@ -276,24 +273,20 @@ function buildGenerationPrompt(
 
   const experienceLines = details.experience.map((exp) => {
     const header = `- ${exp.role}${exp.company ? ` at ${exp.company}` : ''}${exp.duration ? ` (${exp.duration})` : ''}${exp.location ? `, ${exp.location}` : ''}`;
-    const bullets = exp.highlights.map((b) =>
-      b.split('\n').map((line, idx) => idx === 0 ? `  * ${line}` : `    ${line}`).join('\n')
-    ).join('\n');
-    const tools = exp.technologies?.length ? `  * Tech/Tools: ${exp.technologies.join(', ')}` : '';
-    return [header, bullets, tools].filter(Boolean).join('\n');
+    const highlights = exp.highlights?.length ? `  Highlights/Responsibilities:\n  ${exp.highlights.join('\n').split('\n').join('\n  ')}` : '';
+    const tools = exp.technologies?.length ? `  Tech/Tools: ${exp.technologies.join(', ')}` : '';
+    return [header, highlights, tools].filter(Boolean).join('\n');
   }).join('\n\n');
 
   const projectLines = details.projects.map((p) => {
     const header = `- ${p.name}${p.techStack?.length ? ` [Tech: ${p.techStack.join(', ')}]` : ''}`;
-    const desc = p.description ? `  * Summary: ${p.description}` : '';
-    const highlights = p.highlights.map((h) =>
-      h.split('\n').map((line, idx) => idx === 0 ? `  * ${line}` : `    ${line}`).join('\n')
-    ).join('\n');
+    const desc = p.description ? `  Summary: ${p.description}` : '';
+    const highlights = p.highlights?.length ? `  Highlights/Key Architecture:\n  ${p.highlights.join('\n').split('\n').join('\n  ')}` : '';
     const links = [
       p.liveUrl ? `Live: ${p.liveUrl}` : '',
       p.githubUrl ? `GitHub: ${p.githubUrl}` : '',
     ].filter(Boolean).join(' | ');
-    const linkLine = links ? `  * Project Links: ${links}` : '';
+    const linkLine = links ? `  Project Links: ${links}` : '';
     return [header, desc, highlights, linkLine].filter(Boolean).join('\n');
   }).join('\n\n');
 

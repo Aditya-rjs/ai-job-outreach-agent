@@ -38,7 +38,6 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { formatDateTime } from '@/lib/utils';
-import { parseRawHighlightsText, normalizeHighlightItems } from '@/lib/candidate-profile/highlight-utils';
 import type {
   ResumeData,
   CandidateProfile,
@@ -161,9 +160,7 @@ export default function SettingsPage() {
 
   // Global status / error
   const [loading, setLoading] = useState(true);
-  const [savingPersonal, setSavingPersonal] = useState(false);
-  const [savingLinks, setSavingLinks] = useState(false);
-  const [savingSkills, setSavingSkills] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -270,14 +267,41 @@ export default function SettingsPage() {
     };
   }, []);
 
-  // Save Candidate Profile Helper (Direct to SQLite, ZERO AI)
-  const saveProfileUpdates = async (updates: Partial<CandidateProfile>, successMsg?: string) => {
+  // Global Save Candidate Profile (Atomic SQLite update for all 7 sections, ZERO AI)
+  const handleSaveCandidateProfile = async () => {
+    if (!personalForm.fullName?.trim()) {
+      setErrorMessage('Please provide your Full Name in Personal Details before saving.');
+      return;
+    }
+
+    setSavingProfile(true);
     setErrorMessage(null);
+    setStatusMessage(null);
+
+    const fullCandidateProfile: CandidateProfile = {
+      ...profile,
+      fullName: personalForm.fullName.trim(),
+      email: personalForm.email.trim(),
+      phone: personalForm.phone.trim(),
+      degree: personalForm.degree.trim(),
+      fieldOfStudy: personalForm.fieldOfStudy.trim(),
+      institution: personalForm.institution.trim(),
+      graduationYear: personalForm.graduationYear.trim(),
+      linkedin: linksForm.linkedin.trim(),
+      github: linksForm.github.trim(),
+      portfolio: linksForm.portfolio.trim(),
+      skills: skillsState,
+      education: profile.education,
+      experience: profile.experience,
+      projects: profile.projects,
+      achievements: profile.achievements,
+    };
+
     try {
       const res = await fetch('/api/candidate-profile', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
+        body: JSON.stringify(fullCandidateProfile),
       });
       const json = await res.json();
       if (!res.ok || !json.success) {
@@ -308,40 +332,16 @@ export default function SettingsPage() {
         toolsApis: [],
       });
 
-      if (successMsg) {
-        setStatusMessage(successMsg);
-        setTimeout(() => setStatusMessage(null), 4000);
-      }
-      return updatedProfile;
+      setStatusMessage('Information saved successfully.');
+      setTimeout(() => setStatusMessage(null), 4000);
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : 'Error updating candidate profile.');
-      throw err;
-    }
-  };
-
-  // Section 1: Save Personal Details
-  const handleSavePersonal = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSavingPersonal(true);
-    try {
-      await saveProfileUpdates(personalForm, 'Personal & contact details saved successfully!');
     } finally {
-      setSavingPersonal(false);
+      setSavingProfile(false);
     }
   };
 
-  // Section 2: Save Links
-  const handleSaveLinks = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSavingLinks(true);
-    try {
-      await saveProfileUpdates(linksForm, 'Professional links saved successfully!');
-    } finally {
-      setSavingLinks(false);
-    }
-  };
-
-  // Section 6: Add / Remove / Save Skills
+  // Section 6: Add / Remove Skills (Local state only)
   const handleAddSkill = (category: keyof CandidateSkills) => {
     const val = (newSkillInput[category] || '').trim();
     if (!val) return;
@@ -357,15 +357,6 @@ export default function SettingsPage() {
     const nextCategorySkills = (skillsState[category] || []).filter((s) => s !== itemToRemove);
     const nextSkills = { ...skillsState, [category]: nextCategorySkills };
     setSkillsState(nextSkills);
-  };
-
-  const handleSaveSkills = async () => {
-    setSavingSkills(true);
-    try {
-      await saveProfileUpdates({ skills: skillsState }, 'Technical skills saved successfully!');
-    } finally {
-      setSavingSkills(false);
-    }
   };
 
   // Section 3: Education Dialog Handlers
@@ -392,14 +383,13 @@ export default function SettingsPage() {
       year: item.year || '',
       highlights: item.highlights || [],
     });
-    const normalized = normalizeHighlightItems(item.highlights || []);
-    setEduHighlightsText(normalized.join('\n'));
+    setEduHighlightsText((item.highlights || []).join('\n'));
     setEditingIndex(idx);
     setActiveModal('education');
   };
 
-  const handleSaveEducationModal = async () => {
-    const highlights = parseRawHighlightsText(eduHighlightsText);
+  const handleApplyEducationModal = () => {
+    const highlights = eduHighlightsText.trim() ? [eduHighlightsText] : [];
 
     const item: CandidateEducation = {
       id: eduForm.id || `edu_${Date.now()}`,
@@ -422,14 +412,16 @@ export default function SettingsPage() {
       nextEdu.push(item);
     }
 
-    await saveProfileUpdates({ education: nextEdu }, 'Education details updated.');
+    setProfile((prev) => ({ ...prev, education: nextEdu }));
     setActiveModal(null);
   };
 
-  const handleDeleteEducation = async (idx: number) => {
+  const handleDeleteEducation = (idx: number) => {
     if (!confirm('Are you sure you want to delete this education entry?')) return;
-    const nextEdu = profile.education.filter((_, i) => i !== idx);
-    await saveProfileUpdates({ education: nextEdu }, 'Education entry removed.');
+    setProfile((prev) => ({
+      ...prev,
+      education: prev.education.filter((_, i) => i !== idx),
+    }));
   };
 
   // Section 4: Experience Dialog Handlers
@@ -451,15 +443,14 @@ export default function SettingsPage() {
   const openEditExperience = (idx: number) => {
     const item = profile.experience[idx];
     setExpForm(item);
-    const normalized = normalizeHighlightItems(item.highlights || []);
-    setExpHighlightsText(normalized.join('\n'));
+    setExpHighlightsText((item.highlights || []).join('\n'));
     setExpTechText((item.technologies || []).join(', '));
     setEditingIndex(idx);
     setActiveModal('experience');
   };
 
-  const handleSaveExperienceModal = async () => {
-    const highlights = parseRawHighlightsText(expHighlightsText);
+  const handleApplyExperienceModal = () => {
+    const highlights = expHighlightsText.trim() ? [expHighlightsText] : [];
     const technologies = expTechText
       .split(',')
       .map((s) => s.trim())
@@ -487,14 +478,16 @@ export default function SettingsPage() {
       nextExp.push(item);
     }
 
-    await saveProfileUpdates({ experience: nextExp }, 'Experience details updated.');
+    setProfile((prev) => ({ ...prev, experience: nextExp }));
     setActiveModal(null);
   };
 
-  const handleDeleteExperience = async (idx: number) => {
+  const handleDeleteExperience = (idx: number) => {
     if (!confirm('Are you sure you want to delete this experience entry?')) return;
-    const nextExp = profile.experience.filter((_, i) => i !== idx);
-    await saveProfileUpdates({ experience: nextExp }, 'Experience entry removed.');
+    setProfile((prev) => ({
+      ...prev,
+      experience: prev.experience.filter((_, i) => i !== idx),
+    }));
   };
 
   // Section 5: Project Dialog Handlers
@@ -518,18 +511,17 @@ export default function SettingsPage() {
     const item = profile.projects[idx];
     setProjForm(item);
     setProjTechText((item.techStack || []).join(', '));
-    const normalized = normalizeHighlightItems(item.highlights || []);
-    setProjHighlightsText(normalized.join('\n'));
+    setProjHighlightsText((item.highlights || []).join('\n'));
     setEditingIndex(idx);
     setActiveModal('project');
   };
 
-  const handleSaveProjectModal = async () => {
+  const handleApplyProjectModal = () => {
     const techStack = projTechText
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    const highlights = parseRawHighlightsText(projHighlightsText);
+    const highlights = projHighlightsText.trim() ? [projHighlightsText] : [];
 
     const item: CandidateProject = {
       id: projForm.id || `proj_${Date.now()}`,
@@ -554,14 +546,16 @@ export default function SettingsPage() {
       nextProj.push(item);
     }
 
-    await saveProfileUpdates({ projects: nextProj }, 'Project details updated.');
+    setProfile((prev) => ({ ...prev, projects: nextProj }));
     setActiveModal(null);
   };
 
-  const handleDeleteProject = async (idx: number) => {
+  const handleDeleteProject = (idx: number) => {
     if (!confirm('Are you sure you want to delete this project entry?')) return;
-    const nextProj = profile.projects.filter((_, i) => i !== idx);
-    await saveProfileUpdates({ projects: nextProj }, 'Project entry removed.');
+    setProfile((prev) => ({
+      ...prev,
+      projects: prev.projects.filter((_, i) => i !== idx),
+    }));
   };
 
   // Section 7: Achievement Dialog Handlers
@@ -582,7 +576,7 @@ export default function SettingsPage() {
     setActiveModal('achievement');
   };
 
-  const handleSaveAchievementModal = async () => {
+  const handleApplyAchievementModal = () => {
     const item: CandidateAchievement = {
       id: achForm.id || `ach_${Date.now()}`,
       title: (achForm.title || '').trim(),
@@ -602,14 +596,16 @@ export default function SettingsPage() {
       nextAch.push(item);
     }
 
-    await saveProfileUpdates({ achievements: nextAch }, 'Achievement updated.');
+    setProfile((prev) => ({ ...prev, achievements: nextAch }));
     setActiveModal(null);
   };
 
-  const handleDeleteAchievement = async (idx: number) => {
+  const handleDeleteAchievement = (idx: number) => {
     if (!confirm('Are you sure you want to delete this achievement?')) return;
-    const nextAch = profile.achievements.filter((_, i) => i !== idx);
-    await saveProfileUpdates({ achievements: nextAch }, 'Achievement removed.');
+    setProfile((prev) => ({
+      ...prev,
+      achievements: prev.achievements.filter((_, i) => i !== idx),
+    }));
   };
 
   // Resume PDF File Upload Handler (Zero AI, only saves file for Gmail MIME attachment)
@@ -805,7 +801,7 @@ export default function SettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSavePersonal} className="space-y-4">
+          <div className="space-y-4">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div>
                 <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Full Name</label>
@@ -878,14 +874,7 @@ export default function SettingsPage() {
                 />
               </div>
             </div>
-
-            <div className="flex justify-end">
-              <Button type="submit" disabled={savingPersonal}>
-                {savingPersonal ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                Save Personal Details
-              </Button>
-            </div>
-          </form>
+          </div>
         </CardContent>
       </Card>
 
@@ -903,7 +892,7 @@ export default function SettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSaveLinks} className="space-y-4">
+          <div className="space-y-4">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <div>
                 <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">LinkedIn URL</label>
@@ -936,14 +925,7 @@ export default function SettingsPage() {
                 />
               </div>
             </div>
-
-            <div className="flex justify-end">
-              <Button type="submit" disabled={savingLinks}>
-                {savingLinks ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                Save Professional Links
-              </Button>
-            </div>
-          </form>
+          </div>
         </CardContent>
       </Card>
 
@@ -1005,11 +987,9 @@ export default function SettingsPage() {
                   </div>
 
                   {edu.highlights && edu.highlights.length > 0 && (
-                    <ul className="mt-3 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
-                      {normalizeHighlightItems(edu.highlights).map((h, hIdx) => (
-                        <li key={hIdx} className="whitespace-pre-line">{h}</li>
-                      ))}
-                    </ul>
+                    <div className="mt-3 whitespace-pre-line text-xs text-muted-foreground">
+                      {(edu.highlights || []).join('\n')}
+                    </div>
                   )}
                 </div>
               ))}
@@ -1073,11 +1053,9 @@ export default function SettingsPage() {
                   </div>
 
                   {exp.highlights && exp.highlights.length > 0 && (
-                    <ul className="mt-3 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
-                      {normalizeHighlightItems(exp.highlights).map((h, hIdx) => (
-                        <li key={hIdx} className="whitespace-pre-line">{h}</li>
-                      ))}
-                    </ul>
+                    <div className="mt-3 whitespace-pre-line text-xs text-muted-foreground">
+                      {(exp.highlights || []).join('\n')}
+                    </div>
                   )}
 
                   {exp.technologies && exp.technologies.length > 0 && (
@@ -1166,11 +1144,9 @@ export default function SettingsPage() {
                   )}
 
                   {proj.highlights && proj.highlights.length > 0 && (
-                    <ul className="mt-3 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
-                      {normalizeHighlightItems(proj.highlights).map((h, hIdx) => (
-                        <li key={hIdx} className="whitespace-pre-line">{h}</li>
-                      ))}
-                    </ul>
+                    <div className="mt-3 whitespace-pre-line text-xs text-muted-foreground">
+                      {(proj.highlights || []).join('\n')}
+                    </div>
                   )}
 
                   <div className="mt-3 flex items-center gap-3 text-xs">
@@ -1207,20 +1183,14 @@ export default function SettingsPage() {
       ───────────────────────────────────────────────────────────── */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Code2 className="h-5 w-5 text-primary" />
-              <div>
-                <CardTitle>6. Technical Skills</CardTitle>
-                <CardDescription>
-                  Organized by category. Add and remove tags to match your skills with complete accuracy.
-                </CardDescription>
-              </div>
+          <div className="flex items-center gap-2">
+            <Code2 className="h-5 w-5 text-primary" />
+            <div>
+              <CardTitle>6. Technical Skills</CardTitle>
+              <CardDescription>
+                Organized by category. Add and remove tags to match your skills with complete accuracy.
+              </CardDescription>
             </div>
-            <Button size="sm" onClick={handleSaveSkills} disabled={savingSkills}>
-              {savingSkills ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              Save Skills
-            </Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -1338,6 +1308,40 @@ export default function SettingsPage() {
               ))}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* ─────────────────────────────────────────────────────────────
+          GLOBAL SAVE: CANDIDATE PROFILE (ONE ATOMIC SAVE FOR ALL SECTIONS)
+      ───────────────────────────────────────────────────────────── */}
+      <Card className="border-primary bg-primary/5">
+        <CardContent className="p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-foreground">Save Candidate Profile</h3>
+              <p className="text-sm text-muted-foreground">
+                Saves all Candidate Profile sections above (Personal Details, Professional Links, Education, Experience, Projects, Skills, Achievements) in a single atomic update.
+              </p>
+            </div>
+            <Button
+              size="lg"
+              onClick={handleSaveCandidateProfile}
+              disabled={savingProfile}
+              className="shrink-0"
+            >
+              {savingProfile ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Saving Profile...
+                </>
+              ) : (
+                <>
+                  <Save className="h-4 w-4" />
+                  Save Candidate Profile
+                </>
+              )}
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -1643,7 +1647,7 @@ export default function SettingsPage() {
               </div>
               <div>
                 <label className="text-xs font-semibold text-muted-foreground uppercase">
-                  Highlights / Key Coursework (one per line)
+                  Highlights / Description
                 </label>
                 <textarea
                   rows={3}
@@ -1659,8 +1663,8 @@ export default function SettingsPage() {
               <Button variant="outline" onClick={() => setActiveModal(null)}>
                 Cancel
               </Button>
-              <Button onClick={handleSaveEducationModal}>
-                Save Education
+              <Button onClick={handleApplyEducationModal}>
+                Done
               </Button>
             </div>
           </div>
@@ -1741,7 +1745,7 @@ export default function SettingsPage() {
               </div>
               <div>
                 <label className="text-xs font-semibold text-muted-foreground uppercase">
-                  Highlights & Responsibilities (one per line)
+                  Highlights & Responsibilities
                 </label>
                 <textarea
                   rows={4}
@@ -1757,8 +1761,8 @@ export default function SettingsPage() {
               <Button variant="outline" onClick={() => setActiveModal(null)}>
                 Cancel
               </Button>
-              <Button onClick={handleSaveExperienceModal}>
-                Save Experience
+              <Button onClick={handleApplyExperienceModal}>
+                Done
               </Button>
             </div>
           </div>
@@ -1853,7 +1857,7 @@ export default function SettingsPage() {
 
               <div>
                 <label className="text-xs font-semibold text-muted-foreground uppercase">
-                  Highlights & Key Architecture (one per line)
+                  Highlights & Key Architecture
                 </label>
                 <textarea
                   rows={4}
@@ -1869,8 +1873,8 @@ export default function SettingsPage() {
               <Button variant="outline" onClick={() => setActiveModal(null)}>
                 Cancel
               </Button>
-              <Button onClick={handleSaveProjectModal}>
-                Save Project
+              <Button onClick={handleApplyProjectModal}>
+                Done
               </Button>
             </div>
           </div>
@@ -1931,8 +1935,8 @@ export default function SettingsPage() {
               <Button variant="outline" onClick={() => setActiveModal(null)}>
                 Cancel
               </Button>
-              <Button onClick={handleSaveAchievementModal}>
-                Save Achievement
+              <Button onClick={handleApplyAchievementModal}>
+                Done
               </Button>
             </div>
           </div>
