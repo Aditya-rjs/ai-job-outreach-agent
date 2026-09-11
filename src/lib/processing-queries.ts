@@ -1,7 +1,7 @@
 import { getDb } from '@/db';
 import { sql } from 'drizzle-orm';
 import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
-import { normalizeCompanyName } from '@/lib/utils/company';
+import { normalizeCompanyName, formatCompanyDisplayName } from '@/lib/utils/company';
 
 export interface ProcessingPipelineStats {
   // 13 Canonical Dashboard Metrics in exact required order
@@ -133,6 +133,7 @@ export interface CompanyFoundRecord {
 }
 
 export interface DuplicateCompanyRecord {
+  companyName: string;
   normalizedName: string;
   rawVariations: string[];
   variationCount: number;
@@ -273,8 +274,7 @@ export function getProcessingPipelineStats(batchId?: string): ProcessingPipeline
   const currentBatchFilename = activeBatch.filename;
 
   // 1. Companies Found & 2. Duplicate Companies
-  // Group distinct raw company names and normalize them using the application's company normalizer.
-  // Multiple contacts belonging to the same company are NOT counted as duplicate companies.
+  // Companies Found: number of unique company identities represented in the selected batch
   const companyRows = db.all<{ rawCompany: string }>(sql`
     SELECT DISTINCT TRIM(company_name) as rawCompany
     FROM contacts
@@ -282,16 +282,30 @@ export function getProcessingPipelineStats(batchId?: string): ProcessingPipeline
       AND company_name IS NOT NULL
       AND TRIM(company_name) != ''
   `);
+  const companiesFound = companyRows.length;
 
-  const rawDistinctCount = companyRows.length;
-  const normalizedSet = new Set<string>();
-  for (const r of companyRows) {
-    const norm = normalizeCompanyName(r.rawCompany);
-    if (norm) normalizedSet.add(norm);
+  // Duplicate Companies: unique companies appearing MORE THAN ONCE in the currently selected batch (i.e. having >= 2 contact rows)
+  const contactCompanyRows = db.all<{ companyName: string }>(sql`
+    SELECT TRIM(company_name) as companyName
+    FROM contacts
+    WHERE batch_id = ${currentBatchId}
+      AND company_name IS NOT NULL
+      AND TRIM(company_name) != ''
+  `);
+
+  const companyContactCounts = new Map<string, number>();
+  for (const r of contactCompanyRows) {
+    const norm = normalizeCompanyName(r.companyName) || r.companyName.toLowerCase();
+    if (!norm) continue;
+    companyContactCounts.set(norm, (companyContactCounts.get(norm) || 0) + 1);
   }
-  const uniqueNormalizedCount = normalizedSet.size;
-  const companiesFound = rawDistinctCount;
-  const duplicateCompanies = Math.max(0, rawDistinctCount - uniqueNormalizedCount);
+
+  let duplicateCompanies = 0;
+  for (const count of companyContactCounts.values()) {
+    if (count > 1) {
+      duplicateCompanies++;
+    }
+  }
 
   // 3. AI Search Pending: Unique companies in the current batch still awaiting initial/next-round AI classification
   const classPendingRow = db.get<{ count: number }>(sql`
@@ -736,12 +750,18 @@ export function getCompanyContactsList(normalizedName: string, batchId?: string)
     FROM contacts c
     INNER JOIN batches b ON c.batch_id = b.id
     WHERE b.status NOT IN ('deleted', 'cancelled')
-      AND LOWER(TRIM(c.company_name)) = ${target}
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
       ${batchClause}
     ORDER BY c.contact_name ASC, c.email ASC
   `);
 
-  return rows;
+  return rows.filter((r) => {
+    if (!r.companyName) return false;
+    const norm = normalizeCompanyName(r.companyName);
+    const rawLower = r.companyName.trim().toLowerCase();
+    return norm === target || rawLower === target;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1274,7 +1294,7 @@ export function getCompaniesFoundList(opts: ProcessingPaginationOptions = {}): {
 }
 
 // ---------------------------------------------------------------------------
-// 8. DUPLICATE COMPANIES (Raw Variants Resolving to Same Entity)
+// 8. DUPLICATE COMPANIES (Companies Appearing More Than Once in Batch)
 // ---------------------------------------------------------------------------
 
 export function getDuplicateCompaniesList(opts: ProcessingPaginationOptions = {}): {
@@ -1290,78 +1310,113 @@ export function getDuplicateCompaniesList(opts: ProcessingPaginationOptions = {}
   const limit = Math.max(1, Math.min(opts.limit || 25, 200));
   const offset = (page - 1) * limit;
 
-  const companyRows = db.all<{ rawCompany: string }>(sql`
-    SELECT DISTINCT TRIM(company_name) as rawCompany
-    FROM contacts
-    WHERE batch_id = ${activeBatchId}
-      AND company_name IS NOT NULL
-      AND TRIM(company_name) != ''
+  const contactRows = db.all<{
+    id: string;
+    contactName: string | null;
+    email: string;
+    companyName: string;
+    designation: string | null;
+  }>(sql`
+    SELECT
+      c.id,
+      c.contact_name as contactName,
+      c.email,
+      TRIM(c.company_name) as companyName,
+      c.designation
+    FROM contacts c
+    WHERE c.batch_id = ${activeBatchId}
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+    ORDER BY c.contact_name ASC, c.email ASC
   `);
 
-  const normMap = new Map<string, string[]>();
-  for (const r of companyRows) {
-    const norm = normalizeCompanyName(r.rawCompany);
-    if (norm) {
-      if (!normMap.has(norm)) {
-        normMap.set(norm, []);
-      }
-      normMap.get(norm)!.push(r.rawCompany);
+  type CompanyGroup = {
+    normalizedName: string;
+    primaryCompanyName: string;
+    rawVariations: Set<string>;
+    contacts: Array<{
+      id: string;
+      contactName: string | null;
+      email: string;
+      designation: string | null;
+    }>;
+  };
+
+  const groupMap = new Map<string, CompanyGroup>();
+
+  for (const r of contactRows) {
+    const norm = normalizeCompanyName(r.companyName) || r.companyName.toLowerCase();
+    if (!norm) continue;
+
+    if (!groupMap.has(norm)) {
+      groupMap.set(norm, {
+        normalizedName: norm,
+        primaryCompanyName: formatCompanyDisplayName(r.companyName),
+        rawVariations: new Set<string>(),
+        contacts: [],
+      });
+    }
+
+    const grp = groupMap.get(norm)!;
+    grp.rawVariations.add(r.companyName);
+    grp.contacts.push({
+      id: r.id,
+      contactName: r.contactName,
+      email: r.email,
+      designation: r.designation,
+    });
+  }
+
+  // Filter for duplicate companies: companies appearing MORE THAN ONCE (contacts.length > 1)
+  const duplicateGroups: CompanyGroup[] = [];
+  for (const grp of groupMap.values()) {
+    if (grp.contacts.length > 1) {
+      duplicateGroups.push(grp);
     }
   }
 
-  const duplicateGroups: { normalizedName: string; rawVariations: string[] }[] = [];
-  let totalDuplicateCount = 0;
-
-  for (const [norm, rawVars] of normMap.entries()) {
-    if (rawVars.length > 1) {
-      totalDuplicateCount += (rawVars.length - 1);
-      duplicateGroups.push({ normalizedName: norm, rawVariations: rawVars });
+  // Sort duplicate groups by contact count descending, then company name ascending
+  duplicateGroups.sort((a, b) => {
+    if (b.contacts.length !== a.contacts.length) {
+      return b.contacts.length - a.contacts.length;
     }
-  }
+    return a.primaryCompanyName.localeCompare(b.primaryCompanyName);
+  });
 
+  // Apply search filtering
   const filteredGroups = search
     ? duplicateGroups.filter(
         (g) =>
-          g.normalizedName.includes(search) ||
-          g.rawVariations.some((v) => v.toLowerCase().includes(search))
+          g.primaryCompanyName.toLowerCase().includes(search) ||
+          g.normalizedName.toLowerCase().includes(search) ||
+          Array.from(g.rawVariations).some((v) => v.toLowerCase().includes(search)) ||
+          g.contacts.some(
+            (c) =>
+              (c.contactName && c.contactName.toLowerCase().includes(search)) ||
+              c.email.toLowerCase().includes(search)
+          )
       )
     : duplicateGroups;
 
-  const total = search ? filteredGroups.reduce((acc, g) => acc + (g.rawVariations.length - 1), 0) : totalDuplicateCount;
+  const total = filteredGroups.length;
   const pagedGroups = filteredGroups.slice(offset, offset + limit);
 
-  const records: DuplicateCompanyRecord[] = [];
-  for (const group of pagedGroups) {
-    const contactRows = db.all<{ contactName: string | null; email: string }>(sql`
-      SELECT c.contact_name as contactName, c.email
-      FROM contacts c
-      WHERE c.batch_id = ${activeBatchId}
-        AND c.company_name IS NOT NULL
-        AND LOWER(TRIM(c.company_name)) IN (${sql.join(group.rawVariations.map(v => sql`${v.toLowerCase()}`), sql`, `)})
-      LIMIT 10
-    `);
-
-    const contactCountRow = db.get<{ count: number }>(sql`
-      SELECT COUNT(c.id) as count
-      FROM contacts c
-      WHERE c.batch_id = ${activeBatchId}
-        AND c.company_name IS NOT NULL
-        AND LOWER(TRIM(c.company_name)) IN (${sql.join(group.rawVariations.map(v => sql`${v.toLowerCase()}`), sql`, `)})
-    `);
-
-    const representativeContacts = contactRows.map((c) =>
+  const records: DuplicateCompanyRecord[] = pagedGroups.map((grp) => {
+    const rawVars = Array.from(grp.rawVariations);
+    const representativeContacts = grp.contacts.slice(0, 10).map((c) =>
       c.contactName ? `${c.contactName} — ${c.email}` : c.email
     );
 
-    records.push({
-      normalizedName: group.normalizedName,
-      rawVariations: group.rawVariations,
-      variationCount: group.rawVariations.length,
-      contactCount: contactCountRow?.count ?? 0,
+    return {
+      companyName: grp.primaryCompanyName,
+      normalizedName: grp.normalizedName,
+      rawVariations: rawVars,
+      variationCount: rawVars.length,
+      contactCount: grp.contacts.length,
       representativeContacts,
-      explanation: `${group.rawVariations.length} raw company name variants in this batch map to the single normalized entity "${group.normalizedName}".`,
-    });
-  }
+      explanation: `${grp.contacts.length} contact rows in this batch belong to ${grp.primaryCompanyName}.`,
+    };
+  });
 
   return { records, total };
 }

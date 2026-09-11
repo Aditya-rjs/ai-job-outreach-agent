@@ -539,11 +539,13 @@ async function runBarrierVerificationTests() {
   });
 
   // Raw companies = 'Microsoft', 'Google Inc', 'Google LLC', 'Bakery Shop' (4 raw distinct)
-  // Normalized companies = 'microsoft', 'google', 'bakery shop' (3 unique normalized)
-  // Companies Found = 4
-  // Duplicate Companies = 4 - 3 = 1
+  // Companies with multiple contact rows:
+  // Microsoft: 4 contacts (> 1) -> duplicate company
+  // Google (Google Inc, Google LLC): 2 contacts (> 1) -> duplicate company
+  // Bakery Shop: 1 contact (not duplicate)
+  // Duplicate Companies = 2
   assert.strictEqual(stats.companiesFound, 4, 'Companies found must equal raw distinct companies');
-  assert.strictEqual(stats.duplicateCompanies, 1, 'Duplicate companies must be 1 (Google Inc and Google LLC normalize to same)');
+  assert.strictEqual(stats.duplicateCompanies, 2, 'Duplicate companies must be 2 (Microsoft and Google have multiple contacts)');
   assert.strictEqual(stats.contactsFound, 7, 'Total contacts found must be 7');
   assert.strictEqual(stats.duplicateContacts, 1, 'Duplicate contacts must be 1');
   assert.strictEqual(stats.aiSearchPending, 2, 'AI search pending must be 2 (Google Inc and Google LLC)');

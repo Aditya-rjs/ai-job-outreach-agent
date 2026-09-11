@@ -274,7 +274,7 @@ export default function BatchDetailPage({
       label: 'Duplicate Companies',
       countKey: 'duplicateCompanies',
       icon: Layers,
-      description: 'Normalized company duplicates',
+      description: 'Companies with multiple contacts',
     },
     {
       key: 'classification-pending',
@@ -798,33 +798,93 @@ export default function BatchDetailPage({
                   <table className="w-full text-left text-xs">
                     <thead className="border-b border-border bg-muted/40 font-semibold uppercase text-muted-foreground">
                       <tr>
+                        <th className="px-3 py-2.5">Company Name</th>
                         <th className="px-3 py-2.5">Normalized Entity</th>
-                        <th className="px-3 py-2.5">Raw Name Variations in Batch</th>
-                        <th className="px-3 py-2.5">Duplicate Variations</th>
                         <th className="px-3 py-2.5">Contacts in Batch</th>
-                        <th className="px-3 py-2.5">Explanation</th>
+                        <th className="px-3 py-2.5">Details</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {(detailRecords as DuplicateCompanyRecord[]).map((rec) => (
-                        <tr key={rec.normalizedName} className="hover:bg-muted/20 transition-colors">
-                          <td className="px-3 py-2.5 font-bold text-foreground">{rec.normalizedName}</td>
-                          <td className="px-3 py-2.5">
-                            <div className="flex flex-wrap gap-1">
-                              {rec.rawVariations.map((v) => (
-                                <Badge key={v} variant="outline" className="text-[10px]">
-                                  {v}
-                                </Badge>
-                              ))}
-                            </div>
-                          </td>
-                          <td className="px-3 py-2.5 font-semibold text-amber-600">
-                            +{rec.variationCount - 1} duplicate(s)
-                          </td>
-                          <td className="px-3 py-2.5 text-muted-foreground">{rec.contactCount} contact(s)</td>
-                          <td className="px-3 py-2.5 text-muted-foreground">{rec.explanation}</td>
-                        </tr>
-                      ))}
+                      {(detailRecords as DuplicateCompanyRecord[]).map((rec) => {
+                        const isExpanded = !!expandedCompanies[rec.normalizedName];
+                        const contacts = companyContacts[rec.normalizedName] || [];
+                        const isLoadingContacts = !!loadingCompanyContacts[rec.normalizedName];
+
+                        return (
+                          <React.Fragment key={rec.normalizedName}>
+                            <tr className="hover:bg-muted/20 transition-colors">
+                              <td className="px-3 py-2.5 font-bold text-foreground">
+                                {rec.companyName || rec.normalizedName}
+                              </td>
+                              <td className="px-3 py-2.5 font-mono text-[11px] text-muted-foreground">
+                                {rec.normalizedName}
+                              </td>
+                              <td className="px-3 py-2.5">
+                                <button
+                                  onClick={() => toggleCompanyContacts(rec.normalizedName)}
+                                  className="inline-flex items-center gap-1.5 font-semibold text-primary hover:underline cursor-pointer"
+                                >
+                                  {rec.contactCount} contact(s)
+                                  <ChevronRight
+                                    className={cn('h-3.5 w-3.5 transition-transform', isExpanded && 'rotate-90')}
+                                  />
+                                </button>
+                              </td>
+                              <td className="px-3 py-2.5 text-muted-foreground">{rec.explanation}</td>
+                            </tr>
+                            {isExpanded && (
+                              <tr>
+                                <td colSpan={4} className="px-4 py-3 bg-muted/30">
+                                  {isLoadingContacts ? (
+                                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                                      Loading contacts for {rec.companyName || rec.normalizedName}...
+                                    </div>
+                                  ) : contacts.length === 0 ? (
+                                    <div className="space-y-1 text-xs text-muted-foreground">
+                                      {rec.representativeContacts && rec.representativeContacts.length > 0 ? (
+                                        rec.representativeContacts.map((rep, idx) => (
+                                          <div key={idx} className="font-mono text-[11px]">
+                                            {rep}
+                                          </div>
+                                        ))
+                                      ) : (
+                                        <p>No contact details recorded.</p>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-1.5">
+                                      <p className="text-[11px] font-semibold text-foreground uppercase tracking-wider">
+                                        Contacts in this batch ({contacts.length}):
+                                      </p>
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                                        {contacts.map((c) => (
+                                          <div
+                                            key={c.id}
+                                            className="rounded border border-border bg-card p-2 text-xs flex flex-col"
+                                          >
+                                            <span className="font-semibold text-foreground">
+                                              {c.contactName || 'Unnamed Contact'}
+                                            </span>
+                                            <span className="text-muted-foreground font-mono text-[11px]">
+                                              {c.email}
+                                            </span>
+                                            {c.designation && (
+                                              <span className="text-[11px] text-muted-foreground mt-0.5">
+                                                {c.designation}
+                                              </span>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
                     </tbody>
                   </table>
                 )}

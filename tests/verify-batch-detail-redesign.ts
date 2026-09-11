@@ -356,7 +356,7 @@ async function runVerification() {
 
     assert(statsA.currentBatchId === batchAId, 'stats.currentBatchId matches requested batchId');
     assert(statsA.companiesFound === 7, `companiesFound = 7 (Got: ${statsA.companiesFound})`);
-    assert(statsA.duplicateCompanies === 1, `duplicateCompanies = 1 (Got: ${statsA.duplicateCompanies})`);
+    assert(statsA.duplicateCompanies === 2, `duplicateCompanies = 2 (Got: ${statsA.duplicateCompanies})`);
     assert(statsA.aiSearchPending === 1, `aiSearchPending = 1 (Got: ${statsA.aiSearchPending})`);
     assert(statsA.aiProcessed === 5, `aiProcessed = 5 (Got: ${statsA.aiProcessed})`);
     assert(statsA.irrelevantCompanies === 1, `irrelevantCompanies = 1 (Got: ${statsA.irrelevantCompanies})`); // Tesla
@@ -382,9 +382,9 @@ async function runVerification() {
     // 2. Duplicate Companies
     const dupComp = getDuplicateCompaniesList({ batchId: batchAId });
     assert(dupComp.total === statsA.duplicateCompanies, 'Duplicate Companies detail total matches stats');
-    assert(dupComp.records.length === 1, 'Duplicate Companies returns 1 normalized duplicate group');
-    assert(dupComp.records[0].normalizedName === 'stripe', 'Duplicate group normalized name is "stripe"');
-    assert(dupComp.records[0].rawVariations.includes('Stripe') && dupComp.records[0].rawVariations.includes('Stripe Inc'), 'Duplicate group lists both "Stripe" and "Stripe Inc"');
+    assert(dupComp.records.length === 2, 'Duplicate Companies returns 2 companies with multiple contacts');
+    const compNames = dupComp.records.map((r) => r.companyName);
+    assert(compNames.includes('Stripe') && compNames.includes('Terminal Tech'), 'Duplicate companies include Stripe and Terminal Tech');
 
     // 3. AI Search Pending
     const classPending = getClassificationPendingList({ batchId: batchAId });
