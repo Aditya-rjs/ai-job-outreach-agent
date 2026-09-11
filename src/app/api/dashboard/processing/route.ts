@@ -9,6 +9,13 @@ import {
   getGenerationRetryList,
   getGenerationFailedList,
   getReadyToSendList,
+  getCompaniesFoundList,
+  getDuplicateCompaniesList,
+  getAiProcessedList,
+  getIrrelevantCompaniesList,
+  getCsItRelevantList,
+  getContactsFoundList,
+  getDuplicateContactsList,
 } from '@/lib/processing-queries';
 
 let initialized = false;
@@ -43,7 +50,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const category = searchParams.get('category') || 'classification-pending';
+    const category = searchParams.get('category') || 'companies-found';
     const search = searchParams.get('search') || '';
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
     const limit = Math.max(1, Math.min(parseInt(searchParams.get('limit') || '25', 10), 200));
@@ -54,6 +61,18 @@ export async function GET(request: NextRequest) {
     if (currentBatchId) {
       const options = { batchId: currentBatchId, search, page, limit };
       switch (category) {
+        case 'companies-found': {
+          const res = getCompaniesFoundList(options);
+          records = res.records;
+          total = res.total;
+          break;
+        }
+        case 'duplicate-companies': {
+          const res = getDuplicateCompaniesList(options);
+          records = res.records;
+          total = res.total;
+          break;
+        }
         case 'classification-pending': {
           const res = getClassificationPendingList(options);
           records = res.records;
@@ -62,6 +81,36 @@ export async function GET(request: NextRequest) {
         }
         case 'classification-retry-waiting': {
           const res = getClassificationRetryWaitingList(options);
+          records = res.records;
+          total = res.total;
+          break;
+        }
+        case 'ai-processed': {
+          const res = getAiProcessedList(options);
+          records = res.records;
+          total = res.total;
+          break;
+        }
+        case 'irrelevant-companies': {
+          const res = getIrrelevantCompaniesList(options);
+          records = res.records;
+          total = res.total;
+          break;
+        }
+        case 'cs-it-relevant': {
+          const res = getCsItRelevantList(options);
+          records = res.records;
+          total = res.total;
+          break;
+        }
+        case 'contacts-found': {
+          const res = getContactsFoundList(options);
+          records = res.records;
+          total = res.total;
+          break;
+        }
+        case 'duplicate-contacts': {
+          const res = getDuplicateContactsList(options);
           records = res.records;
           total = res.total;
           break;
@@ -91,7 +140,7 @@ export async function GET(request: NextRequest) {
           break;
         }
         default: {
-          const res = getClassificationPendingList(options);
+          const res = getCompaniesFoundList(options);
           records = res.records;
           total = res.total;
           break;

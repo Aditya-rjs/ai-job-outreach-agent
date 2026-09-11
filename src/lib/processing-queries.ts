@@ -119,6 +119,91 @@ export interface ReadyToSendRecord {
   status: string;
 }
 
+export interface CompanyFoundRecord {
+  companyName: string;
+  normalizedName: string;
+  contactCount: number;
+  contactEmails: string[];
+  classificationResult: string;
+  isRelevant: boolean | null;
+  confidence: number | null;
+  reason: string | null;
+  geminiModel: string | null;
+  createdAt: string;
+}
+
+export interface DuplicateCompanyRecord {
+  normalizedName: string;
+  rawVariations: string[];
+  variationCount: number;
+  contactCount: number;
+  representativeContacts: string[];
+  explanation: string;
+}
+
+export interface AiProcessedRecord {
+  companyName: string;
+  normalizedName: string;
+  contactCount: number;
+  classificationResult: string;
+  isRelevant: boolean | null;
+  confidence: number | null;
+  reason: string | null;
+  source: string;
+  geminiModel: string | null;
+  processedAt: string;
+}
+
+export interface IrrelevantCompanyRecord {
+  companyName: string;
+  normalizedName: string;
+  contactCount: number;
+  confidence: number | null;
+  reason: string | null;
+  source: string;
+  geminiModel: string | null;
+}
+
+export interface CsItRelevantRecord {
+  companyName: string;
+  normalizedName: string;
+  canonicalName: string | null;
+  contactCount: number;
+  confidence: number | null;
+  reason: string | null;
+  source: string;
+  geminiModel: string | null;
+}
+
+export interface ContactFoundRecord {
+  id: string;
+  contactName: string | null;
+  companyName: string | null;
+  email: string;
+  designation: string | null;
+  companyWebsite: string | null;
+  companyLocation: string | null;
+  isRelevant: boolean | null;
+  isDuplicate: boolean;
+  emailValid: boolean;
+  status: string;
+  generationStatus: string | null;
+  batchFilename: string;
+  createdAt: string;
+}
+
+export interface DuplicateContactRecord {
+  id: string;
+  contactName: string | null;
+  companyName: string | null;
+  email: string;
+  designation: string | null;
+  status: string;
+  batchFilename: string;
+  duplicateReason: string;
+  createdAt: string;
+}
+
 export interface ProcessingPaginationOptions {
   batchId?: string;
   search?: string;
@@ -1101,4 +1186,620 @@ export function getReadyToSendList(opts: ProcessingPaginationOptions = {}): {
   `);
 
   return { records: rows, total };
+}
+
+// ---------------------------------------------------------------------------
+// 7. COMPANIES FOUND (All Unique Raw Companies In Batch)
+// ---------------------------------------------------------------------------
+
+export function getCompaniesFoundList(opts: ProcessingPaginationOptions = {}): {
+  records: CompanyFoundRecord[];
+  total: number;
+} {
+  const db = getDb();
+  const activeBatchId = opts.batchId || getLatestActiveBatch(db)?.id;
+  if (!activeBatchId) return { records: [], total: 0 };
+
+  const search = (opts.search || '').trim().toLowerCase();
+  const page = Math.max(1, opts.page || 1);
+  const limit = Math.max(1, Math.min(opts.limit || 25, 200));
+  const offset = (page - 1) * limit;
+
+  const searchClause = search
+    ? sql`AND (LOWER(TRIM(c.company_name)) LIKE ${`%${search}%`} OR LOWER(c.contact_name) LIKE ${`%${search}%`} OR LOWER(c.email) LIKE ${`%${search}%`})`
+    : sql``;
+
+  const countRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(DISTINCT TRIM(c.company_name)) as count
+    FROM contacts c
+    WHERE c.batch_id = ${activeBatchId}
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      ${searchClause}
+  `);
+  const total = countRow?.count ?? 0;
+
+  const rows = db.all<{
+    rawCompanyName: string;
+    normalizedName: string;
+    contactCount: number;
+    contactEmailsStr: string | null;
+    classificationResult: string;
+    isRelevant: number | null;
+    confidence: number | null;
+    reason: string | null;
+    geminiModel: string | null;
+    createdAt: string;
+  }>(sql`
+    SELECT
+      TRIM(c.company_name) as rawCompanyName,
+      LOWER(TRIM(c.company_name)) as normalizedName,
+      COUNT(DISTINCT c.id) as contactCount,
+      GROUP_CONCAT(DISTINCT c.email) as contactEmailsStr,
+      COALESCE(cc.classification_result, CASE WHEN c.is_relevant = 1 THEN 'RELEVANT' WHEN c.is_relevant = 0 THEN 'IRRELEVANT' ELSE 'PENDING' END) as classificationResult,
+      c.is_relevant as isRelevant,
+      cc.confidence,
+      cc.reason,
+      cc.gemini_model as geminiModel,
+      COALESCE(MIN(c.created_at), datetime('now')) as createdAt
+    FROM contacts c
+    LEFT JOIN company_classifications cc ON (
+      cc.normalized_name = LOWER(TRIM(c.company_name))
+      OR cc.company_name = c.company_name
+      OR cc.company_name = TRIM(c.company_name)
+    )
+    WHERE c.batch_id = ${activeBatchId}
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      ${searchClause}
+    GROUP BY TRIM(c.company_name)
+    ORDER BY contactCount DESC, rawCompanyName ASC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  const records: CompanyFoundRecord[] = rows.map((r) => ({
+    companyName: r.rawCompanyName,
+    normalizedName: r.normalizedName,
+    contactCount: r.contactCount,
+    contactEmails: r.contactEmailsStr ? r.contactEmailsStr.split(',').filter(Boolean) : [],
+    classificationResult: r.classificationResult,
+    isRelevant: r.isRelevant === 1 ? true : r.isRelevant === 0 ? false : null,
+    confidence: r.confidence,
+    reason: r.reason,
+    geminiModel: r.geminiModel,
+    createdAt: r.createdAt,
+  }));
+
+  return { records, total };
+}
+
+// ---------------------------------------------------------------------------
+// 8. DUPLICATE COMPANIES (Raw Variants Resolving to Same Entity)
+// ---------------------------------------------------------------------------
+
+export function getDuplicateCompaniesList(opts: ProcessingPaginationOptions = {}): {
+  records: DuplicateCompanyRecord[];
+  total: number;
+} {
+  const db = getDb();
+  const activeBatchId = opts.batchId || getLatestActiveBatch(db)?.id;
+  if (!activeBatchId) return { records: [], total: 0 };
+
+  const search = (opts.search || '').trim().toLowerCase();
+  const page = Math.max(1, opts.page || 1);
+  const limit = Math.max(1, Math.min(opts.limit || 25, 200));
+  const offset = (page - 1) * limit;
+
+  const companyRows = db.all<{ rawCompany: string }>(sql`
+    SELECT DISTINCT TRIM(company_name) as rawCompany
+    FROM contacts
+    WHERE batch_id = ${activeBatchId}
+      AND company_name IS NOT NULL
+      AND TRIM(company_name) != ''
+  `);
+
+  const normMap = new Map<string, string[]>();
+  for (const r of companyRows) {
+    const norm = normalizeCompanyName(r.rawCompany);
+    if (norm) {
+      if (!normMap.has(norm)) {
+        normMap.set(norm, []);
+      }
+      normMap.get(norm)!.push(r.rawCompany);
+    }
+  }
+
+  const duplicateGroups: { normalizedName: string; rawVariations: string[] }[] = [];
+  let totalDuplicateCount = 0;
+
+  for (const [norm, rawVars] of normMap.entries()) {
+    if (rawVars.length > 1) {
+      totalDuplicateCount += (rawVars.length - 1);
+      duplicateGroups.push({ normalizedName: norm, rawVariations: rawVars });
+    }
+  }
+
+  const filteredGroups = search
+    ? duplicateGroups.filter(
+        (g) =>
+          g.normalizedName.includes(search) ||
+          g.rawVariations.some((v) => v.toLowerCase().includes(search))
+      )
+    : duplicateGroups;
+
+  const total = search ? filteredGroups.reduce((acc, g) => acc + (g.rawVariations.length - 1), 0) : totalDuplicateCount;
+  const pagedGroups = filteredGroups.slice(offset, offset + limit);
+
+  const records: DuplicateCompanyRecord[] = [];
+  for (const group of pagedGroups) {
+    const contactRows = db.all<{ contactName: string | null; email: string }>(sql`
+      SELECT c.contact_name as contactName, c.email
+      FROM contacts c
+      WHERE c.batch_id = ${activeBatchId}
+        AND c.company_name IS NOT NULL
+        AND LOWER(TRIM(c.company_name)) IN (${sql.join(group.rawVariations.map(v => sql`${v.toLowerCase()}`), sql`, `)})
+      LIMIT 10
+    `);
+
+    const contactCountRow = db.get<{ count: number }>(sql`
+      SELECT COUNT(c.id) as count
+      FROM contacts c
+      WHERE c.batch_id = ${activeBatchId}
+        AND c.company_name IS NOT NULL
+        AND LOWER(TRIM(c.company_name)) IN (${sql.join(group.rawVariations.map(v => sql`${v.toLowerCase()}`), sql`, `)})
+    `);
+
+    const representativeContacts = contactRows.map((c) =>
+      c.contactName ? `${c.contactName} — ${c.email}` : c.email
+    );
+
+    records.push({
+      normalizedName: group.normalizedName,
+      rawVariations: group.rawVariations,
+      variationCount: group.rawVariations.length,
+      contactCount: contactCountRow?.count ?? 0,
+      representativeContacts,
+      explanation: `${group.rawVariations.length} raw company name variants in this batch map to the single normalized entity "${group.normalizedName}".`,
+    });
+  }
+
+  return { records, total };
+}
+
+// ---------------------------------------------------------------------------
+// 9. AI PROCESSED (Terminal Classification Status Reached)
+// ---------------------------------------------------------------------------
+
+export function getAiProcessedList(opts: ProcessingPaginationOptions = {}): {
+  records: AiProcessedRecord[];
+  total: number;
+} {
+  const db = getDb();
+  const activeBatchId = opts.batchId || getLatestActiveBatch(db)?.id;
+  if (!activeBatchId) return { records: [], total: 0 };
+
+  const search = (opts.search || '').trim().toLowerCase();
+  const page = Math.max(1, opts.page || 1);
+  const limit = Math.max(1, Math.min(opts.limit || 25, 200));
+  const offset = (page - 1) * limit;
+
+  const searchClause = search
+    ? sql`AND (LOWER(TRIM(c.company_name)) LIKE ${`%${search}%`} OR LOWER(c.contact_name) LIKE ${`%${search}%`} OR LOWER(c.email) LIKE ${`%${search}%`})`
+    : sql``;
+
+  const countRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(DISTINCT LOWER(TRIM(c.company_name))) as count
+    FROM contacts c
+    LEFT JOIN company_classifications cc ON (
+      cc.normalized_name = LOWER(TRIM(c.company_name))
+      OR cc.company_name = c.company_name
+      OR cc.company_name = TRIM(c.company_name)
+    )
+    WHERE c.batch_id = ${activeBatchId}
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      AND (
+        cc.classification_result IN ('RELEVANT', 'IRRELEVANT', 'NEEDS_REVIEW', 'FAILED')
+        OR (cc.classification_result IS NULL AND c.is_relevant IS NOT NULL)
+      )
+      ${searchClause}
+  `);
+  const total = countRow?.count ?? 0;
+
+  const rows = db.all<{
+    companyName: string;
+    normalizedName: string;
+    contactCount: number;
+    classificationResult: string;
+    isRelevant: number | null;
+    confidence: number | null;
+    reason: string | null;
+    source: string | null;
+    geminiModel: string | null;
+    processedAt: string;
+  }>(sql`
+    SELECT
+      COALESCE(cc.company_name, TRIM(c.company_name)) as companyName,
+      LOWER(TRIM(c.company_name)) as normalizedName,
+      COUNT(DISTINCT c.id) as contactCount,
+      COALESCE(cc.classification_result, CASE WHEN c.is_relevant = 1 THEN 'RELEVANT' WHEN c.is_relevant = 0 THEN 'IRRELEVANT' ELSE 'NEEDS_REVIEW' END) as classificationResult,
+      c.is_relevant as isRelevant,
+      cc.confidence,
+      cc.reason,
+      COALESCE(cc.classification_source, 'gemini') as source,
+      cc.gemini_model as geminiModel,
+      COALESCE(cc.updated_at, MAX(c.updated_at), datetime('now')) as processedAt
+    FROM contacts c
+    LEFT JOIN company_classifications cc ON (
+      cc.normalized_name = LOWER(TRIM(c.company_name))
+      OR cc.company_name = c.company_name
+      OR cc.company_name = TRIM(c.company_name)
+    )
+    WHERE c.batch_id = ${activeBatchId}
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      AND (
+        cc.classification_result IN ('RELEVANT', 'IRRELEVANT', 'NEEDS_REVIEW', 'FAILED')
+        OR (cc.classification_result IS NULL AND c.is_relevant IS NOT NULL)
+      )
+      ${searchClause}
+    GROUP BY LOWER(TRIM(c.company_name))
+    ORDER BY contactCount DESC, companyName ASC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  const records: AiProcessedRecord[] = rows.map((r) => ({
+    companyName: r.companyName,
+    normalizedName: r.normalizedName,
+    contactCount: r.contactCount,
+    classificationResult: r.classificationResult,
+    isRelevant: r.isRelevant === 1 ? true : r.isRelevant === 0 ? false : null,
+    confidence: r.confidence,
+    reason: r.reason,
+    source: r.source || 'gemini',
+    geminiModel: r.geminiModel,
+    processedAt: r.processedAt,
+  }));
+
+  return { records, total };
+}
+
+// ---------------------------------------------------------------------------
+// 10. IRRELEVANT COMPANIES (CS/IT Irrelevant)
+// ---------------------------------------------------------------------------
+
+export function getIrrelevantCompaniesList(opts: ProcessingPaginationOptions = {}): {
+  records: IrrelevantCompanyRecord[];
+  total: number;
+} {
+  const db = getDb();
+  const activeBatchId = opts.batchId || getLatestActiveBatch(db)?.id;
+  if (!activeBatchId) return { records: [], total: 0 };
+
+  const search = (opts.search || '').trim().toLowerCase();
+  const page = Math.max(1, opts.page || 1);
+  const limit = Math.max(1, Math.min(opts.limit || 25, 200));
+  const offset = (page - 1) * limit;
+
+  const searchClause = search
+    ? sql`AND (LOWER(TRIM(c.company_name)) LIKE ${`%${search}%`} OR LOWER(c.contact_name) LIKE ${`%${search}%`} OR LOWER(c.email) LIKE ${`%${search}%`})`
+    : sql``;
+
+  const countRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(DISTINCT LOWER(TRIM(c.company_name))) as count
+    FROM contacts c
+    LEFT JOIN company_classifications cc ON (
+      cc.normalized_name = LOWER(TRIM(c.company_name))
+      OR cc.company_name = c.company_name
+      OR cc.company_name = TRIM(c.company_name)
+    )
+    WHERE c.batch_id = ${activeBatchId}
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      AND (
+        cc.classification_result = 'IRRELEVANT'
+        OR (cc.classification_result IS NULL AND c.is_relevant = 0)
+      )
+      ${searchClause}
+  `);
+  const total = countRow?.count ?? 0;
+
+  const rows = db.all<{
+    companyName: string;
+    normalizedName: string;
+    contactCount: number;
+    confidence: number | null;
+    reason: string | null;
+    source: string | null;
+    geminiModel: string | null;
+  }>(sql`
+    SELECT
+      COALESCE(cc.company_name, TRIM(c.company_name)) as companyName,
+      LOWER(TRIM(c.company_name)) as normalizedName,
+      COUNT(DISTINCT c.id) as contactCount,
+      cc.confidence,
+      COALESCE(cc.reason, c.relevance_reason) as reason,
+      COALESCE(cc.classification_source, 'gemini') as source,
+      cc.gemini_model as geminiModel
+    FROM contacts c
+    LEFT JOIN company_classifications cc ON (
+      cc.normalized_name = LOWER(TRIM(c.company_name))
+      OR cc.company_name = c.company_name
+      OR cc.company_name = TRIM(c.company_name)
+    )
+    WHERE c.batch_id = ${activeBatchId}
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      AND (
+        cc.classification_result = 'IRRELEVANT'
+        OR (cc.classification_result IS NULL AND c.is_relevant = 0)
+      )
+      ${searchClause}
+    GROUP BY LOWER(TRIM(c.company_name))
+    ORDER BY contactCount DESC, companyName ASC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  const records: IrrelevantCompanyRecord[] = rows.map((r) => ({
+    companyName: r.companyName,
+    normalizedName: r.normalizedName,
+    contactCount: r.contactCount,
+    confidence: r.confidence,
+    reason: r.reason,
+    source: r.source || 'gemini',
+    geminiModel: r.geminiModel,
+  }));
+
+  return { records, total };
+}
+
+// ---------------------------------------------------------------------------
+// 11. CS/IT RELEVANT (Confirmed Relevant Companies)
+// ---------------------------------------------------------------------------
+
+export function getCsItRelevantList(opts: ProcessingPaginationOptions = {}): {
+  records: CsItRelevantRecord[];
+  total: number;
+} {
+  const db = getDb();
+  const activeBatchId = opts.batchId || getLatestActiveBatch(db)?.id;
+  if (!activeBatchId) return { records: [], total: 0 };
+
+  const search = (opts.search || '').trim().toLowerCase();
+  const page = Math.max(1, opts.page || 1);
+  const limit = Math.max(1, Math.min(opts.limit || 25, 200));
+  const offset = (page - 1) * limit;
+
+  const searchClause = search
+    ? sql`AND (LOWER(TRIM(c.company_name)) LIKE ${`%${search}%`} OR LOWER(c.contact_name) LIKE ${`%${search}%`} OR LOWER(c.email) LIKE ${`%${search}%`})`
+    : sql``;
+
+  const countRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(DISTINCT LOWER(TRIM(c.company_name))) as count
+    FROM contacts c
+    LEFT JOIN company_classifications cc ON (
+      cc.normalized_name = LOWER(TRIM(c.company_name))
+      OR cc.company_name = c.company_name
+      OR cc.company_name = TRIM(c.company_name)
+    )
+    WHERE c.batch_id = ${activeBatchId}
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      AND (
+        cc.classification_result = 'RELEVANT'
+        OR (cc.classification_result IS NULL AND c.is_relevant = 1)
+      )
+      ${searchClause}
+  `);
+  const total = countRow?.count ?? 0;
+
+  const rows = db.all<{
+    companyName: string;
+    normalizedName: string;
+    contactCount: number;
+    confidence: number | null;
+    reason: string | null;
+    source: string | null;
+    geminiModel: string | null;
+  }>(sql`
+    SELECT
+      COALESCE(cc.company_name, TRIM(c.company_name)) as companyName,
+      LOWER(TRIM(c.company_name)) as normalizedName,
+      COUNT(DISTINCT c.id) as contactCount,
+      cc.confidence,
+      COALESCE(cc.reason, c.relevance_reason) as reason,
+      COALESCE(cc.classification_source, 'gemini') as source,
+      cc.gemini_model as geminiModel
+    FROM contacts c
+    LEFT JOIN company_classifications cc ON (
+      cc.normalized_name = LOWER(TRIM(c.company_name))
+      OR cc.company_name = c.company_name
+      OR cc.company_name = TRIM(c.company_name)
+    )
+    WHERE c.batch_id = ${activeBatchId}
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      AND (
+        cc.classification_result = 'RELEVANT'
+        OR (cc.classification_result IS NULL AND c.is_relevant = 1)
+      )
+      ${searchClause}
+    GROUP BY LOWER(TRIM(c.company_name))
+    ORDER BY contactCount DESC, companyName ASC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  const records: CsItRelevantRecord[] = rows.map((r) => ({
+    companyName: r.companyName,
+    normalizedName: r.normalizedName,
+    canonicalName: null,
+    contactCount: r.contactCount,
+    confidence: r.confidence,
+    reason: r.reason,
+    source: r.source || 'gemini',
+    geminiModel: r.geminiModel,
+  }));
+
+  return { records, total };
+}
+
+// ---------------------------------------------------------------------------
+// 12. CONTACTS FOUND (All Imported Contacts In Batch)
+// ---------------------------------------------------------------------------
+
+export function getContactsFoundList(opts: ProcessingPaginationOptions = {}): {
+  records: ContactFoundRecord[];
+  total: number;
+} {
+  const db = getDb();
+  const activeBatchId = opts.batchId || getLatestActiveBatch(db)?.id;
+  if (!activeBatchId) return { records: [], total: 0 };
+
+  const search = (opts.search || '').trim().toLowerCase();
+  const page = Math.max(1, opts.page || 1);
+  const limit = Math.max(1, Math.min(opts.limit || 25, 200));
+  const offset = (page - 1) * limit;
+
+  const searchClause = search
+    ? sql`AND (LOWER(c.contact_name) LIKE ${`%${search}%`} OR LOWER(c.email) LIKE ${`%${search}%`} OR LOWER(c.company_name) LIKE ${`%${search}%`} OR LOWER(COALESCE(c.designation, '')) LIKE ${`%${search}%`})`
+    : sql``;
+
+  const countRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(c.id) as count
+    FROM contacts c
+    WHERE c.batch_id = ${activeBatchId}
+      ${searchClause}
+  `);
+  const total = countRow?.count ?? 0;
+
+  const rows = db.all<{
+    id: string;
+    contactName: string | null;
+    companyName: string | null;
+    email: string;
+    designation: string | null;
+    companyWebsite: string | null;
+    companyLocation: string | null;
+    isRelevant: number | null;
+    isDuplicate: number;
+    emailValid: number;
+    status: string;
+    generationStatus: string | null;
+    batchFilename: string;
+    createdAt: string;
+  }>(sql`
+    SELECT
+      c.id,
+      c.contact_name as contactName,
+      c.company_name as companyName,
+      c.email,
+      c.designation,
+      c.company_website as companyWebsite,
+      c.company_location as companyLocation,
+      c.is_relevant as isRelevant,
+      c.is_duplicate as isDuplicate,
+      c.email_valid as emailValid,
+      c.status,
+      c.generation_status as generationStatus,
+      b.filename as batchFilename,
+      c.created_at as createdAt
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    WHERE c.batch_id = ${activeBatchId}
+      ${searchClause}
+    ORDER BY c.created_at ASC, c.id ASC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  const records: ContactFoundRecord[] = rows.map((r) => ({
+    id: r.id,
+    contactName: r.contactName,
+    companyName: r.companyName,
+    email: r.email,
+    designation: r.designation,
+    companyWebsite: r.companyWebsite,
+    companyLocation: r.companyLocation,
+    isRelevant: r.isRelevant === 1 ? true : r.isRelevant === 0 ? false : null,
+    isDuplicate: Boolean(r.isDuplicate),
+    emailValid: Boolean(r.emailValid),
+    status: r.status,
+    generationStatus: r.generationStatus,
+    batchFilename: r.batchFilename,
+    createdAt: r.createdAt,
+  }));
+
+  return { records, total };
+}
+
+// ---------------------------------------------------------------------------
+// 13. DUPLICATE CONTACTS (Duplicate In Batch / Pre-Contacted)
+// ---------------------------------------------------------------------------
+
+export function getDuplicateContactsList(opts: ProcessingPaginationOptions = {}): {
+  records: DuplicateContactRecord[];
+  total: number;
+} {
+  const db = getDb();
+  const activeBatchId = opts.batchId || getLatestActiveBatch(db)?.id;
+  if (!activeBatchId) return { records: [], total: 0 };
+
+  const search = (opts.search || '').trim().toLowerCase();
+  const page = Math.max(1, opts.page || 1);
+  const limit = Math.max(1, Math.min(opts.limit || 25, 200));
+  const offset = (page - 1) * limit;
+
+  const searchClause = search
+    ? sql`AND (LOWER(c.contact_name) LIKE ${`%${search}%`} OR LOWER(c.email) LIKE ${`%${search}%`} OR LOWER(c.company_name) LIKE ${`%${search}%`})`
+    : sql``;
+
+  const countRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(c.id) as count
+    FROM contacts c
+    WHERE c.batch_id = ${activeBatchId}
+      AND c.is_duplicate = 1
+      ${searchClause}
+  `);
+  const total = countRow?.count ?? 0;
+
+  const rows = db.all<{
+    id: string;
+    contactName: string | null;
+    companyName: string | null;
+    email: string;
+    designation: string | null;
+    status: string;
+    batchFilename: string;
+    createdAt: string;
+  }>(sql`
+    SELECT
+      c.id,
+      c.contact_name as contactName,
+      c.company_name as companyName,
+      c.email,
+      c.designation,
+      c.status,
+      b.filename as batchFilename,
+      c.created_at as createdAt
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    WHERE c.batch_id = ${activeBatchId}
+      AND c.is_duplicate = 1
+      ${searchClause}
+    ORDER BY c.created_at ASC, c.id ASC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+
+  const records: DuplicateContactRecord[] = rows.map((r) => ({
+    id: r.id,
+    contactName: r.contactName,
+    companyName: r.companyName,
+    email: r.email,
+    designation: r.designation,
+    status: r.status,
+    batchFilename: r.batchFilename,
+    duplicateReason: 'Duplicate email address detected during batch ingestion',
+    createdAt: r.createdAt,
+  }));
+
+  return { records, total };
 }
