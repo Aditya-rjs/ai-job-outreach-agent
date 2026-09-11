@@ -15,6 +15,7 @@
 import { getDb } from '@/db';
 import { contacts, batches, outreachQueue, globalEmailHistory } from '@/db/schema';
 import { inArray, sql } from 'drizzle-orm';
+import { isBatchClassificationComplete } from '@/lib/pipeline/classification-reconciler';
 
 export const HISTORICAL_17_TARGET_IDS = [
   'cont_01M1Q66YM4BQQK6MNFSA4FKM08',
@@ -199,6 +200,9 @@ export function executeHistorical17Recovery(
         }
         if (!validBatchIds.has(row.batchId)) {
           throw new Error(`PRECONDITION_FAILED:parent_batch_invalid_or_deleted:${row.id}`);
+        }
+        if (!isBatchClassificationComplete(tx as unknown as ReturnType<typeof getDb>, row.batchId)) {
+          throw new Error(`PRECONDITION_FAILED:classification_incomplete:${row.batchId}`);
         }
         if (sentEmails.has(row.email.trim().toLowerCase())) {
           throw new Error(`PRECONDITION_FAILED:global_email_history_sent_conflict:${row.id}`);

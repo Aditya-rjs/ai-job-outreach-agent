@@ -314,19 +314,25 @@ export function ProcessingPipelineSection({
                 </p>
               </div>
               {((stats?.aiSearchPending ?? 0) > 0 || (stats?.aiSearchRetry ?? 0) > 0) ? (
-                <span className="rounded-full px-1.5 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
+                <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
                   Blocked
                 </span>
-              ) : (
-                <span className="rounded-full px-1.5 py-0.5 text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-300 shrink-0">
+              ) : (stats?.emailsGenerating ?? 0) > 0 ? (
+                <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-300 shrink-0">
                   Active
+                </span>
+              ) : (
+                <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-muted text-muted-foreground border border-border shrink-0">
+                  Idle
                 </span>
               )}
             </div>
             <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
               {((stats?.aiSearchPending ?? 0) > 0 || (stats?.aiSearchRetry ?? 0) > 0)
                 ? 'Classification incomplete'
-                : 'Generating emails'}
+                : (stats?.emailsGenerating ?? 0) > 0
+                  ? 'Generating emails'
+                  : 'All emails generated'}
             </p>
           </div>
         </div>
@@ -348,18 +354,32 @@ export function ProcessingPipelineSection({
               <span
                 className={cn(
                   'rounded-full px-2 py-0.5 text-[10px] font-bold shrink-0',
-                  (stats?.emailsGenerating ?? 0) > 0 && (stats?.generationRetry ?? 0) > 0
+                  ((stats?.aiSearchPending ?? 0) > 0 || (stats?.aiSearchRetry ?? 0) > 0)
                     ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                    : 'bg-orange-100 text-orange-800 border border-orange-300'
+                    : (stats?.emailsGenerating ?? 0) > 0 && (stats?.generationRetry ?? 0) > 0
+                      ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                      : (stats?.generationRetry ?? 0) > 0
+                        ? 'bg-orange-100 text-orange-800 border border-orange-300'
+                        : 'bg-muted text-muted-foreground border border-border'
                 )}
               >
-                {(stats?.emailsGenerating ?? 0) > 0 && (stats?.generationRetry ?? 0) > 0
-                  ? 'Waiting'
-                  : 'Eligible'}
+                {((stats?.aiSearchPending ?? 0) > 0 || (stats?.aiSearchRetry ?? 0) > 0)
+                  ? 'Blocked'
+                  : (stats?.emailsGenerating ?? 0) > 0 && (stats?.generationRetry ?? 0) > 0
+                    ? 'Waiting'
+                    : (stats?.generationRetry ?? 0) > 0
+                      ? 'Eligible'
+                      : 'Idle'}
               </span>
             </div>
             <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
-              Generation retries in progress
+              {((stats?.aiSearchPending ?? 0) > 0 || (stats?.aiSearchRetry ?? 0) > 0)
+                ? 'Classification incomplete'
+                : (stats?.emailsGenerating ?? 0) > 0 && (stats?.generationRetry ?? 0) > 0
+                  ? 'Waiting for active pass'
+                  : (stats?.generationRetry ?? 0) > 0
+                    ? 'Generation retries eligible'
+                    : 'No retries pending'}
             </p>
           </div>
 
@@ -378,16 +398,24 @@ export function ProcessingPipelineSection({
               <span
                 className={cn(
                   'rounded-full px-2 py-0.5 text-[10px] font-bold border shrink-0',
-                  (stats?.generationFailed ?? 0) > 0
-                    ? 'bg-red-100 text-red-800 border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800'
-                    : 'bg-muted text-muted-foreground border-border'
+                  ((stats?.aiSearchPending ?? 0) > 0 || (stats?.aiSearchRetry ?? 0) > 0)
+                    ? 'bg-amber-100 text-amber-800 border-amber-300'
+                    : (stats?.generationFailed ?? 0) > 0
+                      ? 'bg-red-100 text-red-800 border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800'
+                      : 'bg-muted text-muted-foreground border-border'
                 )}
               >
-                Terminal
+                {((stats?.aiSearchPending ?? 0) > 0 || (stats?.aiSearchRetry ?? 0) > 0)
+                  ? 'Blocked'
+                  : (stats?.generationFailed ?? 0) > 0
+                    ? 'Terminal'
+                    : 'None'}
               </span>
             </div>
             <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
-              Permanent generation failure
+              {((stats?.aiSearchPending ?? 0) > 0 || (stats?.aiSearchRetry ?? 0) > 0)
+                ? 'Classification incomplete'
+                : 'Permanent generation failure'}
             </p>
           </div>
 

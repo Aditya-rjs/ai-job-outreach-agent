@@ -41,6 +41,8 @@ import { acquireNextEligibleJob } from '../src/lib/scheduler/queue-manager';
 import { getProcessingPipelineStats } from '../src/lib/processing-queries';
 import { saveCandidateProfile } from '../src/lib/candidate-profile/candidate-profile-service';
 import { POST as generateApiRoute } from '../src/app/api/generate/route';
+import { POST as regenerateApiRoute } from '../src/app/api/contacts/[id]/regenerate/route';
+import { executeHistorical17Recovery } from '../src/lib/pipeline/historical-recovery';
 import { NextRequest } from 'next/server';
 
 async function runBarrierVerificationTests() {
@@ -571,6 +573,276 @@ async function runBarrierVerificationTests() {
   assert.strictEqual(emptyStats.generationFailed, 0);
   assert.strictEqual(emptyStats.readyToSend, 0);
   console.log('✓ TEST 11 PASSED: Zero state returns 0 for all 13 metrics\n');
+
+  // -------------------------------------------------------------------------
+  // TEST 12: Incomplete classification blocks entire generation processing stage:
+  // - Pending generation blocked
+  // - Generation retry execution blocked
+  // - Generation failure recovery blocked
+  // -------------------------------------------------------------------------
+  console.log('TEST 12: Incomplete classification gates entire generation stage (pending, retry, failure recovery)...');
+  const batch12Id = 'batch-test-12-gating';
+  db.insert(batches).values({
+    id: batch12Id,
+    filename: 'batch12_gating.csv',
+    uploadDate: new Date().toISOString(),
+    status: 'processing',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  // Contact 12-A: Fresh pending generation
+  db.insert(contacts).values({
+    id: 'c12-pending',
+    batchId: batch12Id,
+    companyName: 'Incomplete Systems',
+    contactName: 'Incomplete Pending User',
+    email: 'pending_user@incompletesys.com',
+    isRelevant: true,
+    emailValid: true,
+    isDuplicate: false,
+    status: 'discovered',
+    generationStatus: 'PENDING_GENERATION',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  // Contact 12-B: Existing RETRY_PENDING record
+  db.insert(contacts).values({
+    id: 'c12-retry',
+    batchId: batch12Id,
+    companyName: 'Incomplete Systems',
+    contactName: 'Incomplete Retry User',
+    email: 'retry_user@incompletesys.com',
+    isRelevant: true,
+    emailValid: true,
+    isDuplicate: false,
+    status: 'queued',
+    generationStatus: 'RETRY_PENDING',
+    generationAttemptCount: 1,
+    retryTurnConsumedMs: 25000,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  // Contact 12-C: Existing GENERATION_FAILED record
+  db.insert(contacts).values({
+    id: 'c12-failed',
+    batchId: batch12Id,
+    companyName: 'Incomplete Systems',
+    contactName: 'Incomplete Failed User',
+    email: 'failed_user@incompletesys.com',
+    isRelevant: true,
+    emailValid: true,
+    isDuplicate: false,
+    status: 'failed',
+    generationStatus: 'GENERATION_FAILED',
+    errorMessage: 'Quota exhausted',
+    generationAttemptCount: 5,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  // Company is PENDING classification
+  db.insert(companyClassifications).values({
+    normalizedName: 'incomplete systems',
+    companyName: 'Incomplete Systems',
+    reason: 'Evaluating domain',
+    classificationResult: 'PENDING',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  assert.strictEqual(isBatchClassificationComplete(db, batch12Id), false, 'Batch 12 must be classification incomplete');
+
+  // 1. Pending generation is blocked
+  assert.strictEqual(hasActiveFreshPendingGeneration(db, batch12Id), false, 'hasActiveFreshPendingGeneration must return false');
+
+  // 2. Round state reports 0 active and 0 retry waiting for batch
+  const roundState12 = getGenerationRoundState(db, batch12Id);
+  assert.strictEqual(roundState12.activePendingCount, 0, 'Round state active count must be 0');
+  assert.strictEqual(roundState12.retryWaitingCount, 0, 'Round state retry waiting count must be 0');
+  assert.strictEqual(roundState12.isCurrentRoundDrained, false, 'Current round must not be marked drained when blocked');
+
+  // 3. Reconciler does not process fresh OR retry contacts
+  const reconcileResult12 = await reconcilePendingEmailGenerations({
+    batchId: batch12Id,
+    aiCallerOverride: async () => 'Subject: Test\n\nTest body',
+  });
+  assert.strictEqual(reconcileResult12.processed, 0, 'reconcile must process 0 contacts');
+  assert.strictEqual(reconcileResult12.skippedReason, 'CLASSIFICATION_INCOMPLETE', 'skippedReason must be CLASSIFICATION_INCOMPLETE');
+
+  // 4. Contact regenerate API route rejects with 400
+  const regenReq = new NextRequest('http://localhost:3000/api/contacts/c12-retry/regenerate', { method: 'POST' });
+  const regenRes = await regenerateApiRoute(regenReq, { params: Promise.resolve({ id: 'c12-retry' }) });
+  assert.strictEqual(regenRes.status, 400, 'Regenerate API must reject with 400 when classification incomplete');
+
+  // 5. Historical / failure recovery rejects because classification is incomplete
+  const recoveryResult = executeHistorical17Recovery(db, ['c12-failed']);
+  assert.strictEqual(recoveryResult.success, false, 'Recovery must fail for batch with incomplete classification');
+  assert.strictEqual(recoveryResult.failedPrecondition, 'classification_incomplete', 'Precondition must cite classification_incomplete');
+  assert.strictEqual(recoveryResult.affectedCount, 0, 'Affected count must be 0');
+
+  // 6. Dashboard metrics: emailsGenerating = 0 (blocked), but persisted retry & failed counts intact
+  const stats12 = getProcessingPipelineStats(batch12Id);
+  assert.strictEqual(stats12.aiSearchPending, 1, 'AI Search Pending must be 1');
+  assert.strictEqual(stats12.emailsGenerating, 0, 'Emails generating must be 0 (blocked)');
+  assert.strictEqual(stats12.generationRetry, 1, 'Generation retry count must be preserved (1)');
+  assert.strictEqual(stats12.generationFailed, 1, 'Generation failed count must be preserved (1)');
+  console.log('✓ TEST 12 PASSED: Incomplete classification blocks entire generation stage\n');
+
+  // -------------------------------------------------------------------------
+  // TEST 13: Completed classification unlocks entire generation processing stage:
+  // - Generation starts normally
+  // - Generation retry resumes normally
+  // - Failure recovery proceeds normally
+  // -------------------------------------------------------------------------
+  console.log('TEST 13: Completed classification allows entire generation processing stage to proceed...');
+  const batch13Id = 'batch-test-13-complete';
+  db.insert(batches).values({
+    id: batch13Id,
+    filename: 'batch13_complete.csv',
+    uploadDate: new Date().toISOString(),
+    status: 'processing',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  // Contact 13-Retry
+  db.insert(contacts).values({
+    id: 'c13-retry',
+    batchId: batch13Id,
+    companyName: 'Finished Software',
+    contactName: 'Finished Retry User',
+    email: 'retry_user@finishedsoftware.com',
+    isRelevant: true,
+    emailValid: true,
+    isDuplicate: false,
+    status: 'queued',
+    generationStatus: 'RETRY_PENDING',
+    generationAttemptCount: 1,
+    retryTurnConsumedMs: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  // Company is fully classified as RELEVANT
+  db.insert(companyClassifications).values({
+    normalizedName: 'finished software',
+    companyName: 'Finished Software',
+    reason: 'CS/IT software company',
+    classificationResult: 'RELEVANT',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  assert.strictEqual(isBatchClassificationComplete(db, batch13Id), true, 'Batch 13 must be classification complete');
+
+  // Round state shows retryWaiting = 1 and isCurrentRoundDrained = true (ready for retry pass)
+  const roundState13 = getGenerationRoundState(db, batch13Id);
+  assert.strictEqual(roundState13.activePendingCount, 0, 'No fresh pending contacts');
+  assert.strictEqual(roundState13.retryWaitingCount, 1, 'Retry contact is waiting');
+  assert.strictEqual(roundState13.isCurrentRoundDrained, true, 'Round is drained and ready for retry');
+
+  // Reconcile pending email generations executes the retry turn
+  const reconcileResult13 = await reconcilePendingEmailGenerations({
+    batchId: batch13Id,
+    aiCallerOverride: async () => 'Subject: Finished Solutions\n\nEmail body for finished user.',
+  });
+  assert.strictEqual(reconcileResult13.processed, 1, 'Reconcile must process 1 contact in retry pass');
+  assert.strictEqual(reconcileResult13.succeeded, 1, 'Reconcile must succeed for retry contact');
+
+  // Verify contact updated to GENERATED
+  const updatedContact13 = db.select().from(contacts).where(sql`id = 'c13-retry'`).get();
+  assert.strictEqual(updatedContact13?.generationStatus, 'GENERATED', 'Contact must be transitioned to GENERATED');
+  assert.strictEqual(updatedContact13?.status, 'generated', 'Contact status must be generated');
+  assert.ok(updatedContact13?.emailSubject?.includes('Finished Solutions'), 'Subject must be populated');
+
+  // Verify presence in outreach_queue
+  const queueItem13 = db.select().from(outreachQueue).where(sql`contact_id = 'c13-retry'`).get();
+  assert.ok(queueItem13, 'Contact must be staged in outreach queue');
+  assert.strictEqual(queueItem13?.status, 'pending', 'Queue item status must be pending');
+
+  console.log('✓ TEST 13 PASSED: Completed classification unlocks retry generation\n');
+
+  // -------------------------------------------------------------------------
+  // TEST 14: Batch A incomplete + Batch B complete -> Batch isolation
+  // -------------------------------------------------------------------------
+  console.log('TEST 14: Batch A incomplete blocks its generation while Batch B complete generates normally...');
+  // Batch 12 is still incomplete (Incomplete Systems is PENDING)
+  // Create Batch 14 which is complete and has a pending generation contact
+  const batch14Id = 'batch-test-14-isolated';
+  db.insert(batches).values({
+    id: batch14Id,
+    filename: 'batch14_isolated.csv',
+    uploadDate: new Date().toISOString(),
+    status: 'processing',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  db.insert(contacts).values({
+    id: 'c14-isolated-pending',
+    batchId: batch14Id,
+    companyName: 'Isolated Tech',
+    contactName: 'Isolated Contact',
+    email: 'isolated@isolatedtech.com',
+    isRelevant: true,
+    emailValid: true,
+    isDuplicate: false,
+    status: 'discovered',
+    generationStatus: 'PENDING_GENERATION',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  db.insert(companyClassifications).values({
+    normalizedName: 'isolated tech',
+    companyName: 'Isolated Tech',
+    reason: 'Pure technology company',
+    classificationResult: 'RELEVANT',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  assert.strictEqual(isBatchClassificationComplete(db, batch12Id), false, 'Batch 12 is incomplete');
+  assert.strictEqual(isBatchClassificationComplete(db, batch14Id), true, 'Batch 14 is complete');
+
+  // Reconciler run for Batch 12 remains blocked
+  const res12 = await reconcilePendingEmailGenerations({ batchId: batch12Id });
+  assert.strictEqual(res12.processed, 0, 'Batch 12 must process 0');
+  assert.strictEqual(res12.skippedReason, 'CLASSIFICATION_INCOMPLETE');
+
+  // Reconciler run for Batch 14 succeeds
+  const res14 = await reconcilePendingEmailGenerations({
+    batchId: batch14Id,
+    aiCallerOverride: async () => 'Subject: Collaboration\n\nIsolated body.',
+  });
+  assert.strictEqual(res14.processed, 1, 'Batch 14 must process 1 contact');
+  assert.strictEqual(res14.succeeded, 1, 'Batch 14 must succeed');
+
+  const updatedC14 = db.select().from(contacts).where(sql`id = 'c14-isolated-pending'`).get();
+  assert.strictEqual(updatedC14?.generationStatus, 'GENERATED', 'Batch 14 contact must be generated');
+
+  console.log('✓ TEST 14 PASSED: Batch isolation strictly maintained\n');
+
+  // -------------------------------------------------------------------------
+  // TEST 15: Persisted Generation Retry and Generation Failed records preserved
+  // -------------------------------------------------------------------------
+  console.log('TEST 15: Existing Generation Retry and Generation Failed records remain persisted while barrier active...');
+  const c12RetryContact = db.select().from(contacts).where(sql`id = 'c12-retry'`).get();
+  assert.ok(c12RetryContact, 'c12-retry record must exist');
+  assert.strictEqual(c12RetryContact?.generationStatus, 'RETRY_PENDING', 'c12-retry generation status must remain RETRY_PENDING');
+  assert.strictEqual(c12RetryContact?.generationAttemptCount, 1, 'c12-retry attempt count must be preserved');
+  assert.strictEqual(c12RetryContact?.retryTurnConsumedMs, 25000, 'c12-retry consumed ms must be preserved');
+
+  const c12FailedContact = db.select().from(contacts).where(sql`id = 'c12-failed'`).get();
+  assert.ok(c12FailedContact, 'c12-failed record must exist');
+  assert.strictEqual(c12FailedContact?.generationStatus, 'GENERATION_FAILED', 'c12-failed generation status must remain GENERATION_FAILED');
+  assert.strictEqual(c12FailedContact?.errorMessage, 'Quota exhausted', 'c12-failed error message must be preserved');
+  assert.strictEqual(c12FailedContact?.generationAttemptCount, 5, 'c12-failed attempt count must be preserved');
+
+  console.log('✓ TEST 15 PASSED: Existing retry and failure records remain completely intact and persisted\n');
 
   console.log('======================================================================');
   console.log('ALL BARRIER AND DASHBOARD TESTS COMPLETED SUCCESSFULLY!');

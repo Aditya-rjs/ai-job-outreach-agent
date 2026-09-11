@@ -5,6 +5,7 @@ import { eq, sql } from 'drizzle-orm';
 import { initializeDatabase } from '@/db/migrate';
 import { generatePersonalizedEmail } from '@/lib/ai/email-generator';
 import { getCandidateProfile, isCandidateProfileConfigured } from '@/lib/candidate-profile/candidate-profile-service';
+import { isBatchClassificationComplete } from '@/lib/pipeline/classification-reconciler';
 import type { ApiResponse, Contact, VerifiedProfileLinks } from '@/types';
 
 let initialized = false;
@@ -45,6 +46,16 @@ export async function POST(
       return NextResponse.json(
         { success: false, error: `Contact "${id}" not found.` },
         { status: 404 }
+      );
+    }
+
+    if (!isBatchClassificationComplete(db, contact.batchId)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Cannot generate email: company classification is still pending or retrying for this file.',
+        },
+        { status: 400 }
       );
     }
 

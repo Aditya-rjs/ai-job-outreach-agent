@@ -238,7 +238,7 @@ export function getGenerationRoundState(
     return {
       activePendingCount: 0,
       retryWaitingCount: 0,
-      isCurrentRoundDrained: true,
+      isCurrentRoundDrained: false,
     };
   }
 
@@ -590,6 +590,21 @@ export async function reconcilePendingEmailGenerations(options: {
           AND generation_status = 'RETRY_PENDING'
           AND (generation_lease_expires_at IS NULL OR generation_lease_expires_at < ${nowIso})
           AND NOT EXISTS (
+            SELECT 1 FROM contacts c3
+            LEFT JOIN company_classifications cc3 ON (
+              cc3.normalized_name = LOWER(TRIM(c3.company_name))
+              OR cc3.company_name = c3.company_name
+              OR cc3.company_name = TRIM(c3.company_name)
+            )
+            WHERE c3.batch_id = contacts.batch_id
+              AND c3.company_name IS NOT NULL
+              AND TRIM(c3.company_name) != ''
+              AND (
+                cc3.classification_result IN ('PENDING', 'RETRY_WAITING')
+                OR (cc3.classification_result IS NULL AND c3.is_relevant IS NULL)
+              )
+          )
+          AND NOT EXISTS (
             SELECT 1 FROM contacts c2
             INNER JOIN batches b2 ON c2.batch_id = b2.id
             WHERE 1=1
@@ -625,6 +640,21 @@ export async function reconcilePendingEmailGenerations(options: {
             OR generation_lease_expires_at < ${nowIso}
           )
           AND (generation_status IS NULL OR generation_status != 'GENERATED')
+          AND NOT EXISTS (
+            SELECT 1 FROM contacts c3
+            LEFT JOIN company_classifications cc3 ON (
+              cc3.normalized_name = LOWER(TRIM(c3.company_name))
+              OR cc3.company_name = c3.company_name
+              OR cc3.company_name = TRIM(c3.company_name)
+            )
+            WHERE c3.batch_id = contacts.batch_id
+              AND c3.company_name IS NOT NULL
+              AND TRIM(c3.company_name) != ''
+              AND (
+                cc3.classification_result IN ('PENDING', 'RETRY_WAITING')
+                OR (cc3.classification_result IS NULL AND c3.is_relevant IS NULL)
+              )
+          )
       `);
     }
 
