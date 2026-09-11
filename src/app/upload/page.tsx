@@ -110,15 +110,39 @@ export default function UploadPage() {
         body: formData,
       });
 
-      const json = await res.json();
-
       clearTimeout(stepTimer1);
       clearTimeout(stepTimer2);
       clearTimeout(stepTimer3);
       clearTimeout(stepTimer4);
 
-      if (!res.ok || !json.success) {
-        throw new Error(json.error || 'Failed to process file.');
+      const contentType = res.headers.get('content-type') || '';
+      let json: any = null;
+      let rawText = '';
+
+      if (contentType.includes('application/json')) {
+        try {
+          json = await res.json();
+        } catch {
+          json = null;
+        }
+      } else {
+        rawText = await res.text();
+      }
+
+      if (!res.ok) {
+        if (json && json.error) {
+          throw new Error(json.error);
+        }
+        if (res.status === 502 || res.status === 504 || rawText.includes('upstream')) {
+          throw new Error(
+            'The server took too long to process this file or timed out (Gateway Timeout). Please check the Batches tab to see if processing started.'
+          );
+        }
+        throw new Error(rawText || `Upload failed with HTTP status ${res.status}`);
+      }
+
+      if (!json || !json.success) {
+        throw new Error(json?.error || 'Failed to process file.');
       }
 
       setCurrentStep('Completed!');

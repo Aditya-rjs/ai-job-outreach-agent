@@ -1,11 +1,11 @@
 import { getDb } from '@/db';
-import { batches, contacts, globalEmailHistory, outreachQueue } from '@/db/schema';
+import { batches, contacts, globalEmailHistory, outreachQueue, companyClassifications } from '@/db/schema';
 import { eq, inArray, and, sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { parseCSV } from '@/lib/parsers/csv-parser';
 import { getFieldMapping, applyFieldMapping, type NormalizedContactRecord } from '@/lib/parsers/field-mapper';
 import { parseExcel } from '@/lib/parsers/excel-parser';
-import { classifyCompanies, type CompanyClassificationResult } from '@/lib/ai/company-classifier';
+import { classifyCompanies, getCachedFromDb, type CompanyClassificationResult } from '@/lib/ai/company-classifier';
 import { reconstructCanonicalContacts } from '@/lib/pipeline/canonical-ingestion';
 import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
 import { searchCompanyDatabaseBatch } from '@/lib/kb/relevant-companies-kb';
@@ -244,9 +244,10 @@ export async function processBatchFile(
       }
     }
 
-    // 5a. Search Relevant Company Knowledge Base (FOUND / NOT FOUND)
+    // 5a. Search Relevant Company Knowledge Base and SQLite classification cache
     const distinctRawNames = Array.from(uniqueCompanies.values()).map((u) => u.companyName);
     const kbMatches = searchCompanyDatabaseBatch(distinctRawNames, db);
+    const dbCached = getCachedFromDb(Array.from(uniqueCompanies.keys()));
 
     const classificationMap = new Map<string, CompanyClassificationResult>();
     const companiesToClassify: (typeof uniqueCompanies extends Map<string, infer V> ? V : never)[] = [];
@@ -265,15 +266,36 @@ export async function processBatchFile(
           geminiModel: 'knowledge-base',
           retryCount: 0,
         });
+      } else if (dbCached.has(company.normalizedName)) {
+        classificationMap.set(company.normalizedName, dbCached.get(company.normalizedName)!);
       } else {
         companiesToClassify.push(company);
       }
     }
 
+    // For uncached companies not in KB: seed into company_classifications as PENDING
+    // Background worker will pick them up and execute AI classification asynchronously
+    const configuredModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
     if (companiesToClassify.length > 0) {
-      const aiResultsMap = await classifyCompanies(companiesToClassify);
-      for (const [norm, res] of aiResultsMap.entries()) {
-        classificationMap.set(norm, res);
+      for (const company of companiesToClassify) {
+        db.insert(companyClassifications)
+          .values({
+            normalizedName: company.normalizedName,
+            companyName: company.companyName,
+            isRelevant: null,
+            confidence: null,
+            reason: 'Classification Pending — Discovered unclassified company from batch.',
+            classificationSource: 'gemini',
+            geminiModel: configuredModel,
+            classificationResult: 'PENDING',
+            retryRound: 0,
+            retryCount: 0,
+            nextRetryAt: now,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .onConflictDoNothing()
+          .run();
       }
     }
 
@@ -298,19 +320,16 @@ export async function processBatchFile(
         } else if (classification.status === 'IRRELEVANT') {
           c.status = 'skipped';
           classifiedIrrelevantSet.add(c.normalizedCompany);
-        } else if (classification.status === 'PENDING') {
-          c.status = 'uncertain';
-          c.isRelevant = null;
         } else {
-          // NEEDS_REVIEW or FAILED
-          c.status = 'uncertain';
+          c.status = 'discovered';
           c.isRelevant = null;
         }
       } else {
+        // Unknown company awaiting background AI classification
         c.isRelevant = null;
         c.relevanceConfidence = null;
-        c.relevanceReason = 'Needs Review — Gemini could not confidently determine relevance.';
-        c.status = 'uncertain';
+        c.relevanceReason = 'Classification Pending — Awaiting background company classification.';
+        c.status = 'discovered';
       }
     }
 
@@ -400,6 +419,8 @@ export async function processBatchFile(
       }
 
       // D. Update final batch metrics (guarding against revival of deleted/cancelled batch)
+      const initialBatchStatus = companiesToClassify.length > 0 ? 'processing' : (emailsPending > 0 ? 'queued' : 'completed');
+
       tx.update(batches)
         .set({
           totalRecords,
@@ -409,7 +430,7 @@ export async function processBatchFile(
           duplicateContacts: duplicateContactsCount,
           invalidEmails: invalidEmailsCount,
           emailsPending,
-          status: emailsPending > 0 ? 'queued' : 'completed',
+          status: initialBatchStatus,
           updatedAt: new Date().toISOString(),
         })
         .where(
@@ -421,6 +442,8 @@ export async function processBatchFile(
         .run();
     });
 
+    const finalStatus = companiesToClassify.length > 0 ? 'processing' : (emailsPending > 0 ? 'queued' : 'completed');
+
     return {
       batchId,
       filename,
@@ -431,7 +454,7 @@ export async function processBatchFile(
       duplicateContacts: duplicateContactsCount,
       invalidEmails: invalidEmailsCount,
       emailsPending,
-      status: emailsPending > 0 ? 'queued' : 'completed',
+      status: finalStatus,
     };
   } catch (error) {
     console.error(`Batch processing failed for ${filename}:`, error);

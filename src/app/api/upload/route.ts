@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { initializeDatabase } from '@/db/migrate';
 import { processBatchFile } from '@/lib/pipeline/batch-processor';
+import { reconcilePendingClassifications } from '@/lib/pipeline/classification-reconciler';
 import type { ApiResponse } from '@/types';
 import fs from 'fs';
 import path from 'path';
@@ -73,6 +74,12 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
     // Process the file through the full Phase 2 pipeline
     const result = await processBatchFile(buffer, filename, targetPath);
+
+    // Accelerate background classification for this batch without blocking the HTTP response.
+    // The persistent worker loop remains the durable fallback.
+    reconcilePendingClassifications(undefined, { batchId: result.batchId }).catch((err) => {
+      console.warn(`[Upload API] Notice during asynchronous classification trigger for ${result.batchId}:`, err);
+    });
 
     return NextResponse.json({
       success: true,

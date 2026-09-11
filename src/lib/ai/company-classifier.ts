@@ -48,7 +48,7 @@ export function resetClassificationMemoryCache(): void {
  * Only returns confident final classifications (RELEVANT, IRRELEVANT, NEEDS_REVIEW) that came from Gemini.
  * Ignores old heuristic entries and pending entries so they can be processed appropriately.
  */
-function getCachedFromDb(normalizedNames: string[]): Map<string, CompanyClassificationResult> {
+export function getCachedFromDb(normalizedNames: string[]): Map<string, CompanyClassificationResult> {
   const db = getDb();
   const cachedMap = new Map<string, CompanyClassificationResult>();
 
