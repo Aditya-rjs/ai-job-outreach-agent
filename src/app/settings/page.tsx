@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Mail,
   FileText,
@@ -37,7 +37,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { formatDateTime } from '@/lib/utils';
+import { formatDateTime, cn } from '@/lib/utils';
 import type {
   ResumeData,
   CandidateProfile,
@@ -49,8 +49,108 @@ import type {
   SchedulerConfig,
 } from '@/types';
 
+function buildProfileSnapshot(
+  personal: {
+    fullName: string;
+    email: string;
+    phone: string;
+    degree: string;
+    fieldOfStudy: string;
+    institution: string;
+    graduationYear: string;
+  },
+  links: {
+    linkedin: string;
+    github: string;
+    portfolio: string;
+  },
+  skills: CandidateSkills,
+  profileData: CandidateProfile
+): string {
+  const snap = {
+    personal: {
+      fullName: personal.fullName || '',
+      email: personal.email || '',
+      phone: personal.phone || '',
+      degree: personal.degree || '',
+      fieldOfStudy: personal.fieldOfStudy || '',
+      institution: personal.institution || '',
+      graduationYear: personal.graduationYear || '',
+    },
+    links: {
+      linkedin: links.linkedin || '',
+      github: links.github || '',
+      portfolio: links.portfolio || '',
+    },
+    skills: {
+      programmingLanguages: skills.programmingLanguages || [],
+      webDevelopment: skills.webDevelopment || [],
+      databasesOrms: skills.databasesOrms || [],
+      aiMl: skills.aiMl || [],
+      coreComputerScience: skills.coreComputerScience || [],
+      toolsApis: skills.toolsApis || [],
+    },
+    education: (profileData.education || []).map((e) => ({
+      id: e.id || '',
+      institution: e.institution || '',
+      degree: e.degree || '',
+      fieldOfStudy: e.fieldOfStudy || '',
+      year: e.year || '',
+      highlights: e.highlights || [],
+    })),
+    experience: (profileData.experience || []).map((e) => ({
+      id: e.id || '',
+      company: e.company || '',
+      role: e.role || '',
+      duration: e.duration || '',
+      location: e.location || '',
+      highlights: e.highlights || [],
+      technologies: e.technologies || [],
+    })),
+    projects: (profileData.projects || []).map((p) => ({
+      id: p.id || '',
+      name: p.name || '',
+      description: p.description || '',
+      duration: p.duration || '',
+      techStack: p.techStack || [],
+      highlights: p.highlights || [],
+      liveUrl: p.liveUrl || '',
+      githubUrl: p.githubUrl || '',
+    })),
+    achievements: (profileData.achievements || []).map((a) => ({
+      id: a.id || '',
+      title: a.title || '',
+      year: a.year || '',
+      description: a.description || '',
+    })),
+  };
+  return JSON.stringify(snap);
+}
+
 export default function SettingsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // View / Edit Mode & Change Detection State
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [savedBaseline, setSavedBaseline] = useState<string | null>(null);
+  const [savedProfileState, setSavedProfileState] = useState<{
+    personalForm: {
+      fullName: string;
+      email: string;
+      phone: string;
+      degree: string;
+      fieldOfStudy: string;
+      institution: string;
+      graduationYear: string;
+    };
+    linksForm: {
+      linkedin: string;
+      github: string;
+      portfolio: string;
+    };
+    skillsState: CandidateSkills;
+    profile: CandidateProfile;
+  } | null>(null);
 
   // Candidate Profile State
   const [profile, setProfile] = useState<CandidateProfile>({
@@ -178,6 +278,23 @@ export default function SettingsPage() {
   const [scheduler, setScheduler] = useState<SchedulerConfig | null>(null);
   const [schedulerActionLoading, setSchedulerActionLoading] = useState(false);
 
+  // Change detection: compares current state against saved baseline
+  const isDirty = useMemo(() => {
+    if (!savedBaseline) return false;
+    return buildProfileSnapshot(personalForm, linksForm, skillsState, profile) !== savedBaseline;
+  }, [personalForm, linksForm, skillsState, profile, savedBaseline]);
+
+  const handleCancelEdit = () => {
+    if (savedProfileState) {
+      setPersonalForm({ ...savedProfileState.personalForm });
+      setLinksForm({ ...savedProfileState.linksForm });
+      setSkillsState(JSON.parse(JSON.stringify(savedProfileState.skillsState)));
+      setProfile(JSON.parse(JSON.stringify(savedProfileState.profile)));
+    }
+    setIsEditMode(false);
+    setErrorMessage(null);
+  };
+
   // Load everything on mount
   useEffect(() => {
     let ignore = false;
@@ -212,7 +329,7 @@ export default function SettingsPage() {
           if (profileJson.success && profileJson.data) {
             const p: CandidateProfile = profileJson.data;
             setProfile(p);
-            setPersonalForm({
+            const initialPersonal = {
               fullName: p.fullName || '',
               email: p.email || '',
               phone: p.phone || '',
@@ -220,20 +337,44 @@ export default function SettingsPage() {
               fieldOfStudy: p.fieldOfStudy || '',
               institution: p.institution || '',
               graduationYear: p.graduationYear || '',
-            });
-            setLinksForm({
+            };
+            const initialLinks = {
               linkedin: p.linkedin || '',
               github: p.github || '',
               portfolio: p.portfolio || '',
-            });
-            setSkillsState(p.skills || {
+            };
+            const initialSkills = p.skills || {
               programmingLanguages: [],
               webDevelopment: [],
               databasesOrms: [],
               aiMl: [],
               coreComputerScience: [],
               toolsApis: [],
+            };
+
+            setPersonalForm(initialPersonal);
+            setLinksForm(initialLinks);
+            setSkillsState(initialSkills);
+
+            const initialSnapshot = buildProfileSnapshot(initialPersonal, initialLinks, initialSkills, p);
+            setSavedBaseline(initialSnapshot);
+            setSavedProfileState({
+              personalForm: initialPersonal,
+              linksForm: initialLinks,
+              skillsState: JSON.parse(JSON.stringify(initialSkills)),
+              profile: JSON.parse(JSON.stringify(p)),
             });
+
+            // If a profile has already been saved, start in VIEW MODE.
+            // If no profile has ever been saved, start in EDIT MODE to allow initial entry.
+            const hasSavedProfile = Boolean(
+              p.fullName?.trim() ||
+              p.email?.trim() ||
+              (p.education && p.education.length > 0) ||
+              (p.experience && p.experience.length > 0) ||
+              (p.projects && p.projects.length > 0)
+            );
+            setIsEditMode(!hasSavedProfile);
           }
 
           if (resumeJson.success && resumeJson.data) {
@@ -309,7 +450,7 @@ export default function SettingsPage() {
       }
       const updatedProfile: CandidateProfile = json.data;
       setProfile(updatedProfile);
-      setPersonalForm({
+      const newPersonal = {
         fullName: updatedProfile.fullName || '',
         email: updatedProfile.email || '',
         phone: updatedProfile.phone || '',
@@ -317,20 +458,35 @@ export default function SettingsPage() {
         fieldOfStudy: updatedProfile.fieldOfStudy || '',
         institution: updatedProfile.institution || '',
         graduationYear: updatedProfile.graduationYear || '',
-      });
-      setLinksForm({
+      };
+      const newLinks = {
         linkedin: updatedProfile.linkedin || '',
         github: updatedProfile.github || '',
         portfolio: updatedProfile.portfolio || '',
-      });
-      setSkillsState(updatedProfile.skills || {
+      };
+      const newSkills = updatedProfile.skills || {
         programmingLanguages: [],
         webDevelopment: [],
         databasesOrms: [],
         aiMl: [],
         coreComputerScience: [],
         toolsApis: [],
+      };
+
+      setPersonalForm(newPersonal);
+      setLinksForm(newLinks);
+      setSkillsState(newSkills);
+
+      const newSnapshot = buildProfileSnapshot(newPersonal, newLinks, newSkills, updatedProfile);
+      setSavedBaseline(newSnapshot);
+      setSavedProfileState({
+        personalForm: newPersonal,
+        linksForm: newLinks,
+        skillsState: JSON.parse(JSON.stringify(newSkills)),
+        profile: JSON.parse(JSON.stringify(updatedProfile)),
       });
+
+      setIsEditMode(false);
 
       setStatusMessage('Information saved successfully.');
       setTimeout(() => setStatusMessage(null), 4000);
@@ -343,6 +499,7 @@ export default function SettingsPage() {
 
   // Section 6: Add / Remove Skills (Local state only)
   const handleAddSkill = (category: keyof CandidateSkills) => {
+    if (!isEditMode) return;
     const val = (newSkillInput[category] || '').trim();
     if (!val) return;
     if (skillsState[category]?.includes(val)) return;
@@ -354,6 +511,7 @@ export default function SettingsPage() {
   };
 
   const handleRemoveSkill = (category: keyof CandidateSkills, itemToRemove: string) => {
+    if (!isEditMode) return;
     const nextCategorySkills = (skillsState[category] || []).filter((s) => s !== itemToRemove);
     const nextSkills = { ...skillsState, [category]: nextCategorySkills };
     setSkillsState(nextSkills);
@@ -361,6 +519,7 @@ export default function SettingsPage() {
 
   // Section 3: Education Dialog Handlers
   const openAddEducation = () => {
+    if (!isEditMode) return;
     setEduForm({
       institution: '',
       degree: '',
@@ -374,6 +533,7 @@ export default function SettingsPage() {
   };
 
   const openEditEducation = (idx: number) => {
+    if (!isEditMode) return;
     const item = profile.education[idx];
     setEduForm({
       id: item.id,
@@ -417,6 +577,7 @@ export default function SettingsPage() {
   };
 
   const handleDeleteEducation = (idx: number) => {
+    if (!isEditMode) return;
     if (!confirm('Are you sure you want to delete this education entry?')) return;
     setProfile((prev) => ({
       ...prev,
@@ -426,6 +587,7 @@ export default function SettingsPage() {
 
   // Section 4: Experience Dialog Handlers
   const openAddExperience = () => {
+    if (!isEditMode) return;
     setExpForm({
       company: '',
       role: '',
@@ -441,6 +603,7 @@ export default function SettingsPage() {
   };
 
   const openEditExperience = (idx: number) => {
+    if (!isEditMode) return;
     const item = profile.experience[idx];
     setExpForm(item);
     setExpHighlightsText((item.highlights || []).join('\n'));
@@ -483,6 +646,7 @@ export default function SettingsPage() {
   };
 
   const handleDeleteExperience = (idx: number) => {
+    if (!isEditMode) return;
     if (!confirm('Are you sure you want to delete this experience entry?')) return;
     setProfile((prev) => ({
       ...prev,
@@ -492,6 +656,7 @@ export default function SettingsPage() {
 
   // Section 5: Project Dialog Handlers
   const openAddProject = () => {
+    if (!isEditMode) return;
     setProjForm({
       name: '',
       duration: '',
@@ -508,6 +673,7 @@ export default function SettingsPage() {
   };
 
   const openEditProject = (idx: number) => {
+    if (!isEditMode) return;
     const item = profile.projects[idx];
     setProjForm(item);
     setProjTechText((item.techStack || []).join(', '));
@@ -551,6 +717,7 @@ export default function SettingsPage() {
   };
 
   const handleDeleteProject = (idx: number) => {
+    if (!isEditMode) return;
     if (!confirm('Are you sure you want to delete this project entry?')) return;
     setProfile((prev) => ({
       ...prev,
@@ -560,6 +727,7 @@ export default function SettingsPage() {
 
   // Section 7: Achievement Dialog Handlers
   const openAddAchievement = () => {
+    if (!isEditMode) return;
     setAchForm({
       title: '',
       description: '',
@@ -570,6 +738,7 @@ export default function SettingsPage() {
   };
 
   const openEditAchievement = (idx: number) => {
+    if (!isEditMode) return;
     const item = profile.achievements[idx];
     setAchForm(item);
     setEditingIndex(idx);
@@ -601,6 +770,7 @@ export default function SettingsPage() {
   };
 
   const handleDeleteAchievement = (idx: number) => {
+    if (!isEditMode) return;
     if (!confirm('Are you sure you want to delete this achievement?')) return;
     setProfile((prev) => ({
       ...prev,
@@ -787,6 +957,38 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {/* Candidate Profile Status & Mode Bar */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-xl border border-border bg-card p-4 shadow-sm">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-semibold text-foreground">Candidate Profile Status:</span>
+          {isEditMode ? (
+            <Badge variant="warning" className="px-2.5 py-0.5 text-xs font-semibold">
+              Edit Mode
+            </Badge>
+          ) : (
+            <Badge variant="secondary" className="px-2.5 py-0.5 text-xs font-semibold">
+              View Mode (Read-Only)
+            </Badge>
+          )}
+          {isEditMode && isDirty && (
+            <span className="text-xs font-medium text-amber-600">
+              ● Unsaved Changes
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {!isEditMode ? (
+            <Button size="sm" onClick={() => setIsEditMode(true)}>
+              <Edit2 className="h-4 w-4" /> Edit Profile
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" onClick={handleCancelEdit} disabled={savingProfile}>
+              Cancel
+            </Button>
+          )}
+        </div>
+      </div>
+
       {/* ─────────────────────────────────────────────────────────────
           SECTION 1: PERSONAL & CONTACT DETAILS
       ───────────────────────────────────────────────────────────── */}
@@ -808,9 +1010,10 @@ export default function SettingsPage() {
                 <input
                   type="text"
                   value={personalForm.fullName}
+                  disabled={!isEditMode}
                   onChange={(e) => setPersonalForm({ ...personalForm, fullName: e.target.value })}
                   placeholder="Aditya Raj Singh"
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-75 disabled:cursor-not-allowed disabled:bg-muted/30"
                 />
               </div>
               <div>
@@ -818,9 +1021,10 @@ export default function SettingsPage() {
                 <input
                   type="email"
                   value={personalForm.email}
+                  disabled={!isEditMode}
                   onChange={(e) => setPersonalForm({ ...personalForm, email: e.target.value })}
                   placeholder="aditya@example.com"
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-75 disabled:cursor-not-allowed disabled:bg-muted/30"
                 />
               </div>
               <div>
@@ -828,9 +1032,10 @@ export default function SettingsPage() {
                 <input
                   type="text"
                   value={personalForm.phone}
+                  disabled={!isEditMode}
                   onChange={(e) => setPersonalForm({ ...personalForm, phone: e.target.value })}
                   placeholder="+91 9876543210"
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-75 disabled:cursor-not-allowed disabled:bg-muted/30"
                 />
               </div>
               <div>
@@ -838,9 +1043,10 @@ export default function SettingsPage() {
                 <input
                   type="text"
                   value={personalForm.degree}
+                  disabled={!isEditMode}
                   onChange={(e) => setPersonalForm({ ...personalForm, degree: e.target.value })}
                   placeholder="B.Tech"
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-75 disabled:cursor-not-allowed disabled:bg-muted/30"
                 />
               </div>
               <div>
@@ -848,9 +1054,10 @@ export default function SettingsPage() {
                 <input
                   type="text"
                   value={personalForm.fieldOfStudy}
+                  disabled={!isEditMode}
                   onChange={(e) => setPersonalForm({ ...personalForm, fieldOfStudy: e.target.value })}
                   placeholder="Computer Science and Engineering"
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-75 disabled:cursor-not-allowed disabled:bg-muted/30"
                 />
               </div>
               <div>
@@ -858,9 +1065,10 @@ export default function SettingsPage() {
                 <input
                   type="text"
                   value={personalForm.institution}
+                  disabled={!isEditMode}
                   onChange={(e) => setPersonalForm({ ...personalForm, institution: e.target.value })}
                   placeholder="LNJPIT Chapra"
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-75 disabled:cursor-not-allowed disabled:bg-muted/30"
                 />
               </div>
               <div>
@@ -868,9 +1076,10 @@ export default function SettingsPage() {
                 <input
                   type="text"
                   value={personalForm.graduationYear}
+                  disabled={!isEditMode}
                   onChange={(e) => setPersonalForm({ ...personalForm, graduationYear: e.target.value })}
                   placeholder="2025"
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-75 disabled:cursor-not-allowed disabled:bg-muted/30"
                 />
               </div>
             </div>
@@ -899,9 +1108,10 @@ export default function SettingsPage() {
                 <input
                   type="url"
                   value={linksForm.linkedin}
+                  disabled={!isEditMode}
                   onChange={(e) => setLinksForm({ ...linksForm, linkedin: e.target.value })}
                   placeholder="https://linkedin.com/in/yourprofile"
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-75 disabled:cursor-not-allowed disabled:bg-muted/30"
                 />
               </div>
               <div>
@@ -909,9 +1119,10 @@ export default function SettingsPage() {
                 <input
                   type="url"
                   value={linksForm.github}
+                  disabled={!isEditMode}
                   onChange={(e) => setLinksForm({ ...linksForm, github: e.target.value })}
                   placeholder="https://github.com/yourusername"
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-75 disabled:cursor-not-allowed disabled:bg-muted/30"
                 />
               </div>
               <div>
@@ -919,9 +1130,10 @@ export default function SettingsPage() {
                 <input
                   type="url"
                   value={linksForm.portfolio}
+                  disabled={!isEditMode}
                   onChange={(e) => setLinksForm({ ...linksForm, portfolio: e.target.value })}
                   placeholder="https://yourportfolio.dev"
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-75 disabled:cursor-not-allowed disabled:bg-muted/30"
                 />
               </div>
             </div>
@@ -942,9 +1154,11 @@ export default function SettingsPage() {
                 <CardDescription>Academic history, degrees, grades, and academic achievements.</CardDescription>
               </div>
             </div>
-            <Button size="sm" onClick={openAddEducation}>
-              <Plus className="h-4 w-4" /> Add Education
-            </Button>
+            {isEditMode && (
+              <Button size="sm" onClick={openAddEducation}>
+                <Plus className="h-4 w-4" /> Add Education
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -964,22 +1178,24 @@ export default function SettingsPage() {
                         <p className="text-xs text-muted-foreground">{edu.fieldOfStudy}</p>
                       )}
                     </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => openEditEducation(idx)}
-                        className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                      >
-                        <Edit2 className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteEducation(idx)}
-                        className="rounded p-1 text-muted-foreground hover:bg-red-50 hover:text-red-600"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
+                    {isEditMode && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openEditEducation(idx)}
+                          className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                        >
+                          <Edit2 className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteEducation(idx)}
+                          className="rounded p-1 text-muted-foreground hover:bg-red-50 hover:text-red-600"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
@@ -1011,9 +1227,11 @@ export default function SettingsPage() {
                 <CardDescription>Professional roles, internships, responsibilities, and achievements.</CardDescription>
               </div>
             </div>
-            <Button size="sm" onClick={openAddExperience}>
-              <Plus className="h-4 w-4" /> Add Experience
-            </Button>
+            {isEditMode && (
+              <Button size="sm" onClick={openAddExperience}>
+                <Plus className="h-4 w-4" /> Add Experience
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -1034,22 +1252,24 @@ export default function SettingsPage() {
                         {exp.location && <span>• {exp.location}</span>}
                       </div>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => openEditExperience(idx)}
-                        className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                      >
-                        <Edit2 className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteExperience(idx)}
-                        className="rounded p-1 text-muted-foreground hover:bg-red-50 hover:text-red-600"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
+                    {isEditMode && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openEditExperience(idx)}
+                          className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                        >
+                          <Edit2 className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteExperience(idx)}
+                          className="rounded p-1 text-muted-foreground hover:bg-red-50 hover:text-red-600"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {exp.highlights && exp.highlights.length > 0 && (
@@ -1089,9 +1309,11 @@ export default function SettingsPage() {
                 </CardDescription>
               </div>
             </div>
-            <Button size="sm" onClick={openAddProject}>
-              <Plus className="h-4 w-4" /> Add Project
-            </Button>
+            {isEditMode && (
+              <Button size="sm" onClick={openAddProject}>
+                <Plus className="h-4 w-4" /> Add Project
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -1115,22 +1337,24 @@ export default function SettingsPage() {
                         <p className="mt-1 text-sm text-muted-foreground">{proj.description}</p>
                       )}
                     </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => openEditProject(idx)}
-                        className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                      >
-                        <Edit2 className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteProject(idx)}
-                        className="rounded p-1 text-muted-foreground hover:bg-red-50 hover:text-red-600"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
+                    {isEditMode && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openEditProject(idx)}
+                          className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                        >
+                          <Edit2 className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteProject(idx)}
+                          className="rounded p-1 text-muted-foreground hover:bg-red-50 hover:text-red-600"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {proj.techStack && proj.techStack.length > 0 && (
@@ -1211,13 +1435,15 @@ export default function SettingsPage() {
                       className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary"
                     >
                       {tag}
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveSkill(key, tag)}
-                        className="rounded-full hover:bg-primary/20"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
+                      {isEditMode && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSkill(key, tag)}
+                          className="rounded-full hover:bg-primary/20"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      )}
                     </span>
                   ))}
                   {currentTags.length === 0 && (
@@ -1226,24 +1452,26 @@ export default function SettingsPage() {
                 </div>
 
                 {/* Add Input */}
-                <div className="flex gap-2 pt-1">
-                  <input
-                    type="text"
-                    value={newSkillInput[key] || ''}
-                    onChange={(e) => setNewSkillInput({ ...newSkillInput, [key]: e.target.value })}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleAddSkill(key);
-                      }
-                    }}
-                    placeholder={placeholder}
-                    className="flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                  <Button size="sm" variant="secondary" onClick={() => handleAddSkill(key)}>
-                    <Plus className="h-3.5 w-3.5" /> Add
-                  </Button>
-                </div>
+                {isEditMode && (
+                  <div className="flex gap-2 pt-1">
+                    <input
+                      type="text"
+                      value={newSkillInput[key] || ''}
+                      onChange={(e) => setNewSkillInput({ ...newSkillInput, [key]: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddSkill(key);
+                        }
+                      }}
+                      placeholder={placeholder}
+                      className="flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                    <Button size="sm" variant="secondary" onClick={() => handleAddSkill(key)}>
+                      <Plus className="h-3.5 w-3.5" /> Add
+                    </Button>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -1263,9 +1491,11 @@ export default function SettingsPage() {
                 <CardDescription>Competitive programming, hackathons, academic awards, and recognition.</CardDescription>
               </div>
             </div>
-            <Button size="sm" onClick={openAddAchievement}>
-              <Plus className="h-4 w-4" /> Add Achievement
-            </Button>
+            {isEditMode && (
+              <Button size="sm" onClick={openAddAchievement}>
+                <Plus className="h-4 w-4" /> Add Achievement
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -1287,22 +1517,24 @@ export default function SettingsPage() {
                         <p className="mt-1 text-xs text-muted-foreground whitespace-pre-line">{ach.description}</p>
                       )}
                     </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => openEditAchievement(idx)}
-                        className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                      >
-                        <Edit2 className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteAchievement(idx)}
-                        className="rounded p-1 text-muted-foreground hover:bg-red-50 hover:text-red-600"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
+                    {isEditMode && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openEditAchievement(idx)}
+                          className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                        >
+                          <Edit2 className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteAchievement(idx)}
+                          className="rounded p-1 text-muted-foreground hover:bg-red-50 hover:text-red-600"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1318,29 +1550,79 @@ export default function SettingsPage() {
         <CardContent className="p-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h3 className="text-lg font-semibold text-foreground">Save Candidate Profile</h3>
-              <p className="text-sm text-muted-foreground">
-                Saves all Candidate Profile sections above (Personal Details, Professional Links, Education, Experience, Projects, Skills, Achievements) in a single atomic update.
+              <div className="flex items-center gap-2">
+                <h3 className="text-lg font-semibold text-foreground">Save Candidate Profile</h3>
+                {isEditMode ? (
+                  isDirty ? (
+                    <Badge variant="warning">Unsaved Changes</Badge>
+                  ) : (
+                    <Badge variant="secondary">No Changes</Badge>
+                  )
+                ) : (
+                  <Badge variant="secondary">View Mode</Badge>
+                )}
+              </div>
+              <p className="text-sm text-muted-foreground mt-1">
+                {isEditMode
+                  ? 'Saves all Candidate Profile sections above in a single atomic update.'
+                  : 'Click "Edit Profile" to unlock and edit your candidate credentials.'}
               </p>
             </div>
-            <Button
-              size="lg"
-              onClick={handleSaveCandidateProfile}
-              disabled={savingProfile}
-              className="shrink-0"
-            >
-              {savingProfile ? (
+            <div className="flex items-center gap-3 shrink-0">
+              {!isEditMode ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Saving Profile...
+                  <Button
+                    size="lg"
+                    onClick={() => setIsEditMode(true)}
+                    className="shrink-0"
+                  >
+                    <Edit2 className="h-4 w-4" />
+                    Edit Profile
+                  </Button>
+                  <Button
+                    size="lg"
+                    disabled={true}
+                    className="shrink-0 opacity-50 cursor-not-allowed"
+                  >
+                    <Save className="h-4 w-4" />
+                    Save Candidate Profile
+                  </Button>
                 </>
               ) : (
                 <>
-                  <Save className="h-4 w-4" />
-                  Save Candidate Profile
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    onClick={handleCancelEdit}
+                    disabled={savingProfile}
+                    className="shrink-0"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="lg"
+                    onClick={handleSaveCandidateProfile}
+                    disabled={!isDirty || savingProfile}
+                    className={cn(
+                      'shrink-0',
+                      (!isDirty || savingProfile) && 'opacity-50 cursor-not-allowed'
+                    )}
+                  >
+                    {savingProfile ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Saving Profile...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="h-4 w-4" />
+                        Save Candidate Profile
+                      </>
+                    )}
+                  </Button>
                 </>
               )}
-            </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
