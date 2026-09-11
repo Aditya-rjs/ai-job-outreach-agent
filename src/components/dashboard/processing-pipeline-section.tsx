@@ -184,8 +184,9 @@ export function ProcessingPipelineSection({
     if (nextState && !companyContacts[normalizedName]) {
       setLoadingCompanyContacts((prev) => ({ ...prev, [normalizedName]: true }));
       try {
+        const batchParam = stats?.currentBatchId ? `&batchId=${encodeURIComponent(stats.currentBatchId)}` : '';
         const res = await fetch(
-          `/api/dashboard/processing?companyContacts=${encodeURIComponent(normalizedName)}&_t=${Date.now()}`,
+          `/api/dashboard/processing?companyContacts=${encodeURIComponent(normalizedName)}${batchParam}&_t=${Date.now()}`,
           { cache: 'no-store' }
         );
         const json = await res.json();
@@ -210,6 +211,11 @@ export function ProcessingPipelineSection({
             <span className="inline-flex items-center rounded-md bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
               Live Pipeline
             </span>
+            {stats?.currentBatchFilename && (
+              <span className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                Batch: {stats.currentBatchFilename}
+              </span>
+            )}
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">
             Real-time stage tracking: company classification, autonomous personalized email generation, retries, and send readiness.
@@ -236,246 +242,387 @@ export function ProcessingPipelineSection({
         </div>
       </div>
 
-      {/* 6 Summary Processing Cards */}
-      <div className="grid gap-3 sm:gap-3.5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-6">
-        {/* 1. Classification Pending */}
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => handleSelectCategory('classification-pending')}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              handleSelectCategory('classification-pending');
-            }
-          }}
-          className={cn(
-            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px] min-w-0',
-            activeCategory === 'classification-pending'
-              ? 'border-amber-500 bg-amber-50/50 dark:bg-amber-950/20 ring-2 ring-amber-500/20'
-              : 'border-border bg-card hover:border-amber-400/60 hover:bg-card/90'
-          )}
-        >
-          <div className="flex items-start justify-between gap-2">
-            <div className="space-y-1 min-w-0">
-              <span className="text-xs font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1">
-                <Building2 className="h-3.5 w-3.5 shrink-0" />
-                Classification Pending
-              </span>
-              <p className="text-2xl font-bold text-foreground">
-                {stats?.classificationPendingCount ?? 0}
-              </p>
+      {/* 13 Dashboard Metrics in 3 Rows */}
+      <div className="space-y-3">
+        {/* Row 1: 5 cards */}
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
+          {/* 1. Companies Found */}
+          <div className="rounded-xl border border-border bg-card p-3.5 shadow-sm flex flex-col justify-between min-h-[105px] min-w-0">
+            <div className="flex items-start justify-between gap-1.5">
+              <div className="space-y-1 min-w-0">
+                <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 truncate">
+                  <Building2 className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                  Companies Found
+                </span>
+                <p className="text-2xl font-bold text-foreground">
+                  {stats?.companiesFound ?? 0}
+                </p>
+              </div>
             </div>
-            <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
-              Active Round
-            </span>
+            <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
+              Unique companies in batch
+            </p>
           </div>
-          <p className="text-[11px] text-muted-foreground mt-2 leading-tight">
-            Active in current round. Gemini evaluating domain & job relevance.
-          </p>
+
+          {/* 2. Duplicate Companies */}
+          <div className="rounded-xl border border-border bg-card p-3.5 shadow-sm flex flex-col justify-between min-h-[105px] min-w-0">
+            <div className="flex items-start justify-between gap-1.5">
+              <div className="space-y-1 min-w-0">
+                <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 truncate">
+                  <Layers className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                  Duplicate Companies
+                </span>
+                <p className="text-2xl font-bold text-foreground">
+                  {stats?.duplicateCompanies ?? 0}
+                </p>
+              </div>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
+              Normalized company duplicates
+            </p>
+          </div>
+
+          {/* 3. AI Search Pending */}
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => handleSelectCategory('classification-pending')}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleSelectCategory('classification-pending');
+              }
+            }}
+            className={cn(
+              'rounded-xl border p-3.5 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[105px] min-w-0',
+              activeCategory === 'classification-pending'
+                ? 'border-amber-500 bg-amber-50/50 dark:bg-amber-950/20 ring-2 ring-amber-500/20'
+                : 'border-border bg-card hover:border-amber-400/60 hover:bg-card/90'
+            )}
+          >
+            <div className="flex items-start justify-between gap-1.5">
+              <div className="space-y-1 min-w-0">
+                <span className="text-xs font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5 truncate">
+                  <Search className="h-3.5 w-3.5 shrink-0" />
+                  AI Search Pending
+                </span>
+                <p className="text-2xl font-bold text-foreground">
+                  {stats?.aiSearchPending ?? 0}
+                </p>
+              </div>
+              <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
+                Active
+              </span>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
+              Awaiting domain & job classification
+            </p>
+          </div>
+
+          {/* 4. AI Search Retry */}
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => handleSelectCategory('classification-retry-waiting')}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleSelectCategory('classification-retry-waiting');
+              }
+            }}
+            className={cn(
+              'rounded-xl border p-3.5 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[105px] min-w-0',
+              activeCategory === 'classification-retry-waiting'
+                ? 'border-yellow-500 bg-yellow-50/50 dark:bg-yellow-950/20 ring-2 ring-yellow-500/20'
+                : 'border-border bg-card hover:border-yellow-400/60 hover:bg-card/90'
+            )}
+          >
+            <div className="flex items-start justify-between gap-1.5">
+              <div className="space-y-1 min-w-0">
+                <span className="text-xs font-semibold text-yellow-700 dark:text-yellow-400 flex items-center gap-1.5 truncate">
+                  <RefreshCw className="h-3.5 w-3.5 shrink-0" />
+                  AI Search Retry
+                </span>
+                <p className="text-2xl font-bold text-foreground">
+                  {stats?.aiSearchRetry ?? 0}
+                </p>
+              </div>
+              <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-yellow-100 text-yellow-800 border border-yellow-300 shrink-0">
+                Waiting
+              </span>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
+              Unresolved in current round
+            </p>
+          </div>
+
+          {/* 5. AI Processed */}
+          <div className="rounded-xl border border-border bg-card p-3.5 shadow-sm flex flex-col justify-between min-h-[105px] min-w-0">
+            <div className="flex items-start justify-between gap-1.5">
+              <div className="space-y-1 min-w-0">
+                <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 truncate">
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                  AI Processed
+                </span>
+                <p className="text-2xl font-bold text-foreground">
+                  {stats?.aiProcessed ?? 0}
+                </p>
+              </div>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
+              Terminal classification reached
+            </p>
+          </div>
         </div>
 
-        {/* 1b. Classification Retry Waiting */}
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => handleSelectCategory('classification-retry-waiting')}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              handleSelectCategory('classification-retry-waiting');
-            }
-          }}
-          className={cn(
-            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px] min-w-0',
-            activeCategory === 'classification-retry-waiting'
-              ? 'border-yellow-500 bg-yellow-50/50 dark:bg-yellow-950/20 ring-2 ring-yellow-500/20'
-              : 'border-border bg-card hover:border-yellow-400/60 hover:bg-card/90'
-          )}
-        >
-          <div className="flex items-start justify-between gap-2">
-            <div className="space-y-1 min-w-0">
-              <span className="text-xs font-semibold text-yellow-700 dark:text-yellow-400 flex items-center gap-1">
-                <RefreshCw className="h-3.5 w-3.5 shrink-0" />
-                Retry Waiting
-              </span>
-              <p className="text-2xl font-bold text-foreground">
-                {stats?.classificationRetryWaitingCount ?? 0}
-              </p>
+        {/* Row 2: 5 cards */}
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
+          {/* 6. Irrelevant Companies */}
+          <div className="rounded-xl border border-border bg-card p-3.5 shadow-sm flex flex-col justify-between min-h-[105px] min-w-0">
+            <div className="flex items-start justify-between gap-1.5">
+              <div className="space-y-1 min-w-0">
+                <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 truncate">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                  Irrelevant Companies
+                </span>
+                <p className="text-2xl font-bold text-foreground">
+                  {stats?.irrelevantCompanies ?? 0}
+                </p>
+              </div>
             </div>
-            <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-yellow-100 text-yellow-800 border border-yellow-300 shrink-0">
-              Waiting Round
-            </span>
+            <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
+              Outside outreach scope
+            </p>
           </div>
-          <p className="text-[11px] text-muted-foreground mt-2 leading-tight">
-            Unresolved companies waiting for current round to completely drain.
-          </p>
-        </div>
 
-        {/* 2. Email Generation Pending */}
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => handleSelectCategory('generation-pending')}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              handleSelectCategory('generation-pending');
-            }
-          }}
-          className={cn(
-            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px] min-w-0',
-            activeCategory === 'generation-pending'
-              ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/20 ring-2 ring-blue-500/20'
-              : 'border-border bg-card hover:border-blue-400/60 hover:bg-card/90'
-          )}
-        >
-          <div className="flex items-start justify-between gap-2">
-            <div className="space-y-1 min-w-0">
-              <span className="text-xs font-semibold text-blue-700 dark:text-blue-400 flex items-center gap-1">
-                <Sparkles className="h-3.5 w-3.5 shrink-0" />
-                Email Gen Pending
-              </span>
-              <p className="text-2xl font-bold text-foreground">
-                {stats?.emailGenerationPendingCount ?? 0}
-              </p>
+          {/* 7. CS/IT Relevant */}
+          <div className="rounded-xl border border-border bg-card p-3.5 shadow-sm flex flex-col justify-between min-h-[105px] min-w-0">
+            <div className="flex items-start justify-between gap-1.5">
+              <div className="space-y-1 min-w-0">
+                <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 truncate">
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-blue-500" />
+                  CS/IT Relevant
+                </span>
+                <p className="text-2xl font-bold text-foreground">
+                  {stats?.csItRelevant ?? 0}
+                </p>
+              </div>
             </div>
-            <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-300 shrink-0">
-              Relevant
-            </span>
+            <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
+              Confirmed CS/IT companies
+            </p>
           </div>
-          <p className="text-[11px] text-muted-foreground mt-2 leading-tight">
-            Confirmed relevant contacts waiting for background worker to craft email body.
-          </p>
-        </div>
 
-        {/* 3. Generation Retry */}
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => handleSelectCategory('generation-retry')}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              handleSelectCategory('generation-retry');
-            }
-          }}
-          className={cn(
-            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px] min-w-0',
-            activeCategory === 'generation-retry'
-              ? 'border-orange-500 bg-orange-50/50 dark:bg-orange-950/20 ring-2 ring-orange-500/20'
-              : 'border-border bg-card hover:border-orange-400/60 hover:bg-card/90'
-          )}
-        >
-          <div className="flex items-start justify-between gap-2">
-            <div className="space-y-1 min-w-0">
-              <span className="text-xs font-semibold text-orange-700 dark:text-orange-400 flex items-center gap-1">
-                <RefreshCw className="h-3.5 w-3.5 shrink-0" />
-                Generation Retry
-              </span>
-              <p className="text-2xl font-bold text-foreground">
-                {stats?.generationRetryCount ?? 0}
-              </p>
+          {/* 8. Contacts Found */}
+          <div className="rounded-xl border border-border bg-card p-3.5 shadow-sm flex flex-col justify-between min-h-[105px] min-w-0">
+            <div className="flex items-start justify-between gap-1.5">
+              <div className="space-y-1 min-w-0">
+                <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 truncate">
+                  <User className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                  Contacts Found
+                </span>
+                <p className="text-2xl font-bold text-foreground">
+                  {stats?.contactsFound ?? 0}
+                </p>
+              </div>
             </div>
-            <span
-              className={cn(
-                'rounded-full px-2 py-0.5 text-[10px] font-bold shrink-0',
-                (stats?.emailGenerationPendingCount ?? 0) > 0 && (stats?.generationRetryCount ?? 0) > 0
-                  ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                  : 'bg-orange-100 text-orange-800 border border-orange-300'
+            <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
+              Total contacts imported
+            </p>
+          </div>
+
+          {/* 9. Duplicate Contacts */}
+          <div className="rounded-xl border border-border bg-card p-3.5 shadow-sm flex flex-col justify-between min-h-[105px] min-w-0">
+            <div className="flex items-start justify-between gap-1.5">
+              <div className="space-y-1 min-w-0">
+                <span className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 truncate">
+                  <Layers className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                  Duplicate Contacts
+                </span>
+                <p className="text-2xl font-bold text-foreground">
+                  {stats?.duplicateContacts ?? 0}
+                </p>
+              </div>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
+              Duplicate email contacts
+            </p>
+          </div>
+
+          {/* 10. Emails Generating */}
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => handleSelectCategory('generation-pending')}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleSelectCategory('generation-pending');
+              }
+            }}
+            className={cn(
+              'rounded-xl border p-3.5 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[105px] min-w-0',
+              activeCategory === 'generation-pending'
+                ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/20 ring-2 ring-blue-500/20'
+                : 'border-border bg-card hover:border-blue-400/60 hover:bg-card/90'
+            )}
+          >
+            <div className="flex items-start justify-between gap-1.5">
+              <div className="space-y-1 min-w-0">
+                <span className="text-xs font-semibold text-blue-700 dark:text-blue-400 flex items-center gap-1.5 truncate">
+                  <Sparkles className="h-3.5 w-3.5 shrink-0" />
+                  Emails Generating
+                </span>
+                <p className="text-2xl font-bold text-foreground">
+                  {stats?.emailsGenerating ?? 0}
+                </p>
+              </div>
+              {((stats?.aiSearchPending ?? 0) > 0 || (stats?.aiSearchRetry ?? 0) > 0) ? (
+                <span className="rounded-full px-1.5 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
+                  Blocked
+                </span>
+              ) : (
+                <span className="rounded-full px-1.5 py-0.5 text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-300 shrink-0">
+                  Active
+                </span>
               )}
-            >
-              {(stats?.emailGenerationPendingCount ?? 0) > 0 && (stats?.generationRetryCount ?? 0) > 0
-                ? 'Waiting on Active'
-                : 'Eligible'}
-            </span>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
+              {((stats?.aiSearchPending ?? 0) > 0 || (stats?.aiSearchRetry ?? 0) > 0)
+                ? 'Classification incomplete'
+                : 'Generating emails'}
+            </p>
           </div>
-          <p className="text-[11px] text-muted-foreground mt-2 leading-tight">
-            {(stats?.emailGenerationPendingCount ?? 0) > 0 && (stats?.generationRetryCount ?? 0) > 0
-              ? `Waiting for active generation pass to drain (${stats?.emailGenerationPendingCount} pending).`
-              : 'Active generation pass drained. Retrying failures in a continuous circular queue (2-min turns).'}
-          </p>
         </div>
 
-        {/* 3b. Generation Failed */}
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => handleSelectCategory('generation-failed')}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              handleSelectCategory('generation-failed');
-            }
-          }}
-          className={cn(
-            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px] min-w-0',
-            activeCategory === 'generation-failed'
-              ? 'border-red-500 bg-red-50/50 dark:bg-red-950/20 ring-2 ring-red-500/20'
-              : 'border-border bg-card hover:border-red-400/60 hover:bg-card/90'
-          )}
-        >
-          <div className="flex items-start justify-between gap-2">
-            <div className="space-y-1 min-w-0">
-              <span className="text-xs font-semibold text-red-700 dark:text-red-400 flex items-center gap-1">
-                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                Generation Failed
+        {/* Row 3: 3 cards */}
+        <div className="grid gap-3 grid-cols-1 sm:grid-cols-3 lg:grid-cols-3">
+          {/* 11. Generation Retry */}
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => handleSelectCategory('generation-retry')}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleSelectCategory('generation-retry');
+              }
+            }}
+            className={cn(
+              'rounded-xl border p-3.5 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[105px] min-w-0',
+              activeCategory === 'generation-retry'
+                ? 'border-orange-500 bg-orange-50/50 dark:bg-orange-950/20 ring-2 ring-orange-500/20'
+                : 'border-border bg-card hover:border-orange-400/60 hover:bg-card/90'
+            )}
+          >
+            <div className="flex items-start justify-between gap-1.5">
+              <div className="space-y-1 min-w-0">
+                <span className="text-xs font-semibold text-orange-700 dark:text-orange-400 flex items-center gap-1.5 truncate">
+                  <RefreshCw className="h-3.5 w-3.5 shrink-0" />
+                  Generation Retry
+                </span>
+                <p className="text-2xl font-bold text-foreground">
+                  {stats?.generationRetry ?? 0}
+                </p>
+              </div>
+              <span
+                className={cn(
+                  'rounded-full px-2 py-0.5 text-[10px] font-bold shrink-0',
+                  (stats?.emailsGenerating ?? 0) > 0 && (stats?.generationRetry ?? 0) > 0
+                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                    : 'bg-orange-100 text-orange-800 border border-orange-300'
+                )}
+              >
+                {(stats?.emailsGenerating ?? 0) > 0 && (stats?.generationRetry ?? 0) > 0
+                  ? 'Waiting'
+                  : 'Eligible'}
               </span>
-              <p className="text-2xl font-bold text-foreground">
-                {stats?.generationFailedCount ?? 0}
-              </p>
             </div>
-            <span
-              className={cn(
-                'rounded-full px-2 py-0.5 text-[10px] font-bold border shrink-0',
-                (stats?.generationFailedCount ?? 0) > 0
-                  ? 'bg-red-100 text-red-800 border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800'
-                  : 'bg-muted text-muted-foreground border-border'
-              )}
-            >
-              Terminal
-            </span>
+            <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
+              Generation retries in progress
+            </p>
           </div>
-          <p className="text-[11px] text-muted-foreground mt-2 leading-tight">
-            Exceeded retry limit or permanent error. Terminal failure state.
-          </p>
-        </div>
 
-        {/* 4. Ready to Send */}
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => handleSelectCategory('ready-to-send')}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              handleSelectCategory('ready-to-send');
-            }
-          }}
-          className={cn(
-            'rounded-xl border p-4 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[116px] min-w-0',
-            activeCategory === 'ready-to-send'
-              ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 ring-2 ring-emerald-500/20'
-              : 'border-border bg-card hover:border-emerald-400/60 hover:bg-card/90'
-          )}
-        >
-          <div className="flex items-start justify-between gap-2">
-            <div className="space-y-1 min-w-0">
-              <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
-                <Send className="h-3.5 w-3.5 shrink-0" />
-                Ready to Send
+          {/* 12. Generation Failed */}
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => handleSelectCategory('generation-failed')}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleSelectCategory('generation-failed');
+              }
+            }}
+            className={cn(
+              'rounded-xl border p-3.5 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[105px] min-w-0',
+              activeCategory === 'generation-failed'
+                ? 'border-red-500 bg-red-50/50 dark:bg-red-950/20 ring-2 ring-red-500/20'
+                : 'border-border bg-card hover:border-red-400/60 hover:bg-card/90'
+            )}
+          >
+            <div className="flex items-start justify-between gap-1.5">
+              <div className="space-y-1 min-w-0">
+                <span className="text-xs font-semibold text-red-700 dark:text-red-400 flex items-center gap-1.5 truncate">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  Generation Failed
+                </span>
+                <p className="text-2xl font-bold text-foreground">
+                  {stats?.generationFailed ?? 0}
+                </p>
+              </div>
+              <span
+                className={cn(
+                  'rounded-full px-2 py-0.5 text-[10px] font-bold border shrink-0',
+                  (stats?.generationFailed ?? 0) > 0
+                    ? 'bg-red-100 text-red-800 border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800'
+                    : 'bg-muted text-muted-foreground border-border'
+                )}
+              >
+                Terminal
               </span>
-              <p className="text-2xl font-bold text-foreground">
-                {stats?.readyToSendCount ?? 0}
-              </p>
             </div>
-            <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 shrink-0">
-              Staged
-            </span>
+            <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
+              Permanent generation failure
+            </p>
           </div>
-          <p className="text-[11px] text-muted-foreground mt-2 leading-tight">
-            Personalized emails generated, resume ready, staged for daily sending window.
-          </p>
+
+          {/* 13. Ready to Send */}
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => handleSelectCategory('ready-to-send')}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleSelectCategory('ready-to-send');
+              }
+            }}
+            className={cn(
+              'rounded-xl border p-3.5 shadow-sm transition-all cursor-pointer flex flex-col justify-between min-h-[105px] min-w-0',
+              activeCategory === 'ready-to-send'
+                ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 ring-2 ring-emerald-500/20'
+                : 'border-border bg-card hover:border-emerald-400/60 hover:bg-card/90'
+            )}
+          >
+            <div className="flex items-start justify-between gap-1.5">
+              <div className="space-y-1 min-w-0">
+                <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5 truncate">
+                  <Send className="h-3.5 w-3.5 shrink-0" />
+                  Ready to Send
+                </span>
+                <p className="text-2xl font-bold text-foreground">
+                  {stats?.readyToSend ?? 0}
+                </p>
+              </div>
+              <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 shrink-0">
+                Staged
+              </span>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1 leading-tight truncate">
+              Personalized emails staged
+            </p>
+          </div>
         </div>
       </div>
 
@@ -496,7 +643,7 @@ export function ProcessingPipelineSection({
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
               >
-                <span>Classification Pending</span>
+                <span>AI Search Pending</span>
                 <span
                   className={cn(
                     'rounded-full px-1.5 py-0.2 text-[10px]',
@@ -505,7 +652,7 @@ export function ProcessingPipelineSection({
                       : 'bg-muted-foreground/15 text-muted-foreground'
                   )}
                 >
-                  {stats?.classificationPendingCount ?? 0}
+                  {stats?.aiSearchPending ?? 0}
                 </span>
               </button>
 
@@ -519,7 +666,7 @@ export function ProcessingPipelineSection({
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
               >
-                <span>Classification Retry Waiting</span>
+                <span>AI Search Retry</span>
                 <span
                   className={cn(
                     'rounded-full px-1.5 py-0.2 text-[10px]',
@@ -528,7 +675,7 @@ export function ProcessingPipelineSection({
                       : 'bg-muted-foreground/15 text-muted-foreground'
                   )}
                 >
-                  {stats?.classificationRetryWaitingCount ?? 0}
+                  {stats?.aiSearchRetry ?? 0}
                 </span>
               </button>
 
@@ -542,7 +689,7 @@ export function ProcessingPipelineSection({
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
               >
-                <span>Email Gen Pending</span>
+                <span>Emails Generating</span>
                 <span
                   className={cn(
                     'rounded-full px-1.5 py-0.2 text-[10px]',
@@ -551,7 +698,7 @@ export function ProcessingPipelineSection({
                       : 'bg-muted-foreground/15 text-muted-foreground'
                   )}
                 >
-                  {stats?.emailGenerationPendingCount ?? 0}
+                  {stats?.emailsGenerating ?? 0}
                 </span>
               </button>
 
@@ -574,7 +721,7 @@ export function ProcessingPipelineSection({
                       : 'bg-muted-foreground/15 text-muted-foreground'
                   )}
                 >
-                  {stats?.generationRetryCount ?? 0}
+                  {stats?.generationRetry ?? 0}
                 </span>
               </button>
 
@@ -594,12 +741,12 @@ export function ProcessingPipelineSection({
                     'rounded-full px-1.5 py-0.2 text-[10px]',
                     activeCategory === 'generation-failed'
                       ? 'bg-white/20 text-white'
-                      : (stats?.generationFailedCount ?? 0) > 0
+                      : (stats?.generationFailed ?? 0) > 0
                         ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 font-bold'
                         : 'bg-muted-foreground/15 text-muted-foreground'
                   )}
                 >
-                  {stats?.generationFailedCount ?? 0}
+                  {stats?.generationFailed ?? 0}
                 </span>
               </button>
 
@@ -622,7 +769,7 @@ export function ProcessingPipelineSection({
                       : 'bg-muted-foreground/15 text-muted-foreground'
                   )}
                 >
-                  {stats?.readyToSendCount ?? 0}
+                  {stats?.readyToSend ?? 0}
                 </span>
               </button>
             </div>

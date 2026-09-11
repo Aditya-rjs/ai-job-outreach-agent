@@ -11,6 +11,7 @@ import { normalizeGenerationError } from '@/lib/pipeline/generation-error-bounda
 import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
 import { getUserVerifiedLinks } from '@/lib/resume/profile-links';
 import { getCandidateProfile, isCandidateProfileConfigured } from '@/lib/candidate-profile/candidate-profile-service';
+import { isBatchClassificationComplete } from '@/lib/pipeline/classification-reconciler';
 import type { StructuredResumeProfile, CandidateProfile, Contact, VerifiedProfileLinks } from '@/types';
 
 export const GENERATION_LEASE_MS = 150 * 1000; // 150-second lease (headroom over 120s active turn budget)
@@ -131,6 +132,10 @@ export function hasActiveFreshPendingGeneration(
   batchId?: string,
   excludeContactId?: string
 ): boolean {
+  if (batchId && !isBatchClassificationComplete(db, batchId)) {
+    return false;
+  }
+
   const batchCondition = batchId
     ? sql`AND contacts.batch_id = ${batchId}`
     : sql`AND batches.status NOT IN ('deleted', 'cancelled')`;
@@ -147,7 +152,7 @@ export function hasActiveFreshPendingGeneration(
             AND contacts.email_valid = 1
             AND contacts.is_duplicate = 0
             AND contacts.sent_at IS NULL
-            AND contacts.generation_status != 'GENERATED'
+            AND (contacts.generation_status IS NULL OR contacts.generation_status != 'GENERATED')
             AND (
               contacts.generation_status = 'PENDING_GENERATION'
               OR (
@@ -169,6 +174,21 @@ export function hasActiveFreshPendingGeneration(
     WHERE 1=1
       ${batchCondition}
       ${excludeCondition}
+      AND NOT EXISTS (
+        SELECT 1 FROM contacts c2
+        LEFT JOIN company_classifications cc ON (
+          cc.normalized_name = LOWER(TRIM(c2.company_name))
+          OR cc.company_name = c2.company_name
+          OR cc.company_name = TRIM(c2.company_name)
+        )
+        WHERE c2.batch_id = contacts.batch_id
+          AND c2.company_name IS NOT NULL
+          AND TRIM(c2.company_name) != ''
+          AND (
+            cc.classification_result IN ('PENDING', 'RETRY_WAITING')
+            OR (cc.classification_result IS NULL AND c2.is_relevant IS NULL)
+          )
+      )
   `);
 
   return (row?.activePending ?? 0) > 0;
@@ -214,6 +234,14 @@ export function getGenerationRoundState(
   retryWaitingCount: number;
   isCurrentRoundDrained: boolean;
 } {
+  if (batchId && !isBatchClassificationComplete(db, batchId)) {
+    return {
+      activePendingCount: 0,
+      retryWaitingCount: 0,
+      isCurrentRoundDrained: true,
+    };
+  }
+
   const batchCondition = batchId
     ? sql`AND contacts.batch_id = ${batchId}`
     : sql`AND batches.status NOT IN ('deleted', 'cancelled')`;
@@ -229,7 +257,7 @@ export function getGenerationRoundState(
             AND contacts.email_valid = 1
             AND contacts.is_duplicate = 0
             AND contacts.sent_at IS NULL
-            AND contacts.generation_status != 'GENERATED'
+            AND (contacts.generation_status IS NULL OR contacts.generation_status != 'GENERATED')
             AND (
               contacts.generation_status = 'PENDING_GENERATION'
               OR (
@@ -268,6 +296,21 @@ export function getGenerationRoundState(
     INNER JOIN batches ON contacts.batch_id = batches.id
     WHERE 1=1
       ${batchCondition}
+      AND NOT EXISTS (
+        SELECT 1 FROM contacts c2
+        LEFT JOIN company_classifications cc ON (
+          cc.normalized_name = LOWER(TRIM(c2.company_name))
+          OR cc.company_name = c2.company_name
+          OR cc.company_name = TRIM(c2.company_name)
+        )
+        WHERE c2.batch_id = contacts.batch_id
+          AND c2.company_name IS NOT NULL
+          AND TRIM(c2.company_name) != ''
+          AND (
+            cc.classification_result IN ('PENDING', 'RETRY_WAITING')
+            OR (cc.classification_result IS NULL AND c2.is_relevant IS NULL)
+          )
+      )
   `);
 
   const activePendingCount = row?.activePending ?? 0;
@@ -329,6 +372,21 @@ export async function reconcilePendingEmailGenerations(options: {
     };
   }
 
+  // Strict Batch Classification Barrier: If options.batchId is specified, check if its classification is complete
+  if (options.batchId && !isBatchClassificationComplete(db, options.batchId)) {
+    return {
+      processed: 0,
+      succeeded: 0,
+      retryPending: 0,
+      failed: 0,
+      recovered,
+      skippedReason: 'CLASSIFICATION_INCOMPLETE',
+      activePass: 'IDLE',
+      activePendingCount: 0,
+      retryWaitingCount: 0,
+    };
+  }
+
   const verifiedLinks: VerifiedProfileLinks = {
     linkedin: profile.linkedin || null,
     github: profile.github || null,
@@ -374,16 +432,31 @@ export async function reconcilePendingEmailGenerations(options: {
               AND global_email_history.sent_at IS NOT NULL
               AND global_email_history.sent_at > ${cooldownCutoffIso}
           )
+          AND NOT EXISTS (
+            SELECT 1 FROM contacts c2
+            LEFT JOIN company_classifications cc ON (
+              cc.normalized_name = LOWER(TRIM(c2.company_name))
+              OR cc.company_name = c2.company_name
+              OR cc.company_name = TRIM(c2.company_name)
+            )
+            WHERE c2.batch_id = contacts.batch_id
+              AND c2.company_name IS NOT NULL
+              AND TRIM(c2.company_name) != ''
+              AND (
+                cc.classification_result IN ('PENDING', 'RETRY_WAITING')
+                OR (cc.classification_result IS NULL AND c2.is_relevant IS NULL)
+              )
+          )
           AND (
             contacts.generation_status = 'PENDING_GENERATION'
             OR (
               contacts.generation_status IS NULL
-              AND contacts.status = 'queued'
+              AND contacts.status IN ('queued', 'generating', 'discovered')
               AND (contacts.email_subject IS NULL OR contacts.email_body IS NULL)
             )
           )
           AND (contacts.generation_lease_expires_at IS NULL OR contacts.generation_lease_expires_at < ${nowIso})
-          AND contacts.generation_status != 'GENERATED'
+          AND (contacts.generation_status IS NULL OR contacts.generation_status != 'GENERATED')
         `
       )
       .orderBy(
@@ -418,6 +491,21 @@ export async function reconcilePendingEmailGenerations(options: {
               AND global_email_history.status = 'sent'
               AND global_email_history.sent_at IS NOT NULL
               AND global_email_history.sent_at > ${cooldownCutoffIso}
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM contacts c2
+            LEFT JOIN company_classifications cc ON (
+              cc.normalized_name = LOWER(TRIM(c2.company_name))
+              OR cc.company_name = c2.company_name
+              OR cc.company_name = TRIM(c2.company_name)
+            )
+            WHERE c2.batch_id = contacts.batch_id
+              AND c2.company_name IS NOT NULL
+              AND TRIM(c2.company_name) != ''
+              AND (
+                cc.classification_result IN ('PENDING', 'RETRY_WAITING')
+                OR (cc.classification_result IS NULL AND c2.is_relevant IS NULL)
+              )
           )
           AND contacts.generation_status = 'RETRY_PENDING'
           AND (contacts.generation_lease_expires_at IS NULL OR contacts.generation_lease_expires_at < ${nowIso})
@@ -461,6 +549,10 @@ export async function reconcilePendingEmailGenerations(options: {
   let failed = 0;
 
   for (const contact of candidates) {
+    if (!isBatchClassificationComplete(db, contact.batchId)) {
+      continue;
+    }
+
     if (globalGeminiLimiter.isCooldownActive() && !isOpenRouterConfigured()) {
       console.log(
         `[GenerationReconciler] Global Gemini 429 cooldown active until ${globalGeminiLimiter.getCooldownUntilIso()} and OpenRouter not configured. Stopping candidate generation loop.`
@@ -506,7 +598,7 @@ export async function reconcilePendingEmailGenerations(options: {
               AND c2.email_valid = 1
               AND c2.is_duplicate = 0
               AND c2.sent_at IS NULL
-              AND c2.generation_status != 'GENERATED'
+              AND (c2.generation_status IS NULL OR c2.generation_status != 'GENERATED')
               AND (
                 c2.generation_status = 'PENDING_GENERATION'
                 OR (
@@ -532,7 +624,7 @@ export async function reconcilePendingEmailGenerations(options: {
             OR generation_status IS NULL
             OR generation_lease_expires_at < ${nowIso}
           )
-          AND generation_status != 'GENERATED'
+          AND (generation_status IS NULL OR generation_status != 'GENERATED')
       `);
     }
 

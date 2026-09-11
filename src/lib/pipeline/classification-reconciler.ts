@@ -40,6 +40,48 @@ export function resetActiveClassificationClaimsForTesting(): void {
 }
 
 /**
+ * Checks whether all companies in a specific batch have reached a terminal classification state.
+ * The barrier condition is:
+ * AI Search Pending === 0 AND AI Search Retry === 0
+ *
+ * Specifically, there must be NO companies for contacts in this batch where:
+ * - classification_result IN ('PENDING', 'RETRY_WAITING')
+ * - OR (classification_result IS NULL AND contacts.is_relevant IS NULL)
+ */
+export function isBatchClassificationComplete(
+  db: ReturnType<typeof getDb> = getDb(),
+  batchId: string
+): boolean {
+  if (!batchId) return false;
+
+  const batch = db
+    .select({ id: batches.id })
+    .from(batches)
+    .where(and(eq(batches.id, batchId), sql`batches.status NOT IN ('deleted', 'cancelled')`))
+    .get();
+  if (!batch) return false;
+
+  const incompleteRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(DISTINCT LOWER(TRIM(c.company_name))) as count
+    FROM contacts c
+    LEFT JOIN company_classifications cc ON (
+      cc.normalized_name = LOWER(TRIM(c.company_name))
+      OR cc.company_name = c.company_name
+      OR cc.company_name = TRIM(c.company_name)
+    )
+    WHERE c.batch_id = ${batchId}
+      AND c.company_name IS NOT NULL
+      AND TRIM(c.company_name) != ''
+      AND (
+        cc.classification_result IN ('PENDING', 'RETRY_WAITING')
+        OR (cc.classification_result IS NULL AND c.is_relevant IS NULL)
+      )
+  `);
+
+  return (incompleteRow?.count ?? 0) === 0;
+}
+
+/**
  * Retrieves the normalized company names associated with unclassified contacts in a given batch.
  */
 export function getUnclassifiedCompanyNamesForBatch(

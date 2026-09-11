@@ -2,6 +2,7 @@ import { getDb } from '@/db';
 import { contacts, batches, outreachQueue, schedulerState, settings, resume, candidateProfile } from '@/db/schema';
 import { eq, and, sql, asc, desc, inArray, ne, or, isNotNull } from 'drizzle-orm';
 import { getLocalDateString, getConfiguredTimezone, getCooldownCutoffIso } from './time-utils';
+import { isBatchClassificationComplete } from '@/lib/pipeline/classification-reconciler';
 import type { QueueItem, Contact } from '@/types';
 
 const QUEUE_ITEM_LEASE_MS = 60 * 1000; // 60 seconds lease per item
@@ -353,6 +354,21 @@ export function acquireNextEligibleJob(workerId: string): NextEligibleJob | null
         AND contacts.email_subject IS NOT NULL
         AND contacts.email_body IS NOT NULL
         AND NOT EXISTS (
+          SELECT 1 FROM contacts c2
+          LEFT JOIN company_classifications cc ON (
+            cc.normalized_name = LOWER(TRIM(c2.company_name))
+            OR cc.company_name = c2.company_name
+            OR cc.company_name = TRIM(c2.company_name)
+          )
+          WHERE c2.batch_id = contacts.batch_id
+            AND c2.company_name IS NOT NULL
+            AND TRIM(c2.company_name) != ''
+            AND (
+              cc.classification_result IN ('PENDING', 'RETRY_WAITING')
+              OR (cc.classification_result IS NULL AND c2.is_relevant IS NULL)
+            )
+        )
+        AND NOT EXISTS (
           SELECT 1 FROM global_email_history
           WHERE global_email_history.email = LOWER(TRIM(contacts.email))
             AND global_email_history.status = 'sent'
@@ -374,6 +390,11 @@ export function acquireNextEligibleJob(workerId: string): NextEligibleJob | null
   }
 
   for (const { queue: candidateQueue, contact: candidateContact } of candidates) {
+    // Classification Barrier: Ensure contact's batch has completely finished company classification
+    if (!isBatchClassificationComplete(db, candidateContact.batchId)) {
+      continue;
+    }
+
     // If contact's resumeVersion is outdated compared to active profile and resume, auto-heal to PENDING_GENERATION
     const isMatch = (activeProfileVersion && candidateContact.resumeVersion === activeProfileVersion) ||
                     (activeResumeVersion && candidateContact.resumeVersion === activeResumeVersion);

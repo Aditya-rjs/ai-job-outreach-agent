@@ -25,10 +25,18 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
 
+    const batchIdParam = searchParams.get('batchId') || undefined;
+
+    // Always fetch latest counts for all categories
+    const stats = getProcessingPipelineStats(batchIdParam);
+    const currentBatchId = stats.currentBatchId || undefined;
+
     // Support fetching company contacts directly when expanding a company row
     const companyContactsTarget = searchParams.get('companyContacts');
     if (companyContactsTarget) {
-      const contacts = getCompanyContactsList(companyContactsTarget);
+      const contacts = currentBatchId
+        ? getCompanyContactsList(companyContactsTarget, currentBatchId)
+        : [];
       return NextResponse.json(
         { success: true, data: { contacts } },
         { headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' } }
@@ -40,54 +48,54 @@ export async function GET(request: NextRequest) {
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
     const limit = Math.max(1, Math.min(parseInt(searchParams.get('limit') || '25', 10), 200));
 
-    // Always fetch latest counts for all categories
-    const stats = getProcessingPipelineStats();
-
     let records: unknown[] = [];
     let total = 0;
 
-    switch (category) {
-      case 'classification-pending': {
-        const res = getClassificationPendingList({ search, page, limit });
-        records = res.records;
-        total = res.total;
-        break;
-      }
-      case 'classification-retry-waiting': {
-        const res = getClassificationRetryWaitingList({ search, page, limit });
-        records = res.records;
-        total = res.total;
-        break;
-      }
-      case 'generation-pending': {
-        const res = getEmailGenerationPendingList({ search, page, limit });
-        records = res.records;
-        total = res.total;
-        break;
-      }
-      case 'generation-retry': {
-        const res = getGenerationRetryList({ search, page, limit });
-        records = res.records;
-        total = res.total;
-        break;
-      }
-      case 'generation-failed': {
-        const res = getGenerationFailedList({ search, page, limit });
-        records = res.records;
-        total = res.total;
-        break;
-      }
-      case 'ready-to-send': {
-        const res = getReadyToSendList({ search, page, limit });
-        records = res.records;
-        total = res.total;
-        break;
-      }
-      default: {
-        const res = getClassificationPendingList({ search, page, limit });
-        records = res.records;
-        total = res.total;
-        break;
+    if (currentBatchId) {
+      const options = { batchId: currentBatchId, search, page, limit };
+      switch (category) {
+        case 'classification-pending': {
+          const res = getClassificationPendingList(options);
+          records = res.records;
+          total = res.total;
+          break;
+        }
+        case 'classification-retry-waiting': {
+          const res = getClassificationRetryWaitingList(options);
+          records = res.records;
+          total = res.total;
+          break;
+        }
+        case 'generation-pending': {
+          const res = getEmailGenerationPendingList(options);
+          records = res.records;
+          total = res.total;
+          break;
+        }
+        case 'generation-retry': {
+          const res = getGenerationRetryList(options);
+          records = res.records;
+          total = res.total;
+          break;
+        }
+        case 'generation-failed': {
+          const res = getGenerationFailedList(options);
+          records = res.records;
+          total = res.total;
+          break;
+        }
+        case 'ready-to-send': {
+          const res = getReadyToSendList(options);
+          records = res.records;
+          total = res.total;
+          break;
+        }
+        default: {
+          const res = getClassificationPendingList(options);
+          records = res.records;
+          total = res.total;
+          break;
+        }
       }
     }
 

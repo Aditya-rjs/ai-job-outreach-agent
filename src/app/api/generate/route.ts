@@ -5,6 +5,7 @@ import { eq, and, sql, inArray } from 'drizzle-orm';
 import { initializeDatabase } from '@/db/migrate';
 import { generatePersonalizedEmail } from '@/lib/ai/email-generator';
 import { getCandidateProfile, isCandidateProfileConfigured } from '@/lib/candidate-profile/candidate-profile-service';
+import { isBatchClassificationComplete } from '@/lib/pipeline/classification-reconciler';
 import type { ApiResponse, Contact, VerifiedProfileLinks } from '@/types';
 
 let initialized = false;
@@ -41,7 +42,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const body = await request.json().catch(() => ({}));
     const { contactId, batchId, forceRegenerate } = body;
 
-    // 2. Select eligible contacts
+    // 2. Select eligible contacts with classification barrier enforcement
     let targetContacts: Contact[] = [];
 
     if (contactId) {
@@ -52,14 +53,32 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
           { status: 404 }
         );
       }
-      if (c.status === 'skipped' || c.isDuplicate || c.isRelevant === false || !c.emailValid) {
+      if (!isBatchClassificationComplete(db, c.batchId)) {
         return NextResponse.json(
-          { success: false, error: 'Cannot generate email for an ineligible or skipped contact.' },
+          {
+            success: false,
+            error: 'Cannot generate email: company classification is still pending or retrying for this file.',
+          },
+          { status: 400 }
+        );
+      }
+      if (c.status === 'skipped' || c.isDuplicate || c.isRelevant !== true || !c.emailValid) {
+        return NextResponse.json(
+          { success: false, error: 'Cannot generate email for an ineligible, skipped, or unclassified contact.' },
           { status: 400 }
         );
       }
       targetContacts = [c as Contact];
     } else if (batchId) {
+      if (!isBatchClassificationComplete(db, batchId)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'Cannot generate emails: company classification is still pending or retrying for this file.',
+          },
+          { status: 400 }
+        );
+      }
       const allowedStatuses = forceRegenerate ? ['queued', 'generated', 'failed'] : ['queued', 'failed'];
       targetContacts = db
         .select()
@@ -70,14 +89,14 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
             inArray(contacts.status, allowedStatuses as Contact['status'][]),
             eq(contacts.emailValid, true),
             eq(contacts.isDuplicate, false),
-            sql`(${contacts.isRelevant} = 1 OR ${contacts.isRelevant} IS NULL)`,
+            eq(contacts.isRelevant, true),
             forceRegenerate ? sql`1=1` : sql`(${contacts.generationStatus} != 'GENERATED' OR ${contacts.generationStatus} IS NULL OR ${contacts.emailSubject} IS NULL)`
           )
         )
         .all() as Contact[];
     } else {
       const allowedStatuses = forceRegenerate ? ['queued', 'generated', 'failed'] : ['queued', 'failed'];
-      targetContacts = db
+      const rawCandidates = db
         .select()
         .from(contacts)
         .where(
@@ -85,12 +104,14 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
             inArray(contacts.status, allowedStatuses as Contact['status'][]),
             eq(contacts.emailValid, true),
             eq(contacts.isDuplicate, false),
-            sql`(${contacts.isRelevant} = 1 OR ${contacts.isRelevant} IS NULL)`,
+            eq(contacts.isRelevant, true),
             forceRegenerate ? sql`1=1` : sql`(${contacts.generationStatus} != 'GENERATED' OR ${contacts.generationStatus} IS NULL OR ${contacts.emailSubject} IS NULL)`
           )
         )
         .limit(100)
         .all() as Contact[];
+
+      targetContacts = rawCandidates.filter((c) => isBatchClassificationComplete(db, c.batchId));
     }
 
     if (targetContacts.length === 0) {

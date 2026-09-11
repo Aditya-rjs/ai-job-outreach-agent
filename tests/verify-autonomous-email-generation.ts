@@ -315,11 +315,26 @@ async function runTests() {
   // --- Test 10: Cascade Classification Promotion to Generation ---
   console.log('\n--- Test 10: Cascade Classification Promotion to Generation ---');
   // Insert contact under TRE DENCE Analytics (currently unclassified)
+  const tredenceBatchId = 'batch_test_tredence_01';
+  db.insert(batches)
+    .values({
+      id: tredenceBatchId,
+      filename: 'Tredence.csv',
+      uploadDate: nowIso,
+      totalRecords: 1,
+      validRecords: 1,
+      relevantCompanies: 1,
+      status: 'queued',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    })
+    .run();
+
   const contactTredence = 'cont_tredence_01';
   db.insert(contacts)
     .values({
       id: contactTredence,
-      batchId: testBatchId,
+      batchId: tredenceBatchId,
       companyName: 'Tredence Analytics',
       email: 'recruiter@tredence.com',
       isRelevant: null,
