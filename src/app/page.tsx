@@ -26,6 +26,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/lib/utils';
 import type { DashboardStats, Batch, SchedulerConfig } from '@/types';
+import type { ProcessingPipelineStats } from '@/lib/processing-queries';
 import { DashboardDetailModal, type DashboardCardViewId } from '@/components/dashboard/dashboard-detail-modal';
 import { ProcessingPipelineSection, type ProcessingCategory } from '@/components/dashboard/processing-pipeline-section';
 import { AiProviderStatus } from '@/components/dashboard/ai-provider-status';
@@ -34,6 +35,7 @@ const POLL_INTERVAL_MS = 6000; // 6 seconds automatic refresh
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [processingStats, setProcessingStats] = useState<ProcessingPipelineStats | null>(null);
   const [scheduler, setScheduler] = useState<SchedulerConfig | null>(null);
   const [recentBatches, setRecentBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,6 +47,9 @@ export default function DashboardPage() {
   // Active detail view for clickable dashboard cards
   const [activeModalView, setActiveModalView] = useState<DashboardCardViewId | null>(null);
   const [selectedProcessingCategory, setSelectedProcessingCategory] = useState<ProcessingCategory | undefined>(undefined);
+
+  // Single source of truth for processing pipeline stats
+  const effectiveProcessingStats = processingStats || stats?.processingStats || null;
 
   const handleViewGenerationFailures = () => {
     setSelectedProcessingCategory('generation-failed');
@@ -128,7 +133,7 @@ export default function DashboardPage() {
     latestTimestampRef.current = requestTimestamp;
 
     try {
-      const [statsRes, schedulerRes, batchesRes] = await Promise.all([
+      const [statsRes, schedulerRes, batchesRes, processingRes] = await Promise.all([
         fetch(`/api/dashboard?_t=${requestTimestamp}`, {
           cache: 'no-store',
           signal: abortController.signal,
@@ -144,12 +149,18 @@ export default function DashboardPage() {
           signal: abortController.signal,
           headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
         }),
+        fetch(`/api/dashboard/processing?limit=1&_t=${requestTimestamp}`, {
+          cache: 'no-store',
+          signal: abortController.signal,
+          headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+        }),
       ]);
 
-      const [statsJson, schedulerJson, batchesJson] = await Promise.all([
+      const [statsJson, schedulerJson, batchesJson, processingJson] = await Promise.all([
         statsRes.json(),
         schedulerRes.json(),
         batchesRes.json(),
+        processingRes.json(),
       ]);
 
       // Response sequencing check: Ensure an old/delayed response cannot overwrite newer state
@@ -157,9 +168,17 @@ export default function DashboardPage() {
         return;
       }
 
-      if (statsJson.success) setStats(statsJson.data);
+      if (statsJson.success) {
+        setStats(statsJson.data);
+        if (statsJson.data?.processingStats) {
+          setProcessingStats(statsJson.data.processingStats);
+        }
+      }
       if (schedulerJson.success) setScheduler(schedulerJson.data);
       if (batchesJson.success) setRecentBatches((batchesJson.data || []).slice(0, 5));
+      if (processingJson.success && processingJson.data?.stats) {
+        setProcessingStats(processingJson.data.stats);
+      }
       setLastSyncTime(new Date());
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
@@ -436,7 +455,7 @@ export default function DashboardPage() {
                   <Badge variant="warning">Paused</Badge>
                 ) : scheduler?.schedulerStatus === 'waiting' ? (
                   <Badge variant="secondary">Window Closed (10 AM–4 PM IST)</Badge>
-                ) : stats?.queueSize && stats.queueSize > 0 ? (
+                ) : (effectiveProcessingStats ? effectiveProcessingStats.readyToSend > 0 : (stats?.queueSize && stats.queueSize > 0)) ? (
                   <Badge variant="success">Active Worker Ready</Badge>
                 ) : (
                   <Badge variant="outline">Waiting for Contacts</Badge>
@@ -501,13 +520,15 @@ export default function DashboardPage() {
             </div>
 
             <div>
-              <p className="text-xs text-muted-foreground font-medium">Outreach Queue</p>
+              <p className="text-xs text-muted-foreground font-medium">Ready to Send</p>
               <div className="flex items-baseline gap-1 mt-1">
-                <span className="text-2xl font-bold text-primary">{stats?.queueSize ?? 0}</span>
-                <span className="text-sm text-muted-foreground">contacts staged</span>
+                <span className="text-2xl font-bold text-primary">{effectiveProcessingStats?.readyToSend ?? 0}</span>
+                <span className="text-sm text-muted-foreground">contacts ready</span>
               </div>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                {stats?.emailsGenerated ?? 0} ready • {stats?.emailsPendingGeneration ?? 0} pending gen
+                {((effectiveProcessingStats?.aiSearchPending ?? 0) > 0 || (effectiveProcessingStats?.aiSearchRetry ?? 0) > 0)
+                  ? `${effectiveProcessingStats?.aiSearchPending ?? 0} AI search pending • ${effectiveProcessingStats?.generationRetry ?? 0} retry`
+                  : `${effectiveProcessingStats?.emailsGenerating ?? 0} generating • ${effectiveProcessingStats?.generationRetry ?? 0} retry`}
               </p>
             </div>
 
@@ -549,11 +570,13 @@ export default function DashboardPage() {
               <Sparkles className="h-4 w-4 text-primary shrink-0" />
               <span className="font-semibold text-foreground">Autonomous AI Email Generation:</span>
               <span className="text-muted-foreground">
-                {stats?.emailsGenerated ?? 0} Ready • {stats?.emailsPendingGeneration ?? 0} Pending • {stats?.emailsGenerating ?? 0} In Progress
-                {(stats?.emailsGenerationRetryPending ?? 0) > 0 ? ` • ${stats?.emailsGenerationRetryPending} Retry Pending` : ''}
-                {(stats?.emailsGenerationFailed ?? 0) > 0 ? ` • ${stats?.emailsGenerationFailed} Failed` : ''}
+                {effectiveProcessingStats?.readyToSend ?? 0} Ready to Send • {effectiveProcessingStats?.emailsGenerating ?? 0} Emails Generating • {effectiveProcessingStats?.generationRetry ?? 0} Generation Retry
+                {(effectiveProcessingStats?.generationFailed ?? 0) > 0 ? ` • ${effectiveProcessingStats?.generationFailed} Generation Failed` : ''}
+                {((effectiveProcessingStats?.aiSearchPending ?? 0) > 0 || (effectiveProcessingStats?.aiSearchRetry ?? 0) > 0) ? (
+                  ` • ${effectiveProcessingStats?.aiSearchPending ?? 0} AI Search Pending • ${effectiveProcessingStats?.aiSearchRetry ?? 0} AI Search Retry`
+                ) : ''}
               </span>
-              {(stats?.emailsGenerationFailed ?? 0) > 0 && (
+              {(effectiveProcessingStats?.generationFailed ?? 0) > 0 && (
                 <button
                   type="button"
                   onClick={handleViewGenerationFailures}
@@ -561,7 +584,7 @@ export default function DashboardPage() {
                   title="Inspect failed email generation contacts in the live pipeline"
                 >
                   <AlertTriangle className="h-3 w-3 text-red-600 dark:text-red-400" />
-                  View failures ({stats?.emailsGenerationFailed})
+                  View failures ({effectiveProcessingStats?.generationFailed})
                 </button>
               )}
             </div>
@@ -641,6 +664,7 @@ export default function DashboardPage() {
           refreshTrigger={lastSyncTime?.getTime()}
           selectedCategory={selectedProcessingCategory}
           onCategoryChange={(cat) => setSelectedProcessingCategory(cat)}
+          onStatsLoaded={setProcessingStats}
         />
       </div>
 

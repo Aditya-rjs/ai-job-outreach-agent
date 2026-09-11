@@ -23,6 +23,7 @@ import {
   getEmailsSentCount,
   getEmailsSkippedCount,
 } from './dashboard-queries';
+import { getProcessingPipelineStats } from './processing-queries';
 
 
 export function getDashboardStats(): DashboardStats {
@@ -42,6 +43,7 @@ export function getDashboardStats(): DashboardStats {
   const emailsSent = getEmailsSentCount(false);
   const emailsSimulated = getEmailsSentCount(true);
   const emailsSkipped = getEmailsSkippedCount();
+  const processingStats = getProcessingPipelineStats();
 
   // Aggregate secondary generation metrics
   const contactStats = db
@@ -142,6 +144,7 @@ export function getDashboardStats(): DashboardStats {
     geminiTelemetry: getGeminiTelemetry(),
     aiTelemetry: getAiDispatcherTelemetry(),
     outreachStatus,
+    processingStats,
   };
 
 }

@@ -28,10 +28,12 @@ interface ProcessingPipelineSectionProps {
   refreshTrigger?: number;
   selectedCategory?: ProcessingCategory;
   onCategoryChange?: (category: ProcessingCategory) => void;
+  onStatsLoaded?: (stats: ProcessingPipelineStats) => void;
 }
 
 export function ProcessingPipelineSection({
   refreshTrigger,
+  onStatsLoaded,
 }: ProcessingPipelineSectionProps) {
   const [stats, setStats] = useState<ProcessingPipelineStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,6 +62,9 @@ export function ProcessingPipelineSection({
       if (json.success && json.data) {
         setStats(json.data.stats);
         setLastUpdated(new Date(json.data.lastUpdated));
+        if (onStatsLoaded && json.data.stats) {
+          onStatsLoaded(json.data.stats);
+        }
       }
     } catch (err) {
       console.error('Error in ProcessingPipelineSection fetchData:', err);

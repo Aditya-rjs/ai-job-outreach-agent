@@ -1,4 +1,7 @@
+import type { ProcessingPipelineStats } from '@/lib/processing-queries';
+
 export interface DashboardStats {
+  processingStats?: ProcessingPipelineStats;
   totalCompanies: number;
   relevantCompanies: number;
   totalContacts: number;
