@@ -138,6 +138,7 @@ export function getDashboardStats(): DashboardStats {
     queueSize,
     isPaused,
     isStopped,
+    isWindowOpen: isWithinWindow,
     isDryRun,
     gmailConnected: gmailConnected?.value === 'true',
     gmailEmail: gmailEmail?.value ?? null,
@@ -168,13 +169,16 @@ export function getSchedulerConfig(): SchedulerConfig {
     schedulerStatus = 'paused';
   } else if (!isWithinWindow) {
     schedulerStatus = 'waiting';
-  } else if (lease.isActive) {
+  } else if (quota.todaySentCount >= quota.dailyLimit) {
+    schedulerStatus = 'quota_reached';
+  } else {
     schedulerStatus = 'running';
   }
 
   return {
     isPaused: state?.isPaused ?? false,
     isStopped: state?.isStopped ?? false,
+    isWindowOpen: isWithinWindow,
     todaySentCount: quota.todaySentCount,
     todaySimulatedCount: quota.todaySimulatedCount,
     todayDate: quota.todayDate,

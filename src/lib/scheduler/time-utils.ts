@@ -34,19 +34,23 @@ export function getLocalDateString(date: Date = new Date(), timezone: string = g
 }
 
 /**
- * Returns the current hour and minute in the target timezone.
+ * Returns the current hour, minute, and second in the target timezone (default: 'Asia/Kolkata').
+ * Guaranteed 0-23 hour representation independent of host machine/Node timezone.
  */
 export function getLocalHourAndMinute(
   date: Date = new Date(),
   timezone: string = getConfiguredTimezone()
 ): { hour: number; minute: number; second: number } {
+  const targetDate = date instanceof Date ? date : new Date(date || Date.now());
+  const tz = (timezone && isValidTimezone(timezone)) ? timezone : 'Asia/Kolkata';
+
   const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
+    timeZone: tz,
     hour: 'numeric',
     minute: 'numeric',
     second: 'numeric',
-    hour12: false,
-  }).formatToParts(date);
+    hourCycle: 'h23',
+  }).formatToParts(targetDate);
 
   let hour = 0;
   let minute = 0;
@@ -62,7 +66,11 @@ export function getLocalHourAndMinute(
 }
 
 /**
- * Determines whether the given time is within the daily sending window (default: 10:00 AM to 4:00 PM IST).
+ * Determines whether the given time is within the daily sending window (default: 10:00 AM to 4:00 PM Asia/Kolkata).
+ * Boundaries:
+ * - 10:00:00 through 15:59:59 Asia/Kolkata = OPEN
+ * - 16:00:00 Asia/Kolkata and later = CLOSED
+ * - Before 10:00:00 Asia/Kolkata = CLOSED
  */
 export function isWithinDailyWindow(
   date: Date = new Date(),
@@ -72,11 +80,15 @@ export function isWithinDailyWindow(
   endHour: number = 16,
   endMinute: number = 0
 ): boolean {
-  const { hour, minute } = getLocalHourAndMinute(date, timezone);
-  const currentMinutes = hour * 60 + minute;
-  const startMinutes = startHour * 60 + startMinute;
-  const endMinutes = endHour * 60 + endMinute;
-  return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+  const targetDate = date instanceof Date ? date : new Date(date || Date.now());
+  const tz = (timezone && isValidTimezone(timezone)) ? timezone : 'Asia/Kolkata';
+  const { hour, minute, second } = getLocalHourAndMinute(targetDate, tz);
+
+  const currentSeconds = hour * 3600 + minute * 60 + second;
+  const startSeconds = startHour * 3600 + startMinute * 60;
+  const endSeconds = endHour * 3600 + endMinute * 60;
+
+  return currentSeconds >= startSeconds && currentSeconds < endSeconds;
 }
 
 /**
@@ -92,7 +104,9 @@ export function getNextDailyWindowDate(
   endHour: number = 16,
   endMinute: number = 0
 ): Date {
-  const { hour, minute, second } = getLocalHourAndMinute(now, timezone);
+  const targetNow = now instanceof Date ? now : new Date(now || Date.now());
+  const tz = (timezone && isValidTimezone(timezone)) ? timezone : 'Asia/Kolkata';
+  const { hour, minute, second } = getLocalHourAndMinute(targetNow, tz);
 
   const currentSeconds = hour * 3600 + minute * 60 + second;
   const startSeconds = startHour * 3600 + startMinute * 60;
@@ -107,7 +121,7 @@ export function getNextDailyWindowDate(
     secondsUntilTarget = secondsInDay - currentSeconds + startSeconds;
   }
 
-  const result = new Date(now.getTime() + secondsUntilTarget * 1000);
+  const result = new Date(targetNow.getTime() + secondsUntilTarget * 1000);
   result.setMilliseconds(0);
   return result;
 }

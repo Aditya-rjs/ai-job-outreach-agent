@@ -453,12 +453,17 @@ export default function DashboardPage() {
                   <Badge variant="destructive">Stopped</Badge>
                 ) : scheduler?.isPaused ? (
                   <Badge variant="warning">Paused</Badge>
-                ) : scheduler?.schedulerStatus === 'waiting' ? (
+                ) : !scheduler?.isWindowOpen ? (
                   <Badge variant="secondary">Window Closed (10 AM–4 PM IST)</Badge>
-                ) : (effectiveProcessingStats ? effectiveProcessingStats.readyToSend > 0 : (stats?.queueSize && stats.queueSize > 0)) ? (
-                  <Badge variant="success">Active Worker Ready</Badge>
                 ) : (
-                  <Badge variant="outline">Waiting for Contacts</Badge>
+                  <Badge variant="success">Window Open (10 AM–4 PM IST)</Badge>
+                )}
+                {scheduler?.isWindowOpen && !scheduler?.isPaused && !scheduler?.isStopped && (
+                  (effectiveProcessingStats ? effectiveProcessingStats.readyToSend > 0 : (stats?.queueSize && stats.queueSize > 0)) ? (
+                    <Badge variant="default">Active Worker Ready</Badge>
+                  ) : (
+                    <Badge variant="outline">Waiting for Contacts</Badge>
+                  )
                 )}
               </div>
               <p className="text-xs text-muted-foreground mt-1">

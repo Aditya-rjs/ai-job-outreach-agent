@@ -25,6 +25,7 @@ export interface DashboardStats {
   queueSize: number;
   isPaused: boolean;
   isStopped: boolean;
+  isWindowOpen?: boolean;
   isDryRun: boolean;
   gmailConnected: boolean;
   gmailEmail: string | null;
@@ -191,6 +192,7 @@ export type QueueStatus =
 export interface SchedulerConfig {
   isPaused: boolean;
   isStopped: boolean;
+  isWindowOpen: boolean;
   todaySentCount: number;
   todaySimulatedCount: number;
   todayDate: string | null;
