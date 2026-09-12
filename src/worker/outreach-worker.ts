@@ -54,12 +54,77 @@ process.on('SIGINT', () => handleShutdown('SIGINT'));
 process.on('SIGTERM', () => handleShutdown('SIGTERM'));
 
 let lastClassificationReconcileAt = 0;
-let lastEmailGenerationReconcileAt = 0;
 
 /**
- * Main persistent worker loop.
+ * Autonomous AI Email Generation loop: runs continuously and independently
+ * of the Gmail sending window, interval sleeps, and dispatch pacing.
  */
-async function runWorkerLoop() {
+export async function runGenerationLoop() {
+  console.log('[Outreach Worker] Starting autonomous generation loop...');
+  while (!isShuttingDown) {
+    try {
+      // 1. Check or renew persistent worker lease
+      const lease = acquireWorkerLease(WORKER_ID);
+      if (!lease.acquired) {
+        await sleep(5000);
+        continue;
+      }
+      renewWorkerLease(WORKER_ID);
+
+      // 2. Reconcile any pending company classifications due for retry every 30s
+      if (Date.now() - lastClassificationReconcileAt >= 30000) {
+        lastClassificationReconcileAt = Date.now();
+        await reconcilePendingClassifications().catch((err) =>
+          console.warn('[Outreach Worker] Error reconciling pending classifications:', err)
+        );
+      }
+
+      // 3. Check scheduler pause / stop controls
+      const db = getDb();
+      const state = db.select().from(schedulerState).where(eq(schedulerState.id, 'singleton')).get();
+      if (state?.isStopped) {
+        // Complete emergency stop: wait 5s
+        await sleep(5000);
+        continue;
+      }
+
+      // 4. Autonomous AI Email Generation batch
+      const result = await reconcilePendingEmailGenerations({ claimWorkerId: WORKER_ID });
+
+      if (result.processed > 0) {
+        // Work was processed (batch of up to 4 completed).
+        // Yield briefly to prevent CPU lockup and allow concurrent I/O, then immediately process the next batch!
+        await sleep(500);
+        continue;
+      }
+
+      // 5. If no candidates were processed, back off based on reason
+      if (result.skippedReason === 'CLASSIFICATION_INCOMPLETE') {
+        // Classification barrier is active: wait for company classifications to finish
+        await sleep(5000);
+      } else if (result.skippedReason === 'GEMINI_COOLDOWN_ACTIVE') {
+        // Provider in cooldown: wait for cooldown before retrying
+        await sleep(5000);
+      } else if (result.skippedReason === 'NO_CANDIDATE_PROFILE') {
+        // Candidate profile missing: wait for user configuration
+        await sleep(10000);
+      } else {
+        // IDLE: All contacts generated or no pending generation items exist
+        await sleep(5000);
+      }
+    } catch (genErr) {
+      console.error('[Outreach Worker] Error in autonomous generation loop:', genErr);
+      await sleep(5000);
+    }
+  }
+}
+
+/**
+ * Outreach Sending loop: manages Gmail dispatching, interval pacing,
+ * daily sending window (10:00 AM - 4:00 PM IST), and rate limiting.
+ */
+export async function runSendingLoop() {
+  console.log('[Outreach Worker] Starting outreach sending loop...');
   while (!isShuttingDown) {
     try {
       // 1. Acquire or renew persistent worker lease
@@ -77,23 +142,6 @@ async function runWorkerLoop() {
       if (recovered > 0) {
         console.log(`[Outreach Worker] Recovered ${recovered} stale queue items after crash.`);
       }
-
-      // Reconcile any pending company classifications due for retry
-      if (Date.now() - lastClassificationReconcileAt >= 30000) {
-        lastClassificationReconcileAt = Date.now();
-        await reconcilePendingClassifications().catch((err) =>
-          console.warn('[Outreach Worker] Error reconciling pending classifications:', err)
-        );
-      }
-
-      // Autonomous AI Email Generation: continuous background preparation (send-ahead)
-      if (Date.now() - lastEmailGenerationReconcileAt >= 15000) {
-        lastEmailGenerationReconcileAt = Date.now();
-        await reconcilePendingEmailGenerations({ claimWorkerId: WORKER_ID }).catch((err) =>
-          console.warn('[Outreach Worker] Error reconciling pending email generations:', err)
-        );
-      }
-
 
       // 3. Check scheduler pause / stop controls
       const db = getDb();
@@ -286,15 +334,31 @@ async function runWorkerLoop() {
         }
       }
     } catch (loopErr) {
-      console.error('[Outreach Worker] Unexpected error in worker loop:', loopErr);
+      console.error('[Outreach Worker] Unexpected error in worker sending loop:', loopErr);
       await sleep(10000);
     }
   }
 }
 
-function sleep(ms: number): Promise<void> {
+/**
+ * Main persistent worker entry point: executes both the autonomous email generation
+ * loop and the outreach sending loop concurrently in the same process.
+ */
+export async function runWorkerLoop() {
+  await Promise.all([
+    runGenerationLoop(),
+    runSendingLoop(),
+  ]);
+}
+
+export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Start the worker process
-runWorkerLoop();
+// Start the worker process (unless imported in test harness)
+if (process.env.NODE_ENV !== 'test' && !process.env.OUTREACH_WORKER_NO_AUTO_START) {
+  runWorkerLoop().catch((err) => {
+    console.error('[Outreach Worker] Fatal error in worker loop:', err);
+    process.exit(1);
+  });
+}
