@@ -9,6 +9,7 @@ import { classifyCompanies, getCachedFromDb, type CompanyClassificationResult } 
 import { reconstructCanonicalContacts } from '@/lib/pipeline/canonical-ingestion';
 import { getCooldownCutoffIso } from '@/lib/scheduler/time-utils';
 import { searchCompanyDatabaseBatch } from '@/lib/kb/relevant-companies-kb';
+import { env } from '@/lib/config/env';
 
 export interface BatchProcessingResult {
   batchId: string;
@@ -275,7 +276,8 @@ export async function processBatchFile(
 
     // For uncached companies not in KB: seed into company_classifications as PENDING
     // Background worker will pick them up and execute AI classification asynchronously
-    const configuredModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
+    const configuredModel = env.geminiModel();
+    const seedModel = configuredModel === 'ALLMODELS' ? 'pending-pool' : configuredModel;
     if (companiesToClassify.length > 0) {
       for (const company of companiesToClassify) {
         db.insert(companyClassifications)
@@ -286,7 +288,7 @@ export async function processBatchFile(
             confidence: null,
             reason: 'Classification Pending — Discovered unclassified company from batch.',
             classificationSource: 'gemini',
-            geminiModel: configuredModel,
+            geminiModel: seedModel,
             classificationResult: 'PENDING',
             retryRound: 0,
             retryCount: 0,

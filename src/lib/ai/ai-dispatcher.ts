@@ -1,9 +1,11 @@
 import {
   callGemini,
+  getGeminiClient,
   globalGeminiLimiter,
   categorizeGeminiError,
   GEMINI_PRIORITIES,
 } from './gemini-client';
+import { geminiPool, type GeminiPoolTelemetry } from './gemini-pool';
 import {
   callOpenRouter,
   isOpenRouterConfigured,
@@ -68,6 +70,8 @@ export interface AiDispatcherTelemetry {
   geminiCooldownActive: boolean;
   geminiCooldownUntil: string | null;
   geminiCooldownRemainingSeconds: number;
+  geminiModelDisplay?: string;
+  geminiPool?: GeminiPoolTelemetry;
   openRouterCooldownActive: boolean;
   openRouterCooldownUntil: string | null;
   openRouterCooldownRemainingSeconds: number;
@@ -147,12 +151,15 @@ export function getAiDispatcherTelemetry(nowMs: number = Date.now()): AiDispatch
 
   const geminiRemainingMs = getGeminiCooldownRemainingMs(pState, nowMs);
   const openRouterRemainingMs = getOpenRouterCooldownRemainingMs(pState, nowMs);
+  const poolTelem = geminiPool.getTelemetry(nowMs);
 
   return {
     currentActiveProvider: currentActive,
     geminiCooldownActive,
     geminiCooldownUntil: globalGeminiLimiter.getCooldownUntilIso() || pState.geminiCooldownUntil,
     geminiCooldownRemainingSeconds: Math.ceil(geminiRemainingMs / 1000),
+    geminiModelDisplay: poolTelem.modelDisplay,
+    geminiPool: poolTelem,
     openRouterCooldownActive,
     openRouterCooldownUntil: pState.openrouterCooldownUntil,
     openRouterCooldownRemainingSeconds: Math.ceil(openRouterRemainingMs / 1000),
@@ -221,9 +228,13 @@ async function executeOpenRouterDispatch(
           setPersistentActiveProvider('gemini');
         } catch {}
 
-        const configuredGeminiModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
+        const lease = geminiPool.leaseModel();
+        const activeModel = lease
+          ? lease.model
+          : (geminiPool.getMode() === 'single' ? geminiPool.getConfiguredSingleModel() : 'gemini-2.5-flash');
+
         const text = await callGemini(prompt, {
-          model: configuredGeminiModel,
+          model: activeModel,
           temperature: options.temperature,
           priority: options.priority ?? GEMINI_PRIORITIES.EMAIL_GENERATION,
           taskName: options.taskName,
@@ -239,7 +250,7 @@ async function executeOpenRouterDispatch(
         return {
           text,
           provider: 'gemini',
-          model: configuredGeminiModel,
+          model: activeModel,
         };
       }
 
@@ -309,7 +320,6 @@ export async function callAi(
     return customDispatcherOverride(prompt, options);
   }
 
-  const configuredGeminiModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
   const openRouterConfigured = isOpenRouterConfigured();
 
   let pState;
@@ -331,136 +341,258 @@ export async function callAi(
       setPersistentActiveProvider('gemini');
     } catch {}
 
+    // Ensure discovery is run lazily only when Gemini is actually active
     try {
-      const text = await callGemini(prompt, {
-        model: configuredGeminiModel,
-        temperature: options.temperature,
-        priority: options.priority ?? GEMINI_PRIORITIES.EMAIL_GENERATION,
-        taskName: options.taskName,
-        timeoutMs: options.timeoutMs,
-        maxRetries: options.maxRetries,
-        document: options.document,
-      });
+      await geminiPool.ensureDiscovered(getGeminiClient());
+    } catch {}
+
+    const excludedModels = new Set<string>();
+    let lastGeminiError: unknown = null;
+    let anySuccessResult: AiCallResult | null = null;
+    let poolExhaustedDueTo429 = false;
+    let poolExhaustedDueTo5xx = false;
+
+    // Up to 3 in-pool model attempts per request before falling over to OpenRouter
+    const MAX_IN_POOL_ATTEMPTS = 3;
+
+    for (let inPoolAttempt = 1; inPoolAttempt <= MAX_IN_POOL_ATTEMPTS; inPoolAttempt++) {
+      const lease = geminiPool.leaseModel(excludedModels);
+      if (!lease) {
+        // All healthy accessible models in the pool are currently on cooldown or disabled
+        if (lastGeminiError) {
+          const norm = normalizeGenerationError(lastGeminiError, { provider: 'gemini' });
+          if (norm.category === 'PROVIDER_RATE_LIMIT') {
+            poolExhaustedDueTo429 = true;
+          } else if (
+            norm.category === 'PROVIDER_OUTAGE_5XX' ||
+            norm.category === 'NETWORK_TRANSPORT_ERROR'
+          ) {
+            poolExhaustedDueTo5xx = true;
+          }
+        }
+        break;
+      }
+
+      const activeModel = lease.model;
+      excludedModels.add(activeModel);
 
       try {
-        recordGeminiSuccess();
+        const text = await callGemini(prompt, {
+          model: activeModel,
+          temperature: options.temperature,
+          priority: options.priority ?? GEMINI_PRIORITIES.EMAIL_GENERATION,
+          taskName: options.taskName,
+          timeoutMs: options.timeoutMs,
+          maxRetries: options.maxRetries ?? 1,
+          document: options.document,
+        });
+
+        geminiPool.recordSuccess(activeModel);
+        try {
+          recordGeminiSuccess();
+        } catch {}
+
+        anySuccessResult = {
+          text,
+          provider: 'gemini',
+          model: activeModel,
+        };
+        break;
+      } catch (geminiErr: unknown) {
+        lastGeminiError = geminiErr;
+        const normDiag = normalizeGenerationError(geminiErr, { provider: 'gemini' });
+        const diag = categorizeGeminiError(geminiErr);
+
+        const isRateLimit =
+          normDiag.category === 'PROVIDER_RATE_LIMIT' ||
+          diag.code === 'RATE_LIMIT_EXCEEDED' ||
+          /\b429\b/.test(diag.safeDetail) ||
+          /RESOURCE_EXHAUSTED/i.test(diag.safeDetail);
+
+        const isPermanentModelError =
+          diag.code === 'MODEL_NOT_FOUND' ||
+          diag.code === 'PERMISSION_DENIED' ||
+          /\b404\b/.test(diag.safeDetail) ||
+          /NOT_FOUND/i.test(diag.safeDetail);
+
+        const isTransientInfrastructureFailure =
+          normDiag.category === 'PROVIDER_OUTAGE_5XX' ||
+          normDiag.category === 'NETWORK_TRANSPORT_ERROR' ||
+          diag.code === 'INTERNAL_ERROR' ||
+          diag.code === 'BAD_GATEWAY' ||
+          diag.code === 'SERVICE_UNAVAILABLE' ||
+          diag.code === 'GATEWAY_TIMEOUT' ||
+          diag.code === 'TIMEOUT' ||
+          diag.code === 'NETWORK_FAILURE';
+
+        if (isRateLimit) {
+          // Cooldown ONLY activeModel!
+          geminiPool.record429(activeModel, geminiErr);
+          console.warn(
+            `[AiDispatcher] Gemini model "${activeModel}" rate limited (429). Isolated cooldown applied. In-pool retry attempting next healthy model...`
+          );
+          poolExhaustedDueTo429 = true;
+          continue;
+        }
+
+        if (isPermanentModelError) {
+          // Permanently disable ONLY activeModel!
+          geminiPool.recordPermanentError(
+            activeModel,
+            diag.safeDetail || 'Model not found or permission denied'
+          );
+          console.warn(
+            `[AiDispatcher] Gemini model "${activeModel}" unavailable (${diag.code}). Permanently removed from pool. Trying next model...`
+          );
+          continue;
+        }
+
+        if (isTransientInfrastructureFailure) {
+          // Apply short cooldown to activeModel and try next healthy model!
+          geminiPool.recordTransientError(activeModel, geminiErr);
+          console.warn(
+            `[AiDispatcher] Gemini model "${activeModel}" transient error (${diag.code}). Cooling model for 30s. Trying next model...`
+          );
+          poolExhaustedDueTo5xx = true;
+          continue;
+        }
+
+        // Other non-failover error (auth rejected, bad request, safety block, etc.)
+        try {
+          recordGeminiFailure(normDiag.safeMessage || diag.safeDetail);
+        } catch {}
+        throw geminiErr;
+      }
+    }
+
+    if (anySuccessResult) {
+      return anySuccessResult;
+    }
+
+    // If we reached here without success, all attempted Gemini models cooled down or pool exhausted!
+    const recoveryMs = geminiPool.getEarliestRecoveryMs();
+    globalGeminiLimiter.handleTransientOutage(recoveryMs);
+
+    const effectiveGeminiError =
+      lastGeminiError ||
+      (geminiPool.getDiscoveryError()
+        ? new Error(geminiPool.getDiscoveryError()!)
+        : null);
+
+    const normDiag = effectiveGeminiError
+      ? normalizeGenerationError(effectiveGeminiError, { provider: 'gemini' })
+      : {
+          category: 'PROVIDER_RATE_LIMIT' as const,
+          safeMessage: 'All Gemini models in pool are cooling down.',
+        };
+    const diag = effectiveGeminiError
+      ? categorizeGeminiError(effectiveGeminiError)
+      : {
+          code: 'RATE_LIMIT_EXCEEDED' as const,
+          safeDetail: 'All Gemini pool models exhausted',
+        };
+
+    const isRateLimit = poolExhaustedDueTo429 || normDiag.category === 'PROVIDER_RATE_LIMIT';
+    const isTransientInfrastructureFailure =
+      poolExhaustedDueTo5xx ||
+      normDiag.category === 'PROVIDER_OUTAGE_5XX' ||
+      normDiag.category === 'NETWORK_TRANSPORT_ERROR';
+
+    // -----------------------------------------------------------------------
+    // Case 1A: Gemini Rate Limit (HTTP 429 / Quota Exceeded across pool)
+    // -----------------------------------------------------------------------
+    if (isRateLimit) {
+      if (!globalGeminiLimiter.isCooldownActive()) {
+        globalGeminiLimiter.handle429(lastGeminiError);
+      }
+
+      const cooldownIso =
+        globalGeminiLimiter.getCooldownUntilIso() ||
+        new Date(Date.now() + Math.max(recoveryMs, 60000)).toISOString();
+      try {
+        recordGemini429(cooldownIso, diag.safeDetail);
       } catch {}
 
-      return {
-        text,
-        provider: 'gemini',
-        model: configuredGeminiModel,
-      };
-    } catch (geminiErr: unknown) {
-      // Semantically normalize the error using the Universal Error Boundary
-      const normDiag = normalizeGenerationError(geminiErr, { provider: 'gemini' });
-      const diag = categorizeGeminiError(geminiErr);
+      const freshState = getPersistentAiProviderState();
+      const orCooled = isOpenRouterCooldownActive(freshState);
 
-      const isRateLimit =
-        normDiag.category === 'PROVIDER_RATE_LIMIT' ||
-        diag.code === 'RATE_LIMIT_EXCEEDED' ||
-        /\b429\b/.test(diag.safeDetail) ||
-        /RESOURCE_EXHAUSTED/i.test(diag.safeDetail);
-
-      const isTransientInfrastructureFailure =
-        normDiag.category === 'PROVIDER_OUTAGE_5XX' ||
-        normDiag.category === 'NETWORK_TRANSPORT_ERROR';
-
-      // -----------------------------------------------------------------------
-      // Case 1A: Gemini Rate Limit (HTTP 429 / Quota Exceeded)
-      // -----------------------------------------------------------------------
-      if (isRateLimit) {
-        if (!globalGeminiLimiter.isCooldownActive()) {
-          globalGeminiLimiter.handle429(geminiErr);
-        }
-
-        const cooldownIso = globalGeminiLimiter.getCooldownUntilIso() || new Date(Date.now() + 60000).toISOString();
+      if (openRouterConfigured && !orCooled) {
+        console.warn(
+          `[AiDispatcher] All Gemini pool models exhausted/rate limited. Falling back immediately to OpenRouter (${getOpenRouterModel()}).`
+        );
         try {
-          recordGemini429(cooldownIso, diag.safeDetail);
+          setPersistentActiveProvider('openrouter');
         } catch {}
+        return executeOpenRouterDispatch(prompt, options);
+      }
 
-        const freshState = getPersistentAiProviderState();
-        const orCooled = isOpenRouterCooldownActive(freshState);
+      // Both are in cooldown or OpenRouter not configured -> WAITING
+      try {
+        setPersistentActiveProvider('waiting');
+      } catch {}
 
-        if (openRouterConfigured && !orCooled) {
-          console.warn(
-            `[AiDispatcher] Gemini rate limit exceeded (429). Falling back immediately to OpenRouter (${getOpenRouterModel()}).`
-          );
-          try {
-            setPersistentActiveProvider('openrouter');
-          } catch {}
-          return executeOpenRouterDispatch(prompt, options);
-        }
+      const geminiWaitMs = getGeminiCooldownRemainingMs(freshState);
+      const orWaitMs = getOpenRouterCooldownRemainingMs(freshState);
+      let waitRemainingMs: number;
+      if (geminiWaitMs > 0 && orWaitMs > 0) {
+        waitRemainingMs = Math.min(geminiWaitMs, orWaitMs);
+      } else if (geminiWaitMs > 0) {
+        waitRemainingMs = geminiWaitMs;
+      } else if (orWaitMs > 0) {
+        waitRemainingMs = orWaitMs;
+      } else {
+        waitRemainingMs = 5000;
+      }
+      waitRemainingMs = Math.max(1000, waitRemainingMs);
 
-        // Both are in cooldown or OpenRouter not configured -> WAITING
-        try {
-          setPersistentActiveProvider('waiting');
-        } catch {}
-
-        const geminiWaitMs = getGeminiCooldownRemainingMs(freshState);
-        const orWaitMs = getOpenRouterCooldownRemainingMs(freshState);
-        let waitRemainingMs: number;
-        if (geminiWaitMs > 0 && orWaitMs > 0) {
-          waitRemainingMs = Math.min(geminiWaitMs, orWaitMs);
-        } else if (geminiWaitMs > 0) {
-          waitRemainingMs = geminiWaitMs;
-        } else if (orWaitMs > 0) {
-          waitRemainingMs = orWaitMs;
-        } else {
-          waitRemainingMs = 5000;
-        }
-        waitRemainingMs = Math.max(1000, waitRemainingMs);
-
-        const nextToRecover = (orWaitMs > 0 && (geminiWaitMs <= 0 || orWaitMs < geminiWaitMs))
+      const nextToRecover =
+        orWaitMs > 0 && (geminiWaitMs <= 0 || orWaitMs < geminiWaitMs)
           ? 'OpenRouter'
           : 'Gemini';
 
-        throw new AiProviderUnavailableError(
-          `Gemini rate limit exceeded and OpenRouter is ${
-            orCooled ? 'rate limited' : 'not configured'
-          }. State: WAITING (${Math.ceil(waitRemainingMs / 1000)}s until ${nextToRecover} recovery).`,
-          waitRemainingMs
+      throw new AiProviderUnavailableError(
+        `Gemini rate limit exceeded across pool and OpenRouter is ${
+          orCooled ? 'rate limited' : 'not configured'
+        }. State: WAITING (${Math.ceil(waitRemainingMs / 1000)}s until ${nextToRecover} recovery).`,
+        waitRemainingMs
+      );
+    }
+
+    // -----------------------------------------------------------------------
+    // Case 1B: Gemini Transient Infrastructure Failure (5xx across pool)
+    // -----------------------------------------------------------------------
+    if (isTransientInfrastructureFailure) {
+      globalGeminiLimiter.handleTransientOutage(30000);
+
+      const freshState = getPersistentAiProviderState();
+      const orCooled = isOpenRouterCooldownActive(freshState);
+
+      if (openRouterConfigured && !orCooled) {
+        console.warn(
+          `[AiDispatcher] Gemini pool transient infrastructure failure (${normDiag.category}: ${normDiag.safeMessage}). Gemini cooling for 30s. Falling back to OpenRouter (${getOpenRouterModel()}).`
         );
-      }
-
-      // -----------------------------------------------------------------------
-      // Case 1B: Gemini Transient Infrastructure Failure (5xx, Network, Transport, Timeout)
-      // -----------------------------------------------------------------------
-      if (isTransientInfrastructureFailure) {
-        // Set short 30s transient outage cooldown on Gemini in limiter and SQLite
-        globalGeminiLimiter.handleTransientOutage(30000);
-
-        const freshState = getPersistentAiProviderState();
-        const orCooled = isOpenRouterCooldownActive(freshState);
-
-        if (openRouterConfigured && !orCooled) {
-          console.warn(
-            `[AiDispatcher] Gemini transient infrastructure failure (${normDiag.category}: ${normDiag.safeMessage}). Gemini cooling for 30s. Falling back to OpenRouter (${getOpenRouterModel()}).`
-          );
-          try {
-            recordGeminiTransientFailure(normDiag.safeMessage, true, 30000);
-          } catch {}
-
-          return executeOpenRouterDispatch(prompt, options);
-        }
-
-        // OpenRouter not available: record transient failure cooldown without fallback
         try {
-          recordGeminiTransientFailure(normDiag.safeMessage, false, 30000);
+          recordGeminiTransientFailure(normDiag.safeMessage, true, 30000);
         } catch {}
 
-        throw geminiErr;
+        return executeOpenRouterDispatch(prompt, options);
       }
 
-      // -----------------------------------------------------------------------
-      // Case 1C: Non-Failover Gemini Error (Auth, Safety Refusal, AI Output Malformed, Deterministic)
-      // -----------------------------------------------------------------------
       try {
-        recordGeminiFailure(normDiag.safeMessage || diag.safeDetail);
+        recordGeminiTransientFailure(normDiag.safeMessage, false, 30000);
       } catch {}
 
-      throw geminiErr;
+      throw lastGeminiError;
     }
+
+    // -----------------------------------------------------------------------
+    // Case 1C: Non-Failover Gemini Error
+    // -----------------------------------------------------------------------
+    try {
+      recordGeminiFailure(normDiag.safeMessage || diag.safeDetail);
+    } catch {}
+
+    throw effectiveGeminiError || lastGeminiError;
   }
 
   // ---------------------------------------------------------------------------

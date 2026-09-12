@@ -132,7 +132,9 @@ export function AiProviderStatus({ aiTelemetry }: AiProviderStatusProps) {
           <div className="rounded-lg border border-border/70 bg-card p-3 space-y-1 min-w-0">
             <p className="text-[11px] font-medium text-muted-foreground">Primary Provider</p>
             <p className="text-sm font-bold text-foreground">Gemini</p>
-            <p className="text-[10px] text-muted-foreground font-mono truncate">gemini-3.8-flash</p>
+            <p className="text-[10px] text-muted-foreground font-mono truncate">
+              {aiTelemetry?.geminiModelDisplay || 'ALLMODELS'}
+            </p>
           </div>
 
           {/* 2. Current Active Provider */}

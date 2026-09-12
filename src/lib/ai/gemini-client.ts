@@ -1,4 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
+import { geminiPool } from './gemini-pool';
 
 let clientInstance: GoogleGenAI | null = null;
 
@@ -377,6 +378,9 @@ export class GlobalGeminiRateLimiter {
     }
     this.cooldownUntil = 0;
     this.consecutive429Count = 0;
+    try {
+      geminiPool.resetCooldownsForTesting();
+    } catch {}
   }
 
   public setCooldownUntilForTesting(cooldownUntilMs: number): void {
@@ -385,6 +389,9 @@ export class GlobalGeminiRateLimiter {
 
   public resetForTesting(): void {
     this.resetCooldown();
+    try {
+      geminiPool.resetForTesting();
+    } catch {}
     this.inFlight = 0;
     this.queue = [];
     this.lastDispatchTime = 0;
@@ -399,10 +406,10 @@ export class GlobalGeminiRateLimiter {
   }
 
   public getTelemetry(): GeminiTelemetry {
-    const configuredModel = process.env.GEMINI_MODEL?.trim();
+    const poolTelem = geminiPool.getTelemetry();
     const remainingMs = this.getCooldownRemainingMs();
     return {
-      currentModel: configuredModel || 'gemini-3.8-flash',
+      currentModel: poolTelem.modelDisplay,
       maxConcurrency: this.getMaxConcurrency(),
       minDispatchGapMs: this.getMinDispatchGapMs(),
       effectivePacingMs: this.getMinDispatchGapMs(),
@@ -635,8 +642,17 @@ export async function callGemini(
       throw new Error('GEMINI_API_KEY is not configured in the environment.');
     }
 
-    const configuredModel = process.env.GEMINI_MODEL?.trim();
-    const model = options.model || configuredModel || 'gemini-3.8-flash';
+    let model = options.model;
+    if (!model) {
+      const lease = geminiPool.leaseModel();
+      if (lease) {
+        model = lease.model;
+      } else if (geminiPool.getMode() === 'single') {
+        model = geminiPool.getConfiguredSingleModel();
+      } else {
+        model = 'gemini-2.5-flash';
+      }
+    }
     const maxRetries = options.maxRetries ?? 3;
     const timeoutMs = options.timeoutMs ?? 15000;
 
@@ -681,6 +697,7 @@ export async function callGemini(
           throw new Error('Empty response from Gemini');
         }
 
+        geminiPool.recordSuccess(model);
         return text.trim();
       } catch (err: unknown) {
         lastError = err;

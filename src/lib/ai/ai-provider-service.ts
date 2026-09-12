@@ -2,6 +2,7 @@ import { getDb } from '@/db';
 import { aiProviderState } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { globalGeminiLimiter } from './gemini-client';
+import { geminiPool } from './gemini-pool';
 import { isOpenRouterConfigured, getOpenRouterModel } from './openrouter-client';
 
 export type AiProviderStatusType = 'gemini' | 'openrouter' | 'waiting';
@@ -181,6 +182,10 @@ export function isGeminiCooldownActive(
   if (globalGeminiLimiter.getCooldownUntilMs() > nowMs) {
     return true;
   }
+  // Check pool model cooldowns (if all accessible models are in active cooldown)
+  if (geminiPool.isPoolExhausted(nowMs) && geminiPool.getEarliestRecoveryMs(nowMs) > 0) {
+    return true;
+  }
   const currentState = state || getPersistentAiProviderState();
   if (!currentState.geminiCooldownUntil) return false;
   const expiry = new Date(currentState.geminiCooldownUntil).getTime();
@@ -194,16 +199,23 @@ export function getGeminiCooldownRemainingMs(
   state?: PersistentAiProviderState,
   nowMs: number = Date.now()
 ): number {
+  const poolRecovery = geminiPool.isPoolExhausted(nowMs)
+    ? geminiPool.getEarliestRecoveryMs(nowMs)
+    : 0;
   let memRemaining = 0;
   const memUntil = globalGeminiLimiter.getCooldownUntilMs();
   if (memUntil > nowMs) {
     memRemaining = memUntil - nowMs;
   }
   const currentState = state || getPersistentAiProviderState();
-  if (!currentState.geminiCooldownUntil) return memRemaining;
-  const expiry = new Date(currentState.geminiCooldownUntil).getTime();
-  const dbRemaining = !isNaN(expiry) && expiry > nowMs ? expiry - nowMs : 0;
-  return Math.max(memRemaining, dbRemaining);
+  let dbRemaining = 0;
+  if (currentState.geminiCooldownUntil) {
+    const expiry = new Date(currentState.geminiCooldownUntil).getTime();
+    if (!isNaN(expiry) && expiry > nowMs) {
+      dbRemaining = expiry - nowMs;
+    }
+  }
+  return Math.max(poolRecovery, memRemaining, dbRemaining);
 }
 
 /**

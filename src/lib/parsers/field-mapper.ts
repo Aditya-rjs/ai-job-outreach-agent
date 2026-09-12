@@ -1,4 +1,5 @@
-import { callGemini, getGeminiClient } from '@/lib/ai/gemini-client';
+import { getGeminiClient } from '@/lib/ai/gemini-client';
+import { callAi } from '@/lib/ai/ai-dispatcher';
 
 export type NormalizedField =
   | 'company_name'
@@ -169,7 +170,8 @@ ${JSON.stringify(headers, null, 2)}
 Respond ONLY with a valid JSON object where keys are the EXACT input headers and values are one of the allowed target fields above. Do not include markdown code blocks or extra text.`;
 
   try {
-    const responseText = await callGemini(prompt, { temperature: 0.1 });
+    const aiRes = await callAi(prompt, { temperature: 0.1, taskName: 'field-mapping' });
+    const responseText = aiRes.text;
     const cleaned = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
     const parsed = JSON.parse(cleaned);
 

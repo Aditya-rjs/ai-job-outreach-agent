@@ -3,9 +3,11 @@ import { companyClassifications } from '@/db/schema';
 import { inArray, eq } from 'drizzle-orm';
 import { callGemini, getGeminiClient, categorizeGeminiError, sanitizeSecretText, GEMINI_PRIORITIES, globalGeminiLimiter, type CategorizedGeminiError } from './gemini-client';
 import { callAi, type AiCallResult } from './ai-dispatcher';
+import { geminiPool } from './gemini-pool';
 import { isOpenRouterConfigured, isOpenRouterError } from './openrouter-client';
 
 import { normalizeCompanyName, formatCompanyDisplayName } from '@/lib/utils/company';
+import { env } from '@/lib/config/env';
 import { searchCompanyDatabaseBatch, resolveCanonicalAndPersist } from '@/lib/kb/relevant-companies-kb';
 import { generateCanonicalCompanyNames } from './canonical-name-generator';
 
@@ -189,7 +191,7 @@ export async function classifyWithGeminiBatch(
   geminiCaller?: ((prompt: string) => Promise<string | AiCallResult>) | ((prompt: string) => Promise<string>),
   options?: { isRetry?: boolean }
 ): Promise<CompanyClassificationResult[]> {
-  const configuredModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
+  const configuredModel = env.geminiModel();
   const prompt = buildClassificationPrompt(companies);
   const priority = options?.isRetry
     ? GEMINI_PRIORITIES.CLASSIFICATION_RETRY
@@ -197,14 +199,15 @@ export async function classifyWithGeminiBatch(
 
   let responseText: string;
   let activeProvider: ClassificationSource = 'gemini';
-  let activeModel: string = configuredModel;
+  const defaultModel = configuredModel === 'ALLMODELS' ? geminiPool.getCandidateModels()[0] : configuredModel;
+  let activeModel: string = defaultModel;
 
   if (typeof geminiCaller === 'function') {
     const raw = await geminiCaller(prompt);
     if (typeof raw === 'object' && raw !== null && 'text' in raw) {
       responseText = raw.text;
       activeProvider = (raw.provider as ClassificationSource) || 'gemini';
-      activeModel = raw.model || configuredModel;
+      activeModel = raw.model || defaultModel;
     } else {
       responseText = String(raw);
     }
@@ -399,7 +402,8 @@ export async function classifyCompanies(
   }
 
   // 3. Classify uncached companies via Gemini/OpenRouter in controlled batches
-  const configuredModel = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
+  const configuredModel = env.geminiModel();
+  const fallbackModel = configuredModel === 'ALLMODELS' ? geminiPool.getCandidateModels()[0] : configuredModel;
   const hasAi = Boolean(geminiClientOverride !== null && (geminiClientOverride !== undefined || getGeminiClient() || isOpenRouterConfigured()));
 
   // Controlled batch size of 20 to balance throughput and token limits
@@ -460,7 +464,7 @@ export async function classifyCompanies(
               confidence: null,
               status: 'RETRY_WAITING',
               source: 'gemini',
-              geminiModel: configuredModel,
+              geminiModel: fallbackModel,
               retryRound: 0,
               retryCount: 1,
               lastErrorCategory: diag.code,
@@ -482,7 +486,7 @@ export async function classifyCompanies(
               confidence: null,
               status: 'PENDING',
               source: 'gemini',
-              geminiModel: configuredModel,
+              geminiModel: fallbackModel,
               retryRound: 0,
               retryCount: 0,
               lastErrorCategory: null,
@@ -512,7 +516,7 @@ export async function classifyCompanies(
               confidence: null,
               status: 'RETRY_WAITING',
               source: 'gemini',
-              geminiModel: configuredModel,
+              geminiModel: fallbackModel,
               retryRound: 0,
               retryCount: 1,
               lastErrorCategory: diag.code,

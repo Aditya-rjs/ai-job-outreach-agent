@@ -55,6 +55,8 @@ export interface DashboardStats {
     geminiCooldownActive: boolean;
     geminiCooldownUntil: string | null;
     geminiCooldownRemainingSeconds: number;
+    geminiModelDisplay?: string;
+    geminiPool?: any;
     openRouterCooldownActive?: boolean;
     openRouterCooldownUntil?: string | null;
     openRouterCooldownRemainingSeconds?: number;

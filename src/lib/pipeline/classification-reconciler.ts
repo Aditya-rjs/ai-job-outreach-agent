@@ -336,7 +336,7 @@ export function discoverAndSeedOrphanedCompanies(
           confidence: null,
           reason: 'Classification Pending — Discovered unclassified company from active batch.',
           classificationSource: 'gemini',
-          geminiModel: 'gemini-3.8-flash',
+          geminiModel: 'pending-pool',
           classificationResult: 'PENDING',
           retryRound: 0,
           retryCount: 0,

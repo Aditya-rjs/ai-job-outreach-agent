@@ -18,7 +18,7 @@ import { sanitizeEnvValue, getPublicAppUrl, getOAuthRedirectUri } from './url';
 export const env = {
   // AI
   geminiApiKey: () => sanitizeEnvValue(process.env.GEMINI_API_KEY),
-  geminiModel: () => sanitizeEnvValue(process.env.GEMINI_MODEL) || 'gemini-3.8-flash',
+  geminiModel: () => sanitizeEnvValue(process.env.GEMINI_MODEL) || 'ALLMODELS',
   openrouterApiKey: () => sanitizeEnvValue(process.env.OPENROUTER_API_KEY),
   openrouterModel: () => sanitizeEnvValue(process.env.OPENROUTER_MODEL) || 'openrouter/free',
 

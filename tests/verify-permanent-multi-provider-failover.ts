@@ -126,6 +126,10 @@ async function runFailoverVerification() {
     let openRouterNetworkFail = false;
 
     globalThis.fetch = (async (url: any, init: any) => {
+      const urlStr = typeof url === 'string' ? url : url?.url?.toString() || url?.toString() || '';
+      if (!urlStr.includes('openrouter')) {
+        return originalFetch(url, init);
+      }
       openRouterCalls++;
       if (openRouterNetworkFail) {
         throw new TypeError('fetch failed to openrouter.ai');
