@@ -39,6 +39,8 @@ import path from 'path';
 import fs from 'fs';
 import assert from 'assert';
 
+process.env.GEMINI_MODEL = 'gemini-3.8-flash';
+
 // Isolated test database directory
 const TEST_DIR = path.join(process.cwd(), 'data', 'test-round-based-classification');
 if (fs.existsSync(TEST_DIR)) {

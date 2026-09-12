@@ -98,6 +98,8 @@ async function runStateMachineVerification() {
   }
 
   const originalFetch = globalThis.fetch;
+  const originalGeminiModel = process.env.GEMINI_MODEL;
+  process.env.GEMINI_MODEL = 'gemini-3.8-flash';
 
   try {
     // -------------------------------------------------------------------------
@@ -564,6 +566,8 @@ async function runStateMachineVerification() {
     console.log('======================================================================\n');
   } finally {
     globalThis.fetch = originalFetch;
+    if (originalGeminiModel !== undefined) process.env.GEMINI_MODEL = originalGeminiModel;
+    else delete process.env.GEMINI_MODEL;
     setDispatcherOverrideForTesting(null);
     globalGeminiLimiter.resetForTesting();
     resetGeminiClient();

@@ -44,6 +44,7 @@ process.env.DATA_DIR = TEST_DIR;
 process.env.OUTREACH_DRY_RUN = 'true';
 process.env.OPENROUTER_API_KEY = 'sk-or-test-mock-key';
 process.env.GEMINI_API_KEY = 'mock-gemini-key';
+process.env.GEMINI_MODEL = 'gemini-3.8-flash';
 
 import { getDb, resetDbConnection } from '../src/db';
 import { initializeDatabase } from '../src/db/migrate';

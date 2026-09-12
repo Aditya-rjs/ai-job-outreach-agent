@@ -126,6 +126,28 @@ export function getPersistentAiProviderState(): PersistentAiProviderState {
     }
   }
 
+  // Reconcile stale persistent WAITING or cooldown state if Gemini pool currently has healthy models in ALLMODELS mode
+  if (
+    geminiPool.getMode() === 'ALLMODELS' &&
+    !geminiPool.isPoolExhausted() &&
+    (row?.activeProvider === 'waiting' || (row?.geminiCooldownUntil && new Date(row.geminiCooldownUntil).getTime() > Date.now()))
+  ) {
+    try {
+      db.update(aiProviderState)
+        .set({
+          activeProvider: 'gemini',
+          geminiCooldownUntil: null,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(aiProviderState.id, 'singleton'))
+        .run();
+      if (row) {
+        row.activeProvider = 'gemini';
+        row.geminiCooldownUntil = null;
+      }
+    } catch {}
+  }
+
   return {
     activeProvider: (row?.activeProvider as AiProviderStatusType) || 'gemini',
     geminiCooldownUntil: row?.geminiCooldownUntil || null,
@@ -178,11 +200,18 @@ export function isGeminiCooldownActive(
   state?: PersistentAiProviderState,
   nowMs: number = Date.now()
 ): boolean {
-  // Check in-memory limiter
+  if (geminiPool.getMode() === 'ALLMODELS') {
+    // In ALLMODELS mode, Gemini provider is in cooldown ONLY IF all accessible pool models are exhausted
+    if (geminiPool.isPoolExhausted(nowMs)) {
+      return geminiPool.getEarliestRecoveryMs(nowMs) > 0;
+    }
+    return false;
+  }
+
+  // Single-model mode:
   if (globalGeminiLimiter.getCooldownUntilMs() > nowMs) {
     return true;
   }
-  // Check pool model cooldowns (if all accessible models are in active cooldown)
   if (geminiPool.isPoolExhausted(nowMs) && geminiPool.getEarliestRecoveryMs(nowMs) > 0) {
     return true;
   }
@@ -199,6 +228,12 @@ export function getGeminiCooldownRemainingMs(
   state?: PersistentAiProviderState,
   nowMs: number = Date.now()
 ): number {
+  if (geminiPool.getMode() === 'ALLMODELS') {
+    return geminiPool.isPoolExhausted(nowMs)
+      ? geminiPool.getEarliestRecoveryMs(nowMs)
+      : 0;
+  }
+
   const poolRecovery = geminiPool.isPoolExhausted(nowMs)
     ? geminiPool.getEarliestRecoveryMs(nowMs)
     : 0;

@@ -32,6 +32,7 @@ process.env.OUTREACH_DRY_RUN = 'true';
 process.env.GEMINI_COOLDOWN_BASE_MS = '200'; // fast 200ms base for unit tests
 process.env.GEMINI_COOLDOWN_MAX_MS = '2000'; // 2s max for unit tests
 process.env.GEMINI_MIN_DISPATCH_GAP_MS = '10'; // fast dispatch for unit tests
+process.env.GEMINI_MODEL = 'gemini-3.8-flash'; // Pin to single model for single-model circuit breaker regression testing
 
 import { getDb } from '@/db';
 import { initializeDatabase } from '@/db/migrate';

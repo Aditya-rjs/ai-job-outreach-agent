@@ -8,6 +8,7 @@
  */
 
 import assert from 'assert';
+process.env.GEMINI_MODEL = 'gemini-3.8-flash';
 import { normalizeForComparison, checkEmailSimilarity, escapeRegExp } from '../src/lib/ai/similarity';
 import {
   globalGeminiLimiter,

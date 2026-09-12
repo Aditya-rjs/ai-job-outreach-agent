@@ -34,9 +34,13 @@ import {
   isGeminiCooldownActive,
   getGeminiCooldownRemainingMs,
   recordOpenRouter429,
+  getPersistentAiProviderState,
   resetPersistentAiProviderStateForTesting,
 } from '../src/lib/ai/ai-provider-service';
-import { globalGeminiLimiter } from '../src/lib/ai/gemini-client';
+import { globalGeminiLimiter, getGeminiClient, resetGeminiClient } from '../src/lib/ai/gemini-client';
+import { getDb } from '../src/db';
+import { aiProviderState } from '../src/db/schema/ai-provider-state';
+import { eq } from 'drizzle-orm';
 
 async function runTests() {
   console.log('================================================================');
@@ -375,6 +379,227 @@ async function runTests() {
     const legacyRow = { gemini_model: 'gemini-3.8-flash' };
     assert.strictEqual(legacyRow.gemini_model, 'gemini-3.8-flash');
     recordPass('Historical records containing gemini-3.8-flash are preserved intact.');
+
+    // =========================================================================
+    // TEST 16 (Test A): Single-Model 429 Isolation in ALLMODELS Mode
+    // =========================================================================
+    totalTests++;
+    console.log(`\n--- Test ${totalTests} (Test A): Single-Model 429 Isolation in ALLMODELS Mode ---`);
+    geminiPool.resetForTesting();
+    globalGeminiLimiter.resetForTesting();
+    resetPersistentAiProviderStateForTesting();
+    geminiPool.configure('ALLMODELS');
+    geminiPool.setAccessibleModelsForTesting([
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
+      'gemini-3.6-flash',
+    ]);
+
+    // Model 3.8-flash experiences 429
+    const err429 = new Error('RESOURCE_EXHAUSTED: 429 quota exceeded for gemini-3.8-flash');
+    geminiPool.record429('gemini-3.8-flash', err429);
+    globalGeminiLimiter.recordError(err429);
+
+    // Assert that Model 3.8 is in cooldown, but the pool and global provider remain healthy
+    assert.strictEqual(geminiPool.isPoolExhausted(), false);
+    assert.strictEqual(globalGeminiLimiter.isCooldownActive(), false);
+    assert.strictEqual(isGeminiCooldownActive(), false);
+    assert.strictEqual(getGeminiCooldownRemainingMs(), 0);
+
+    const healthyModelsA = geminiPool.getHealthyModels().map((m) => m.modelName);
+    assert.strictEqual(healthyModelsA.includes('gemini-3.8-flash'), false);
+    assert.strictEqual(healthyModelsA.includes('gemini-3.7-flash'), true);
+    assert.strictEqual(healthyModelsA.includes('gemini-3.6-flash'), true);
+
+    const leasedA = geminiPool.leaseModel();
+    assert.notStrictEqual(leasedA?.model, 'gemini-3.8-flash');
+    assert(leasedA?.model === 'gemini-3.7-flash' || leasedA?.model === 'gemini-3.6-flash');
+    recordPass('Test A: Single-model 429 cools ONLY that model; pool and provider remain fully active.');
+
+    // =========================================================================
+    // TEST 17 (Test B): In-Pool Rotation on 429 via callAi
+    // =========================================================================
+    totalTests++;
+    console.log(`\n--- Test ${totalTests} (Test B): In-Pool Rotation on 429 via callAi ---`);
+    process.env.GEMINI_API_KEY = 'mock-key-test-b';
+    resetGeminiClient();
+    geminiPool.resetForTesting();
+    globalGeminiLimiter.resetForTesting();
+    resetPersistentAiProviderStateForTesting();
+    geminiPool.configure('ALLMODELS');
+    geminiPool.setAccessibleModelsForTesting([
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
+    ]);
+
+    const clientB = getGeminiClient();
+    assert(clientB !== null);
+    const origGenB = clientB.models.generateContent;
+    const attemptedModelsB: string[] = [];
+
+    clientB.models.generateContent = (async (args: any) => {
+      attemptedModelsB.push(args.model);
+      if (args.model === 'gemini-3.8-flash') {
+        throw new Error('429 RESOURCE_EXHAUSTED on gemini-3.8-flash');
+      }
+      return {
+        text: 'Success from gemini-3.7-flash',
+      };
+    }) as any;
+
+    try {
+      const resB = await callAi('Prompt for Test B');
+      assert.strictEqual(resB.provider, 'gemini');
+      assert.strictEqual(resB.model, 'gemini-3.7-flash');
+      assert.strictEqual(resB.text, 'Success from gemini-3.7-flash');
+      assert.deepStrictEqual(attemptedModelsB, ['gemini-3.8-flash', 'gemini-3.7-flash']);
+      assert.strictEqual(isGeminiCooldownActive(), false);
+      assert.strictEqual(globalGeminiLimiter.isCooldownActive(), false);
+      recordPass('Test B: 429 on Model A immediately rotates in-pool to Model B without tripping provider cooldown.');
+    } finally {
+      clientB.models.generateContent = origGenB;
+    }
+
+    // =========================================================================
+    // TEST 18 (Test C): Multiple Model Failures Rotation
+    // =========================================================================
+    totalTests++;
+    console.log(`\n--- Test ${totalTests} (Test C): Multiple Model Failures Rotation ---`);
+    geminiPool.resetForTesting();
+    globalGeminiLimiter.resetForTesting();
+    resetPersistentAiProviderStateForTesting();
+    geminiPool.configure('ALLMODELS');
+    geminiPool.setAccessibleModelsForTesting([
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
+      'gemini-3.6-flash',
+    ]);
+
+    const clientC = getGeminiClient();
+    assert(clientC !== null);
+    const origGenC = clientC.models.generateContent;
+    const attemptedModelsC: string[] = [];
+    let failCountC = 0;
+    clientC.models.generateContent = (async (args: any) => {
+      attemptedModelsC.push(args.model);
+      if (failCountC < 2) {
+        failCountC++;
+        throw new Error(`429 RESOURCE_EXHAUSTED on ${args.model}`);
+      }
+      return {
+        text: `Success from ${args.model}`,
+      };
+    }) as any;
+
+    try {
+      const resC = await callAi('Prompt for Test C');
+      assert.strictEqual(resC.provider, 'gemini');
+      assert.strictEqual(attemptedModelsC.length, 3);
+      assert.strictEqual(resC.model, attemptedModelsC[2]);
+      assert.strictEqual(isGeminiCooldownActive(), false);
+      recordPass('Test C: Two consecutive 429s rotate through pool until healthy third model succeeds.');
+    } finally {
+      clientC.models.generateContent = origGenC;
+    }
+
+    // =========================================================================
+    // TEST 19 (Test D): Full Pool Exhaustion
+    // =========================================================================
+    totalTests++;
+    console.log(`\n--- Test ${totalTests} (Test D): Full Pool Exhaustion ---`);
+    geminiPool.resetForTesting();
+    globalGeminiLimiter.resetForTesting();
+    resetPersistentAiProviderStateForTesting();
+    geminiPool.configure('ALLMODELS');
+    geminiPool.setAccessibleModelsForTesting([
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
+    ]);
+
+    geminiPool.record429('gemini-3.8-flash');
+    geminiPool.record429('gemini-3.7-flash');
+
+    assert.strictEqual(geminiPool.isPoolExhausted(), true);
+    assert.strictEqual(isGeminiCooldownActive(), true);
+    assert.strictEqual(globalGeminiLimiter.isCooldownActive(), true);
+    assert(getGeminiCooldownRemainingMs() > 0);
+    recordPass('Test D: Full pool exhaustion activates global provider cooldown.');
+
+    // =========================================================================
+    // TEST 20 (Test E): Persistent Stale Provider State Auto-Reconciliation
+    // =========================================================================
+    totalTests++;
+    console.log(`\n--- Test ${totalTests} (Test E): Persistent Stale State Auto-Reconciliation ---`);
+    const db = getDb();
+    const staleCooldown = new Date(Date.now() + 600000).toISOString(); // 10 min in future
+    db.update(aiProviderState)
+      .set({
+        activeProvider: 'waiting',
+        geminiCooldownUntil: staleCooldown,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(aiProviderState.id, 'singleton'))
+      .run();
+
+    // In ALLMODELS mode with healthy pool:
+    geminiPool.resetForTesting();
+    globalGeminiLimiter.resetForTesting();
+    geminiPool.configure('ALLMODELS');
+    geminiPool.setAccessibleModelsForTesting([
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
+    ]);
+
+    assert.strictEqual(geminiPool.isPoolExhausted(), false);
+    // Retrieval of persistent state auto-reconciles stale waiting state
+    const reconciledState = getPersistentAiProviderState();
+    assert.strictEqual(reconciledState.activeProvider, 'gemini');
+    assert.strictEqual(reconciledState.geminiCooldownUntil, null);
+    assert.strictEqual(isGeminiCooldownActive(reconciledState), false);
+    recordPass('Test E: Stale persistent DB WAITING state automatically reconciles when pool has healthy models.');
+
+    // =========================================================================
+    // TEST 21 (Test F): Explicit Pinned Single-Model Mode
+    // =========================================================================
+    totalTests++;
+    console.log(`\n--- Test ${totalTests} (Test F): Pinned Single-Model Mode Retains Cooldown ---`);
+    process.env.GEMINI_MODEL = 'gemini-2.5-flash';
+    geminiPool.resetForTesting();
+    globalGeminiLimiter.resetForTesting();
+    resetPersistentAiProviderStateForTesting();
+    geminiPool.configure('gemini-2.5-flash');
+    assert.strictEqual(geminiPool.getMode(), 'single');
+
+    // Single model 429
+    globalGeminiLimiter.handle429(new Error('Single model 429'));
+    assert.strictEqual(globalGeminiLimiter.isCooldownActive(), true);
+    assert.strictEqual(isGeminiCooldownActive(), true);
+    delete process.env.GEMINI_MODEL;
+    geminiPool.configure('ALLMODELS');
+    recordPass('Test F: Explicit pinned single-model mode retains strict single-model provider cooldown.');
+
+    // =========================================================================
+    // TEST 22 (Test G): Reconciler Error Handling Isolation
+    // =========================================================================
+    totalTests++;
+    console.log(`\n--- Test ${totalTests} (Test G): Reconciler Error Handling Isolation ---`);
+    geminiPool.resetForTesting();
+    globalGeminiLimiter.resetForTesting();
+    resetPersistentAiProviderStateForTesting();
+    geminiPool.configure('ALLMODELS');
+    geminiPool.setAccessibleModelsForTesting([
+      'gemini-3.8-flash',
+      'gemini-3.7-flash',
+    ]);
+
+    // Simulate reconciler catching a 429 from a single model attempt
+    const reconcilerError = new Error('RESOURCE_EXHAUSTED 429 from batch chunk');
+    globalGeminiLimiter.recordError(reconcilerError);
+
+    // Global limiter cooldown must NOT be activated because healthy models exist
+    assert.strictEqual(globalGeminiLimiter.isCooldownActive(), false);
+    assert.strictEqual(isGeminiCooldownActive(), false);
+    recordPass('Test G: Reconciler recordError does not trip global cooldown while healthy pool models exist.');
 
     console.log('\n================================================================');
     console.log(`  ALL ${passedTests}/${totalTests} TESTS PASSED SUCCESSFULLY!`);

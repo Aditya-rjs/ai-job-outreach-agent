@@ -52,6 +52,8 @@ async function runTests() {
   }
 
   // Preserve original environment
+  const originalGeminiModel = process.env.GEMINI_MODEL;
+  process.env.GEMINI_MODEL = 'gemini-3.8-flash';
   const originalGeminiKey = process.env.GEMINI_API_KEY;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
   const originalOpenRouterModel = process.env.OPENROUTER_MODEL;
@@ -394,6 +396,9 @@ async function runTests() {
     console.log('================================================================');
   } finally {
     // Restore environment
+    if (originalGeminiModel !== undefined) process.env.GEMINI_MODEL = originalGeminiModel;
+    else delete process.env.GEMINI_MODEL;
+
     if (originalGeminiKey !== undefined) process.env.GEMINI_API_KEY = originalGeminiKey;
     else delete process.env.GEMINI_API_KEY;
 

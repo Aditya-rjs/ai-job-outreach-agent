@@ -356,18 +356,38 @@ export class GlobalGeminiRateLimiter {
   }
 
   public isCooldownActive(): boolean {
+    if (geminiPool.getMode() === 'ALLMODELS') {
+      const now = Date.now();
+      return geminiPool.isPoolExhausted(now) && geminiPool.getEarliestRecoveryMs(now) > 0;
+    }
     return Date.now() < this.cooldownUntil;
   }
 
   public getCooldownRemainingMs(): number {
-    return Math.max(0, this.cooldownUntil - Date.now());
+    const now = Date.now();
+    if (geminiPool.getMode() === 'ALLMODELS') {
+      return geminiPool.isPoolExhausted(now) ? geminiPool.getEarliestRecoveryMs(now) : 0;
+    }
+    return Math.max(0, this.cooldownUntil - now);
   }
 
   public getCooldownUntilMs(): number {
+    const now = Date.now();
+    if (geminiPool.getMode() === 'ALLMODELS') {
+      return geminiPool.isPoolExhausted(now) ? now + geminiPool.getEarliestRecoveryMs(now) : 0;
+    }
     return this.cooldownUntil;
   }
 
   public getCooldownUntilIso(): string | null {
+    if (geminiPool.getMode() === 'ALLMODELS') {
+      const now = Date.now();
+      if (geminiPool.isPoolExhausted(now)) {
+        const rec = geminiPool.getEarliestRecoveryMs(now);
+        return rec > 0 ? new Date(now + rec).toISOString() : null;
+      }
+      return null;
+    }
     return this.cooldownUntil > 0 ? new Date(this.cooldownUntil).toISOString() : null;
   }
 
@@ -439,6 +459,11 @@ export class GlobalGeminiRateLimiter {
     this.last429At = nowIso;
     this.consecutive429Count++;
 
+    // In ALLMODELS mode, if the pool still has healthy models, do NOT activate global provider cooldown
+    if (geminiPool.getMode() === 'ALLMODELS' && !geminiPool.isPoolExhausted(now)) {
+      return 0;
+    }
+
     const retryAfterMs = extractRetryAfterMs(err);
     let cooldownMs: number;
 
@@ -470,10 +495,14 @@ export class GlobalGeminiRateLimiter {
     }
 
     return this.cooldownUntil;
-
   }
 
   public handleTransientOutage(durationMs: number = 30000): number {
+    // In ALLMODELS mode, if the pool still has healthy models, do NOT activate global provider cooldown
+    if (geminiPool.getMode() === 'ALLMODELS' && !geminiPool.isPoolExhausted()) {
+      return 0;
+    }
+
     const now = Date.now();
     const newCooldownUntil = now + Math.max(5000, durationMs);
     if (newCooldownUntil > this.cooldownUntil) {
@@ -505,6 +534,11 @@ export class GlobalGeminiRateLimiter {
     const diag = categorizeGeminiError(err);
     const nowIso = new Date().toISOString();
     if (diag.code === 'RATE_LIMIT_EXCEEDED') {
+      if (geminiPool.getMode() === 'ALLMODELS' && !geminiPool.isPoolExhausted()) {
+        this.rateLimit429Count++;
+        this.last429At = nowIso;
+        return;
+      }
       this.handle429(err);
     } else if (diag.isTransient) {
       this.recentTransientErrorCount++;
@@ -553,7 +587,6 @@ export class GlobalGeminiRateLimiter {
         }
       }
       return;
-
     }
 
     if (this.inFlight >= this.getMaxConcurrency() || this.queue.length === 0) {
@@ -584,10 +617,22 @@ export class GlobalGeminiRateLimiter {
     } catch (err) {
       this.requestsFailed++;
       const diag = categorizeGeminiError(err);
-      if (diag.code === 'RATE_LIMIT_EXCEEDED') {
-        this.handle429(err);
+      if (geminiPool.getMode() === 'ALLMODELS') {
+        if (diag.code === 'RATE_LIMIT_EXCEEDED') {
+          this.rateLimit429Count++;
+          this.last429At = new Date().toISOString();
+          if (geminiPool.isPoolExhausted()) {
+            this.handle429(err);
+          }
+        } else {
+          this.recordError(err);
+        }
       } else {
-        this.recordError(err);
+        if (diag.code === 'RATE_LIMIT_EXCEEDED') {
+          this.handle429(err);
+        } else {
+          this.recordError(err);
+        }
       }
       item.reject(err);
     } finally {
