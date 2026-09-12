@@ -61,8 +61,8 @@ export function isBatchClassificationComplete(
     .get();
   if (!batch) return false;
 
-  const incompleteRow = db.get<{ count: number }>(sql`
-    SELECT COUNT(DISTINCT LOWER(TRIM(c.company_name))) as count
+  const incompleteRow = db.get<{ exists_flag: number }>(sql`
+    SELECT 1 as exists_flag
     FROM contacts c
     LEFT JOIN company_classifications cc ON (
       cc.normalized_name = LOWER(TRIM(c.company_name))
@@ -76,9 +76,32 @@ export function isBatchClassificationComplete(
         cc.classification_result IN ('PENDING', 'RETRY_WAITING')
         OR (cc.classification_result IS NULL AND c.is_relevant IS NULL)
       )
+    LIMIT 1
   `);
 
-  return (incompleteRow?.count ?? 0) === 0;
+  return !incompleteRow;
+}
+
+/**
+ * Returns the IDs of all active batches whose company classification is 100% complete.
+ * A batch is complete when AI Search Pending === 0 and AI Search Retry === 0.
+ */
+export function getClassificationCompleteBatchIds(
+  db: ReturnType<typeof getDb> = getDb()
+): string[] {
+  const activeBatches = db
+    .select({ id: batches.id })
+    .from(batches)
+    .where(sql`batches.status NOT IN ('completed', 'deleted', 'cancelled')`)
+    .all();
+
+  const completeBatchIds: string[] = [];
+  for (const b of activeBatches) {
+    if (isBatchClassificationComplete(db, b.id)) {
+      completeBatchIds.push(b.id);
+    }
+  }
+  return completeBatchIds;
 }
 
 /**

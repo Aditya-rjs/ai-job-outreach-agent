@@ -30,7 +30,7 @@ process.env.OUTREACH_DRY_RUN = 'true';
 import { getDb, resetDbConnection } from '../src/db';
 import { initializeDatabase } from '../src/db/migrate';
 import { batches, contacts, companyClassifications, outreachQueue, resume } from '../src/db/schema';
-import { sql } from 'drizzle-orm';
+import { sql, and, eq } from 'drizzle-orm';
 import { isBatchClassificationComplete } from '../src/lib/pipeline/classification-reconciler';
 import {
   reconcilePendingEmailGenerations,
@@ -845,6 +845,143 @@ async function runBarrierVerificationTests() {
   assert.strictEqual(c12FailedContact?.generationAttemptCount, 5, 'c12-failed attempt count must be preserved');
 
   console.log('✓ TEST 15 PASSED: Existing retry and failure records remain completely intact and persisted\n');
+
+  // -------------------------------------------------------------------------
+  // TEST 16: Subsequent batches of 4 execute rapidly without correlated query overhead
+  // -------------------------------------------------------------------------
+  console.log('TEST 16: Subsequent batches of 4 execute rapidly without correlated query overhead...');
+  const batch16Id = 'batch-fast-burst-16';
+  db.insert(batches).values({
+    id: batch16Id,
+    filename: 'batch16.csv',
+    uploadDate: new Date().toISOString(),
+    status: 'processing',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  // Company is already complete (RELEVANT)
+  db.insert(companyClassifications).values({
+    normalizedName: 'hyper fast tech',
+    companyName: 'Hyper Fast Tech',
+    reason: 'Pure cloud infra',
+    classificationResult: 'RELEVANT',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  // Insert 12 contacts (3 batches of 4)
+  for (let i = 1; i <= 12; i++) {
+    db.insert(contacts).values({
+      id: `c16-${i}`,
+      batchId: batch16Id,
+      companyName: 'Hyper Fast Tech',
+      contactName: `Recruiter ${i}`,
+      email: `recruiter${i}@hyperfast.test`,
+      isRelevant: true,
+      emailValid: true,
+      isDuplicate: false,
+      status: 'discovered',
+      createdAt: new Date(Date.now() + i * 1000).toISOString(),
+      updatedAt: new Date().toISOString(),
+    }).run();
+  }
+
+  // Batch is complete
+  assert.strictEqual(isBatchClassificationComplete(db, batch16Id), true, 'Batch 16 must be complete');
+
+  // First batch of 4:
+  const tStart1 = performance.now();
+  const resBurst1 = await reconcilePendingEmailGenerations({
+    batchId: batch16Id,
+    batchSize: 4,
+    aiCallerOverride: async () => 'Subject: Opportunities\n\nFast burst body 1.',
+  });
+  const tDur1 = performance.now() - tStart1;
+  assert.strictEqual(resBurst1.succeeded, 4, 'Burst 1 must generate 4 emails');
+  assert.ok(tDur1 < 3000, `Burst 1 must complete quickly (< 3000ms, got ${tDur1.toFixed(1)}ms)`);
+
+  // Second batch of 4:
+  const tStart2 = performance.now();
+  const resBurst2 = await reconcilePendingEmailGenerations({
+    batchId: batch16Id,
+    batchSize: 4,
+    aiCallerOverride: async () => 'Subject: Opportunities\n\nFast burst body 2.',
+  });
+  const tDur2 = performance.now() - tStart2;
+  assert.strictEqual(resBurst2.succeeded, 4, 'Burst 2 must generate 4 emails');
+  assert.ok(tDur2 < 3000, `Burst 2 must complete quickly (< 3000ms, got ${tDur2.toFixed(1)}ms)`);
+
+  // Third batch of 4:
+  const tStart3 = performance.now();
+  const resBurst3 = await reconcilePendingEmailGenerations({
+    batchId: batch16Id,
+    batchSize: 4,
+    aiCallerOverride: async () => 'Subject: Opportunities\n\nFast burst body 3.',
+  });
+  const tDur3 = performance.now() - tStart3;
+  assert.strictEqual(resBurst3.succeeded, 4, 'Burst 3 must generate 4 emails');
+  assert.ok(tDur3 < 3000, `Burst 3 must complete quickly (< 3000ms, got ${tDur3.toFixed(1)}ms)`);
+
+  // Verify all 12 generated
+  const genCount16 = db.select().from(contacts).where(and(eq(contacts.batchId, batch16Id), eq(contacts.generationStatus, 'GENERATED'))).all();
+  assert.strictEqual(genCount16.length, 12, 'All 12 contacts in Batch 16 must be generated');
+  console.log(`✓ TEST 16 PASSED: 3 consecutive batches of 4 executed rapidly (${tDur1.toFixed(0)}ms, ${tDur2.toFixed(0)}ms, ${tDur3.toFixed(0)}ms)\n`);
+
+  // -------------------------------------------------------------------------
+  // TEST 17: Ready-to-Send dispatching continues independently
+  // -------------------------------------------------------------------------
+  console.log('TEST 17: Ready-to-Send dispatching continues independently...');
+  // Add an incomplete batch to the DB
+  const batch17IncompleteId = 'batch-incomplete-17';
+  db.insert(batches).values({
+    id: batch17IncompleteId,
+    filename: 'batch17.csv',
+    uploadDate: new Date().toISOString(),
+    status: 'processing',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  db.insert(contacts).values({
+    id: 'c17-pending-contact',
+    batchId: batch17IncompleteId,
+    companyName: 'Pending Corp 17',
+    contactName: 'Pending Recruiter',
+    email: 'pending@pendingcorp17.test',
+    isRelevant: null,
+    emailValid: true,
+    isDuplicate: false,
+    status: 'discovered',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  db.insert(companyClassifications).values({
+    normalizedName: 'pending corp 17',
+    companyName: 'Pending Corp 17',
+    reason: 'Pending classification',
+    classificationResult: 'PENDING',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  // Outreach queue item from completed Batch 16 contact:
+  db.insert(outreachQueue).values({
+    id: 'oq-c16-1',
+    contactId: 'c16-1',
+    status: 'pending',
+    priority: 1,
+    attempts: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }).run();
+
+  // Incomplete batch must NOT block job acquisition of ready-to-send contact
+  const acquired = acquireNextEligibleJob('worker_test_17');
+  assert.ok(acquired, 'Scheduler must acquire ready-to-send contact even when AI Search Pending > 0');
+  assert.strictEqual(acquired.contact.id, 'c16-1', 'Acquired contact must be c16-1');
+  console.log('✓ TEST 17 PASSED: Ready-to-Send continues independently of classification barrier\n');
 
   console.log('======================================================================');
   console.log('ALL BARRIER AND DASHBOARD TESTS COMPLETED SUCCESSFULLY!');
