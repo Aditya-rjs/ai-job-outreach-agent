@@ -123,7 +123,7 @@ export function executeHistorical17Recovery(
 
       const validBatchIds = new Set(
         batchRows
-          .filter((b) => b.status !== 'deleted' && b.status !== 'cancelled' && !b.deletedAt)
+          .filter((b) => b.status !== 'deleted' && b.status !== 'cancelled' && b.status !== 'completed' && !b.deletedAt)
           .map((b) => b.id)
       );
 

@@ -197,10 +197,10 @@ async function runWorkerLoop() {
       const { queueItem, contact } = nextJob;
       const attemptTimestamp = new Date().toISOString();
 
-      // Verify parent batch is still active and has not been deleted/cancelled
+      // Verify parent batch is still active and has not been deleted/cancelled/completed
       const parentBatch = db.select().from(batches).where(eq(batches.id, contact.batchId)).get();
-      if (!parentBatch || parentBatch.status === 'deleted' || parentBatch.status === 'cancelled') {
-        console.warn(`[Outreach Worker] Parent batch ${contact.batchId} was deleted/cancelled. Aborting send for ${contact.email}.`);
+      if (!parentBatch || parentBatch.status === 'deleted' || parentBatch.status === 'cancelled' || parentBatch.status === 'completed') {
+        console.warn(`[Outreach Worker] Parent batch ${contact.batchId} was deleted/cancelled/completed. Aborting send for ${contact.email}.`);
         db.update(outreachQueue)
           .set({ status: 'cancelled', updatedAt: attemptTimestamp })
           .where(eq(outreachQueue.id, queueItem.id))

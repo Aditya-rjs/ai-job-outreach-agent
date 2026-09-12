@@ -703,7 +703,7 @@ export default function DashboardPage() {
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge variant={b.status === 'completed' ? 'success' : b.status === 'queued' ? 'default' : 'secondary'}>
+                      <Badge variant={b.status === 'completed' ? 'success' : (b.status === 'processing' || b.status === 'sending') ? 'default' : b.status === 'failed' ? 'destructive' : 'secondary'}>
                         {b.status}
                       </Badge>
                       <Link href={`/batches/${b.id}`}>

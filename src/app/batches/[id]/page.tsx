@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, use } from 'react';
+import React, { useState, useEffect, useCallback, use, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -129,11 +129,21 @@ export default function BatchDetailPage({
     }
   }, [batchId]);
 
+  // Tracking for initial load vs subsequent card switches
+  const lastLoadedBatchId = useRef<string | null>(null);
+
   // 2. Fetch Batch-Scoped 13 Metrics & Active Detail
   const fetchProcessingData = useCallback(
-    async (isManual = false, targetCategory = activeCategory, targetPage = detailPage, targetSearch = detailSearch) => {
+    async (
+      isManual = false,
+      targetCategory = activeCategory,
+      targetPage = detailPage,
+      targetSearch = detailSearch,
+      isBackground = false
+    ) => {
       if (isManual) setIsRefreshing(true);
-      if (targetCategory) setLoadingDetail(true);
+      // Only user-initiated detail fetches show the loading spinner; silent background polling updates in-place
+      if (targetCategory && !isBackground) setLoadingDetail(true);
 
       try {
         const queryParams = new URLSearchParams({
@@ -169,26 +179,35 @@ export default function BatchDetailPage({
         console.error('Error fetching batch processing data:', err);
       } finally {
         setLoadingStats(false);
-        setLoadingDetail(false);
+        if (!isBackground) setLoadingDetail(false);
         setIsRefreshing(false);
       }
     },
     [batchId, activeCategory, detailPage, detailSearch]
   );
 
-  // Initial Load
+  // Initial Load (runs on mount and when batchId changes)
   useEffect(() => {
-    fetchBatchHeader();
-    fetchProcessingData(false, activeCategory, 1, '');
-  }, [fetchBatchHeader, fetchProcessingData, activeCategory]);
+    if (lastLoadedBatchId.current !== batchId) {
+      lastLoadedBatchId.current = batchId;
+      fetchBatchHeader();
+      fetchProcessingData(false, activeCategory, 1, '', false);
+    }
+  }, [batchId, fetchBatchHeader, fetchProcessingData, activeCategory]);
 
-  // Periodic Polling (Every 5s while processing/queued)
+  // Periodic Polling (Every 5s for ACTIVE batches only) - performs silent background refresh
   useEffect(() => {
+    // Only poll if batch is loaded and in an active state (processing, queued, sending)
+    // Completed, deleted, cancelled, or failed batches remain static and do not poll
+    if (!batch || batch.status === 'completed' || batch.status === 'deleted' || batch.status === 'cancelled' || batch.status === 'failed') {
+      return;
+    }
+
     const interval = setInterval(() => {
-      fetchProcessingData(false, activeCategory, detailPage, detailSearch);
+      fetchProcessingData(false, activeCategory, detailPage, detailSearch, true);
     }, 5000);
     return () => clearInterval(interval);
-  }, [fetchProcessingData, activeCategory, detailPage, detailSearch]);
+  }, [batch?.status, fetchProcessingData, activeCategory, detailPage, detailSearch]);
 
   // Fetch Company Contacts on Expand
   const toggleCompanyContacts = async (normalizedName: string) => {

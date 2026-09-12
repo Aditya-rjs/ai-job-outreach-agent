@@ -42,15 +42,17 @@ export default function BatchesPage() {
 
   const getStatusBadgeVariant = (status: string) => {
     switch (status) {
-      case 'queued':
       case 'completed':
         return 'success';
+      case 'queued':
+        return 'secondary';
       case 'processing':
       case 'sending':
         return 'default';
       case 'paused':
         return 'warning';
       case 'failed':
+      case 'deleted':
         return 'destructive';
       default:
         return 'secondary';

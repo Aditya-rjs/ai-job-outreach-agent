@@ -138,7 +138,7 @@ export function hasActiveFreshPendingGeneration(
 
   const batchCondition = batchId
     ? sql`AND contacts.batch_id = ${batchId}`
-    : sql`AND batches.status NOT IN ('deleted', 'cancelled')`;
+    : sql`AND batches.status NOT IN ('completed', 'deleted', 'cancelled')`;
 
   const excludeCondition = excludeContactId
     ? sql`AND contacts.id != ${excludeContactId}`
@@ -244,7 +244,7 @@ export function getGenerationRoundState(
 
   const batchCondition = batchId
     ? sql`AND contacts.batch_id = ${batchId}`
-    : sql`AND batches.status NOT IN ('deleted', 'cancelled')`;
+    : sql`AND batches.status NOT IN ('completed', 'deleted', 'cancelled')`;
 
   const row = db.get<{
     activePending: number;
@@ -402,7 +402,7 @@ export async function reconcilePendingEmailGenerations(options: {
   const cooldownCutoffIso = getCooldownCutoffIso(now.getTime());
   const batchFilter = options.batchId
     ? sql`AND contacts.batch_id = ${options.batchId}`
-    : sql`AND batches.status NOT IN ('deleted', 'cancelled')`;
+    : sql`AND batches.status NOT IN ('completed', 'deleted', 'cancelled')`;
 
   let candidates: Contact[] = [];
   let activePass: 'ACTIVE_GENERATION' | 'GENERATION_RETRY' | 'IDLE' = 'IDLE';
@@ -608,7 +608,7 @@ export async function reconcilePendingEmailGenerations(options: {
             SELECT 1 FROM contacts c2
             INNER JOIN batches b2 ON c2.batch_id = b2.id
             WHERE 1=1
-              ${options.batchId ? sql`AND b2.id = ${options.batchId}` : sql`AND b2.status NOT IN ('deleted', 'cancelled')`}
+              ${options.batchId ? sql`AND b2.id = ${options.batchId}` : sql`AND b2.status NOT IN ('completed', 'deleted', 'cancelled')`}
               AND c2.is_relevant = 1
               AND c2.email_valid = 1
               AND c2.is_duplicate = 0

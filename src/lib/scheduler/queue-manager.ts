@@ -345,7 +345,7 @@ export function acquireNextEligibleJob(workerId: string): NextEligibleJob | null
             AND outreach_queue.next_retry_at <= ${nowIso}
           )
         )
-        AND batches.status NOT IN ('cancelled', 'deleted')
+        AND batches.status NOT IN ('completed', 'cancelled', 'deleted')
         AND contacts.status IN ('generated', 'queued')
         AND (contacts.is_relevant IS NULL OR contacts.is_relevant = 1)
         AND contacts.is_duplicate = 0
@@ -456,49 +456,100 @@ export function checkBatchCompletions(): BatchCompletionSummary[] {
       continue;
     }
 
-    // Check if there are any remaining pending, generating, queued, or processing contacts
-    const remaining = db
+    // Must have at least 1 contact in the batch to consider completion (avoid marking empty/unparsed batches)
+    const totalContacts = db
+      .select({ count: sql<number>`count(*)` })
+      .from(contacts)
+      .where(eq(contacts.batchId, batch.id))
+      .get()?.count ?? 0;
+
+    if (totalContacts === 0) {
+      continue;
+    }
+
+    // 1. Classification Barrier: Ensure company classification is 100% complete for this batch
+    if (!isBatchClassificationComplete(db, batch.id)) {
+      continue;
+    }
+
+    // 2. Check for any non-terminal contacts in this batch
+    // Terminal contact states: 'sent', 'skipped', 'failed', 'uncertain', 'simulated'
+    // Non-terminal states: 'discovered', 'queued', 'generating', 'generated', 'processing', 'sending', etc.
+    const nonTerminalContacts = db
       .select({ count: sql<number>`count(*)` })
       .from(contacts)
       .where(
         and(
           eq(contacts.batchId, batch.id),
-          sql`status IN ('discovered', 'queued', 'generating', 'generated', 'processing', 'sending')`
+          sql`status NOT IN ('sent', 'skipped', 'failed', 'uncertain', 'simulated')`
         )
       )
       .get()?.count ?? 0;
 
-    if (remaining === 0) {
-      const stats = db
-        .select({
-          totalRecords: sql<number>`count(*)`,
-          relevantCompanies: sql<number>`SUM(CASE WHEN is_relevant = 1 THEN 1 ELSE 0 END)`,
-          emailsSent: sql<number>`SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END)`,
-          emailsSimulated: sql<number>`SUM(CASE WHEN status = 'simulated' THEN 1 ELSE 0 END)`,
-          emailsFailed: sql<number>`SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)`,
-          emailsSkipped: sql<number>`SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END)`,
-          emailsUncertain: sql<number>`SUM(CASE WHEN status = 'uncertain' THEN 1 ELSE 0 END)`,
-        })
-        .from(contacts)
-        .where(eq(contacts.batchId, batch.id))
-        .get();
+    if (nonTerminalContacts > 0) {
+      continue;
+    }
 
-      const nowIso = new Date().toISOString();
-      const isDryRun = process.env.OUTREACH_DRY_RUN === 'true';
-
-      // Mark batch as completed - enforcing status integrity guard
-      db.update(batches)
-        .set({
-          status: 'completed',
-          updatedAt: nowIso,
-        })
-        .where(
-          and(
-            eq(batches.id, batch.id),
-            sql`status NOT IN ('completed', 'deleted', 'cancelled')`
-          )
+    // 3. Check for any active email generation or generation retry work
+    const pendingGeneration = db
+      .select({ count: sql<number>`count(*)` })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.batchId, batch.id),
+          sql`generation_status IN ('PENDING_GENERATION', 'CLAIMED', 'GENERATING', 'RETRY_WAITING')`
         )
-        .run();
+      )
+      .get()?.count ?? 0;
+
+    if (pendingGeneration > 0) {
+      continue;
+    }
+
+    // 4. Check for any active outreach queue items (pending or processing)
+    const pendingQueueItems = db.get<{ count: number }>(sql`
+      SELECT COUNT(*) as count
+      FROM outreach_queue oq
+      INNER JOIN contacts c ON oq.contact_id = c.id
+      WHERE c.batch_id = ${batch.id}
+        AND oq.status IN ('pending', 'processing')
+    `)?.count ?? 0;
+
+    if (pendingQueueItems > 0) {
+      continue;
+    }
+
+    const stats = db
+      .select({
+        totalRecords: sql<number>`count(*)`,
+        relevantCompanies: sql<number>`SUM(CASE WHEN is_relevant = 1 THEN 1 ELSE 0 END)`,
+        emailsSent: sql<number>`SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END)`,
+        emailsSimulated: sql<number>`SUM(CASE WHEN status = 'simulated' THEN 1 ELSE 0 END)`,
+        emailsFailed: sql<number>`SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)`,
+        emailsSkipped: sql<number>`SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END)`,
+        emailsUncertain: sql<number>`SUM(CASE WHEN status = 'uncertain' THEN 1 ELSE 0 END)`,
+      })
+      .from(contacts)
+      .where(eq(contacts.batchId, batch.id))
+      .get();
+
+    const nowIso = new Date().toISOString();
+    const isDryRun = process.env.OUTREACH_DRY_RUN === 'true';
+
+    // Mark batch as completed - enforcing status integrity guard
+    db.update(batches)
+      .set({
+        status: 'completed',
+        emailsPending: 0,
+        updatedAt: nowIso,
+      })
+      .where(
+        and(
+          eq(batches.id, batch.id),
+          sql`status NOT IN ('completed', 'deleted', 'cancelled')`
+        )
+      )
+      .run();
 
       // Check if completion notification has already been recorded
       const notificationKey = `batch_completed_notice_${batch.id}`;
@@ -531,7 +582,6 @@ export function checkBatchCompletions(): BatchCompletionSummary[] {
       }
 
       completedSummaries.push(summary);
-    }
   }
 
   return completedSummaries;

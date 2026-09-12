@@ -213,7 +213,7 @@ export function discoverAndSeedOrphanedCompanies(
   const whereConditions = [
     sql`contacts.company_name IS NOT NULL AND TRIM(contacts.company_name) != ''`,
     sql`contacts.is_relevant IS NULL`,
-    sql`batches.status NOT IN ('deleted', 'cancelled')`,
+    sql`batches.status NOT IN ('completed', 'deleted', 'cancelled')`,
   ];
   if (batchId) {
     whereConditions.push(eq(contacts.batchId, batchId));
@@ -1218,7 +1218,7 @@ export async function reconcilePendingClassifications(
   const activeBatches = db
     .select({ id: batches.id })
     .from(batches)
-    .where(sql`batches.status NOT IN ('deleted', 'cancelled')`)
+    .where(sql`batches.status NOT IN ('completed', 'deleted', 'cancelled')`)
     .orderBy(batches.createdAt)
     .all();
 
@@ -1323,7 +1323,7 @@ export function cascadeClassificationToContacts(
     .where(
       and(
         sql`contacts.company_name IS NOT NULL AND TRIM(contacts.company_name) != ''`,
-        sql`batches.status NOT IN ('deleted', 'cancelled')`
+        sql`batches.status NOT IN ('completed', 'deleted', 'cancelled')`
       )
     )
     .all();
@@ -1438,7 +1438,7 @@ function reconcileActiveBatchCounters(db: ReturnType<typeof getDb>): void {
     const activeBatches = db
       .select({ id: batches.id })
       .from(batches)
-      .where(sql`status NOT IN ('deleted', 'cancelled')`)
+      .where(sql`status NOT IN ('completed', 'deleted', 'cancelled')`)
       .all();
 
     for (const b of activeBatches) {
