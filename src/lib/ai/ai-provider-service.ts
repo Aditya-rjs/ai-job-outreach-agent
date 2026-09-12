@@ -20,6 +20,7 @@ export interface PersistentAiProviderState {
   openrouterDispatches: number;
   openrouterSuccesses: number;
   openrouterFailures: number;
+  openrouterConsecutive429Count: number;
   fallbackCount: number;
   lastFallbackAt: string | null;
   updatedAt: string;
@@ -79,11 +80,15 @@ export function getPersistentAiProviderState(): PersistentAiProviderState {
         openrouter_dispatches INTEGER NOT NULL DEFAULT 0,
         openrouter_successes INTEGER NOT NULL DEFAULT 0,
         openrouter_failures INTEGER NOT NULL DEFAULT 0,
+        openrouter_consecutive_429_count INTEGER NOT NULL DEFAULT 0,
         fallback_count INTEGER NOT NULL DEFAULT 0,
         last_fallback_at TEXT,
         updated_at TEXT NOT NULL
       )
     `);
+    try {
+      db.run(sql`ALTER TABLE ai_provider_state ADD COLUMN openrouter_consecutive_429_count INTEGER NOT NULL DEFAULT 0`);
+    } catch {}
     row = db
       .select()
       .from(aiProviderState)
@@ -109,6 +114,7 @@ export function getPersistentAiProviderState(): PersistentAiProviderState {
           openrouterDispatches: 0,
           openrouterSuccesses: 0,
           openrouterFailures: 0,
+          openrouterConsecutive429Count: 0,
           fallbackCount: 0,
           lastFallbackAt: null,
           updatedAt: nowIso,
@@ -126,28 +132,6 @@ export function getPersistentAiProviderState(): PersistentAiProviderState {
     }
   }
 
-  // Reconcile stale persistent WAITING or cooldown state if Gemini pool currently has healthy models in ALLMODELS mode
-  if (
-    geminiPool.getMode() === 'ALLMODELS' &&
-    !geminiPool.isPoolExhausted() &&
-    (row?.activeProvider === 'waiting' || (row?.geminiCooldownUntil && new Date(row.geminiCooldownUntil).getTime() > Date.now()))
-  ) {
-    try {
-      db.update(aiProviderState)
-        .set({
-          activeProvider: 'gemini',
-          geminiCooldownUntil: null,
-          updatedAt: new Date().toISOString(),
-        })
-        .where(eq(aiProviderState.id, 'singleton'))
-        .run();
-      if (row) {
-        row.activeProvider = 'gemini';
-        row.geminiCooldownUntil = null;
-      }
-    } catch {}
-  }
-
   return {
     activeProvider: (row?.activeProvider as AiProviderStatusType) || 'gemini',
     geminiCooldownUntil: row?.geminiCooldownUntil || null,
@@ -161,6 +145,7 @@ export function getPersistentAiProviderState(): PersistentAiProviderState {
     openrouterDispatches: row?.openrouterDispatches ?? 0,
     openrouterSuccesses: row?.openrouterSuccesses ?? 0,
     openrouterFailures: row?.openrouterFailures ?? 0,
+    openrouterConsecutive429Count: row?.openrouterConsecutive429Count ?? 0,
     fallbackCount: row?.fallbackCount ?? 0,
     lastFallbackAt: row?.lastFallbackAt || null,
     updatedAt: row?.updatedAt || new Date().toISOString(),
@@ -200,12 +185,17 @@ export function isGeminiCooldownActive(
   state?: PersistentAiProviderState,
   nowMs: number = Date.now()
 ): boolean {
+  const currentState = state || getPersistentAiProviderState();
+  const dbExpiry = currentState.geminiCooldownUntil ? new Date(currentState.geminiCooldownUntil).getTime() : 0;
+  const isDbCooled = !isNaN(dbExpiry) && dbExpiry > nowMs;
+
   if (geminiPool.getMode() === 'ALLMODELS') {
-    // In ALLMODELS mode, Gemini provider is in cooldown ONLY IF all accessible pool models are exhausted
-    if (geminiPool.isPoolExhausted(nowMs)) {
-      return geminiPool.getEarliestRecoveryMs(nowMs) > 0;
+    // In ALLMODELS mode, Gemini provider is in cooldown IF all accessible pool models are exhausted
+    // OR if worker recorded an active persistent cooldown in SQLite
+    if (geminiPool.isPoolExhausted(nowMs) && geminiPool.getEarliestRecoveryMs(nowMs) > 0) {
+      return true;
     }
-    return false;
+    return isDbCooled;
   }
 
   // Single-model mode:
@@ -215,10 +205,7 @@ export function isGeminiCooldownActive(
   if (geminiPool.isPoolExhausted(nowMs) && geminiPool.getEarliestRecoveryMs(nowMs) > 0) {
     return true;
   }
-  const currentState = state || getPersistentAiProviderState();
-  if (!currentState.geminiCooldownUntil) return false;
-  const expiry = new Date(currentState.geminiCooldownUntil).getTime();
-  return !isNaN(expiry) && expiry > nowMs;
+  return isDbCooled;
 }
 
 /**
@@ -228,10 +215,20 @@ export function getGeminiCooldownRemainingMs(
   state?: PersistentAiProviderState,
   nowMs: number = Date.now()
 ): number {
+  const currentState = state || getPersistentAiProviderState();
+  let dbRemaining = 0;
+  if (currentState.geminiCooldownUntil) {
+    const expiry = new Date(currentState.geminiCooldownUntil).getTime();
+    if (!isNaN(expiry) && expiry > nowMs) {
+      dbRemaining = expiry - nowMs;
+    }
+  }
+
   if (geminiPool.getMode() === 'ALLMODELS') {
-    return geminiPool.isPoolExhausted(nowMs)
+    const poolRecovery = geminiPool.isPoolExhausted(nowMs)
       ? geminiPool.getEarliestRecoveryMs(nowMs)
       : 0;
+    return Math.max(poolRecovery, dbRemaining);
   }
 
   const poolRecovery = geminiPool.isPoolExhausted(nowMs)
@@ -241,14 +238,6 @@ export function getGeminiCooldownRemainingMs(
   const memUntil = globalGeminiLimiter.getCooldownUntilMs();
   if (memUntil > nowMs) {
     memRemaining = memUntil - nowMs;
-  }
-  const currentState = state || getPersistentAiProviderState();
-  let dbRemaining = 0;
-  if (currentState.geminiCooldownUntil) {
-    const expiry = new Date(currentState.geminiCooldownUntil).getTime();
-    if (!isNaN(expiry) && expiry > nowMs) {
-      dbRemaining = expiry - nowMs;
-    }
   }
   return Math.max(poolRecovery, memRemaining, dbRemaining);
 }
@@ -289,28 +278,52 @@ export function computeEffectiveActiveProvider(
 }
 
 /**
- * Records an OpenRouter HTTP 429 rate limit event.
+ * Computes progressive cooldown duration for consecutive OpenRouter 429 errors.
+ * 1st -> 60s
+ * 2nd -> 120s
+ * 3rd -> 300s
+ * 4th+ -> 600s (capped at 600s)
+ */
+export function computeOpenRouter429CooldownMs(consecutiveCount: number): number {
+  if (consecutiveCount <= 1) return 60000;
+  if (consecutiveCount === 2) return 120000;
+  if (consecutiveCount === 3) return 300000;
+  return 600000;
+}
+
+/**
+ * Records an OpenRouter HTTP 429 rate limit event with progressive backoff.
  * Strictly isolates OpenRouter: NEVER modifies Gemini limiter or Gemini cooldown.
  */
 export function recordOpenRouter429(
   errorDetail: string,
-  durationOrIso: number | string = 60000
-): void {
+  durationOrIso?: number | string
+): { cooldownMs: number; consecutiveCount: number } {
   const db = getDb();
   const now = Date.now();
+  const currentState = getPersistentAiProviderState();
+  const consecutiveCount = (currentState.openrouterConsecutive429Count ?? 0) + 1;
+
+  let cooldownMs: number;
   let cooldownUntil: string;
   if (typeof durationOrIso === 'string') {
     cooldownUntil = durationOrIso;
+    const diff = new Date(durationOrIso).getTime() - now;
+    cooldownMs = Math.max(5000, isNaN(diff) ? 60000 : diff);
+  } else if (typeof durationOrIso === 'number' && durationOrIso > 0) {
+    cooldownMs = durationOrIso;
+    cooldownUntil = new Date(now + cooldownMs).toISOString();
   } else {
-    cooldownUntil = new Date(now + Math.max(5000, durationOrIso)).toISOString();
+    cooldownMs = computeOpenRouter429CooldownMs(consecutiveCount);
+    cooldownUntil = new Date(now + cooldownMs).toISOString();
   }
   const nowIso = new Date(now).toISOString();
 
   // Compute next active provider using current state with updated OpenRouter cooldown
-  const currentState = getPersistentAiProviderState();
   const previewState: PersistentAiProviderState = {
     ...currentState,
     openrouterCooldownUntil: cooldownUntil,
+    openrouterConsecutive429Count: consecutiveCount,
   };
   const nextActive = computeEffectiveActiveProvider(previewState, now);
 
@@ -320,10 +333,13 @@ export function recordOpenRouter429(
       openrouterCooldownUntil: cooldownUntil,
       openrouterLastError: errorDetail.slice(0, 300),
       openrouterFailures: sql`${aiProviderState.openrouterFailures} + 1`,
+      openrouterConsecutive429Count: consecutiveCount,
       updatedAt: nowIso,
     })
     .where(eq(aiProviderState.id, 'singleton'))
     .run();
+
+  return { cooldownMs, consecutiveCount };
 }
 
 /**
@@ -446,6 +462,7 @@ export function recordOpenRouterSuccess(): void {
       openrouterLastError: null,
       openrouterSuccesses: sql`${aiProviderState.openrouterSuccesses} + 1`,
       openrouterDispatches: sql`${aiProviderState.openrouterDispatches} + 1`,
+      openrouterConsecutive429Count: 0,
       totalDispatches: sql`${aiProviderState.totalDispatches} + 1`,
       updatedAt: nowIso,
     })
@@ -507,6 +524,7 @@ export function resetPersistentAiProviderStateForTesting(): void {
       openrouterDispatches: 0,
       openrouterSuccesses: 0,
       openrouterFailures: 0,
+      openrouterConsecutive429Count: 0,
       fallbackCount: 0,
       lastFallbackAt: null,
       updatedAt: nowIso,

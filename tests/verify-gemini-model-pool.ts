@@ -526,22 +526,22 @@ async function runTests() {
     recordPass('Test D: Full pool exhaustion activates global provider cooldown.');
 
     // =========================================================================
-    // TEST 20 (Test E): Persistent Stale Provider State Auto-Reconciliation
+    // TEST 20 (Test E): Multi-Process Persistent Cooldown Protection
     // =========================================================================
     totalTests++;
-    console.log(`\n--- Test ${totalTests} (Test E): Persistent Stale State Auto-Reconciliation ---`);
+    console.log(`\n--- Test ${totalTests} (Test E): Multi-Process Persistent Cooldown Protection ---`);
     const db = getDb();
-    const staleCooldown = new Date(Date.now() + 600000).toISOString(); // 10 min in future
+    const activeCooldown = new Date(Date.now() + 600000).toISOString(); // 10 min in future
     db.update(aiProviderState)
       .set({
         activeProvider: 'waiting',
-        geminiCooldownUntil: staleCooldown,
+        geminiCooldownUntil: activeCooldown,
         updatedAt: new Date().toISOString(),
       })
       .where(eq(aiProviderState.id, 'singleton'))
       .run();
 
-    // In ALLMODELS mode with healthy pool:
+    // In ALLMODELS mode with healthy pool (simulating web process with fresh in-memory pool):
     geminiPool.resetForTesting();
     globalGeminiLimiter.resetForTesting();
     geminiPool.configure('ALLMODELS');
@@ -551,12 +551,24 @@ async function runTests() {
     ]);
 
     assert.strictEqual(geminiPool.isPoolExhausted(), false);
-    // Retrieval of persistent state auto-reconciles stale waiting state
-    const reconciledState = getPersistentAiProviderState();
-    assert.strictEqual(reconciledState.activeProvider, 'gemini');
-    assert.strictEqual(reconciledState.geminiCooldownUntil, null);
-    assert.strictEqual(isGeminiCooldownActive(reconciledState), false);
-    recordPass('Test E: Stale persistent DB WAITING state automatically reconciles when pool has healthy models.');
+    // Retrieval of persistent state MUST NOT clear active worker cooldown even if web pool is healthy
+    const persistentState = getPersistentAiProviderState();
+    assert.strictEqual(persistentState.geminiCooldownUntil, activeCooldown);
+    assert.strictEqual(isGeminiCooldownActive(persistentState), true);
+
+    // Expired cooldown correctly evaluates as inactive
+    const expiredCooldown = new Date(Date.now() - 1000).toISOString();
+    db.update(aiProviderState)
+      .set({
+        activeProvider: 'gemini',
+        geminiCooldownUntil: expiredCooldown,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(aiProviderState.id, 'singleton'))
+      .run();
+    const expiredState = getPersistentAiProviderState();
+    assert.strictEqual(isGeminiCooldownActive(expiredState), false);
+    recordPass('Test E: Active persistent worker cooldown is protected against web process resets and respects expiry.');
 
     // =========================================================================
     // TEST 21 (Test F): Explicit Pinned Single-Model Mode

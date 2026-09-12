@@ -70,6 +70,7 @@ export interface DashboardStats {
     openRouterDispatches: number;
     openRouterSuccesses: number;
     openRouterFailures: number;
+    openRouterConsecutive429Count?: number;
     fallbackCount: number;
     lastFallbackAt: string | null;
   };

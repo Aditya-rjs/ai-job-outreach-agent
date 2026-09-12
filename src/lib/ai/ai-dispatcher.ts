@@ -84,6 +84,7 @@ export interface AiDispatcherTelemetry {
   openRouterDispatches: number;
   openRouterSuccesses: number;
   openRouterFailures: number;
+  openRouterConsecutive429Count?: number;
   fallbackCount: number;
   lastFallbackAt: string | null;
 }
@@ -129,6 +130,7 @@ export function getAiDispatcherTelemetry(nowMs: number = Date.now()): AiDispatch
       openrouterDispatches: 0,
       openrouterSuccesses: 0,
       openrouterFailures: 0,
+      openrouterConsecutive429Count: 0,
       fallbackCount: 0,
       lastFallbackAt: null,
       updatedAt: new Date().toISOString(),
@@ -172,6 +174,7 @@ export function getAiDispatcherTelemetry(nowMs: number = Date.now()): AiDispatch
     openRouterDispatches: pState.openrouterDispatches,
     openRouterSuccesses: pState.openrouterSuccesses,
     openRouterFailures: pState.openrouterFailures,
+    openRouterConsecutive429Count: pState.openrouterConsecutive429Count,
     fallbackCount: pState.fallbackCount,
     lastFallbackAt: pState.lastFallbackAt,
   };
@@ -213,7 +216,7 @@ async function executeOpenRouterDispatch(
         `[AiDispatcher] OpenRouter returned HTTP 429 rate limit. Recording OpenRouter cooldown.`
       );
       try {
-        recordOpenRouter429((openRouterErr as Error)?.message || 'OpenRouter rate limit 429', 60000);
+        recordOpenRouter429((openRouterErr as Error)?.message || 'OpenRouter rate limit 429');
       } catch {}
 
       // Refresh persistent state

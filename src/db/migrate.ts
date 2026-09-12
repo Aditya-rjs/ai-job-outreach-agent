@@ -323,6 +323,7 @@ export function initializeDatabase() {
       openrouter_dispatches INTEGER NOT NULL DEFAULT 0,
       openrouter_successes INTEGER NOT NULL DEFAULT 0,
       openrouter_failures INTEGER NOT NULL DEFAULT 0,
+      openrouter_consecutive_429_count INTEGER NOT NULL DEFAULT 0,
       fallback_count INTEGER NOT NULL DEFAULT 0,
       last_fallback_at TEXT,
       updated_at TEXT NOT NULL
@@ -380,6 +381,7 @@ export function initializeDatabase() {
   try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN claim_token TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN lease_expires_at TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE company_classifications ADD COLUMN retry_round INTEGER NOT NULL DEFAULT 0`); } catch {}
+  try { db.run(sql`ALTER TABLE ai_provider_state ADD COLUMN openrouter_consecutive_429_count INTEGER NOT NULL DEFAULT 0`); } catch {}
 
   // Ensure is_relevant and confidence columns allow NULL for PENDING and NEEDS_REVIEW states
   try {

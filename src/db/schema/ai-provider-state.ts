@@ -16,6 +16,7 @@ export const aiProviderState = sqliteTable('ai_provider_state', {
   openrouterDispatches: integer('openrouter_dispatches').default(0).notNull(),
   openrouterSuccesses: integer('openrouter_successes').default(0).notNull(),
   openrouterFailures: integer('openrouter_failures').default(0).notNull(),
+  openrouterConsecutive429Count: integer('openrouter_consecutive_429_count').default(0).notNull(),
   fallbackCount: integer('fallback_count').default(0).notNull(),
   lastFallbackAt: text('last_fallback_at'),
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
