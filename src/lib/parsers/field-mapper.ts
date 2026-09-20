@@ -28,6 +28,7 @@ const DETERMINISTIC_MAP: Record<string, NormalizedField> = {
   company: 'company_name',
   'company name': 'company_name',
   'company_name': 'company_name',
+  'name of the company': 'company_name',
   organization: 'company_name',
   organisation: 'company_name',
   'org name': 'company_name',
@@ -40,6 +41,7 @@ const DETERMINISTIC_MAP: Record<string, NormalizedField> = {
   'hr name': 'contact_name',
   hr: 'contact_name',
   'hr_name': 'contact_name',
+  'name of the hr': 'contact_name',
   recruiter: 'contact_name',
   'recruiter name': 'contact_name',
   'recruiter_name': 'contact_name',
@@ -107,6 +109,14 @@ const DETERMINISTIC_MAP: Record<string, NormalizedField> = {
   salary: 'IGNORE',
   stipend: 'IGNORE',
   ctc: 'IGNORE',
+  package: 'IGNORE',
+  'annual package': 'IGNORE',
+  'annuaal package': 'IGNORE',
+  'package rs': 'IGNORE',
+  'annual package rs lakhs': 'IGNORE',
+  'annuaal package rs lakhs': 'IGNORE',
+  'annual package rs. lakhs': 'IGNORE',
+  'annuaal package rs. lakhs': 'IGNORE',
   notes: 'IGNORE',
   remarks: 'IGNORE',
   status: 'IGNORE',
@@ -117,32 +127,78 @@ const DETERMINISTIC_MAP: Record<string, NormalizedField> = {
 };
 
 /**
+ * Helper to check if sample rows for a column contain email addresses (contains '@').
+ * Used for field identification only (e.g. disambiguating "Contact Details").
+ */
+function sampleContainsEmail(header: string, sampleRows?: Record<string, string>[]): boolean {
+  if (!sampleRows || sampleRows.length === 0) return false;
+  for (const row of sampleRows) {
+    const val = (row[header] || '').trim();
+    if (val && val.includes('@')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Attempts deterministic field mapping for headers.
  */
-export function mapHeadersDeterministically(headers: string[]): FieldMapping {
+export function mapHeadersDeterministically(
+  headers: string[],
+  sampleRows?: Record<string, string>[]
+): FieldMapping {
   const mapping: FieldMapping = {};
 
   for (const header of headers) {
     const clean = header.trim().toLowerCase().replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ');
+
+    // 1. Direct exact dictionary match
     if (DETERMINISTIC_MAP[clean]) {
       mapping[header] = DETERMINISTIC_MAP[clean];
-    } else {
-      // Check partial matches
-      if (clean.includes('email') || clean.includes('e-mail')) {
+      continue;
+    }
+
+    // 2. Disambiguate "Contact Details" / "Contact Info" using sample values:
+    // If the header indicates contact details/info and sample values clearly contain emails (contains '@'),
+    // identify as 'email'. Do NOT globally map every header containing 'contact' to email.
+    if (
+      clean === 'contact details' ||
+      clean === 'contact detail' ||
+      clean === 'contact info' ||
+      clean === 'contact information' ||
+      clean === 'contact' ||
+      clean === 'contacts'
+    ) {
+      if (sampleContainsEmail(header, sampleRows)) {
         mapping[header] = 'email';
-      } else if (clean.includes('company') || clean.includes('organization') || clean.includes('employer')) {
-        mapping[header] = 'company_name';
-      } else if (clean.includes('recruiter') || clean.includes('hr') || clean.includes('contact') || clean.includes('name')) {
-        mapping[header] = 'contact_name';
-      } else if (clean.includes('website') || clean.includes('domain') || clean.includes('url')) {
-        mapping[header] = 'company_website';
-      } else if (clean.includes('location') || clean.includes('city') || clean.includes('address')) {
-        mapping[header] = 'company_location';
-      } else if (clean.includes('phone') || clean.includes('mobile') || clean.includes('number') || clean.includes('salary')) {
-        mapping[header] = 'IGNORE';
-      } else {
-        mapping[header] = 'IGNORE';
+        continue;
       }
+    }
+
+    // 3. Fallback partial matches
+    if (clean.includes('email') || clean.includes('e-mail')) {
+      mapping[header] = 'email';
+    } else if (clean.includes('company') || clean.includes('organization') || clean.includes('employer')) {
+      mapping[header] = 'company_name';
+    } else if (clean.includes('recruiter') || clean.includes('hr') || clean.includes('contact') || clean.includes('name')) {
+      mapping[header] = 'contact_name';
+    } else if (clean.includes('website') || clean.includes('domain') || clean.includes('url')) {
+      mapping[header] = 'company_website';
+    } else if (clean.includes('location') || clean.includes('city') || clean.includes('address')) {
+      mapping[header] = 'company_location';
+    } else if (
+      clean.includes('phone') ||
+      clean.includes('mobile') ||
+      clean.includes('number') ||
+      clean.includes('salary') ||
+      clean.includes('package') ||
+      clean.includes('stipend') ||
+      clean.includes('ctc')
+    ) {
+      mapping[header] = 'IGNORE';
+    } else {
+      mapping[header] = 'IGNORE';
     }
   }
 
@@ -206,8 +262,11 @@ Respond ONLY with a valid JSON object where keys are the EXACT input headers and
  * Maps headers to normalized fields. Uses deterministic mapping first.
  * If critical fields (email, company_name) are missing or ambiguous, and Gemini is available, uses AI.
  */
-export async function getFieldMapping(headers: string[]): Promise<FieldMapping> {
-  const deterministic = mapHeadersDeterministically(headers);
+export async function getFieldMapping(
+  headers: string[],
+  sampleRows?: Record<string, string>[]
+): Promise<FieldMapping> {
+  const deterministic = mapHeadersDeterministically(headers, sampleRows);
 
   const mappedValues = Object.values(deterministic);
   const hasEmail = mappedValues.includes('email');

@@ -66,7 +66,7 @@ export async function processBatchFile(
     if (extension === '.csv') {
       const parsedCsv = parseCSV(fileBuffer);
       if (parsedCsv.rows.length > 0) {
-        const mapping = await getFieldMapping(parsedCsv.headers);
+        const mapping = await getFieldMapping(parsedCsv.headers, parsedCsv.rows.slice(0, 20));
         rawRecords = applyFieldMapping(parsedCsv.rows, mapping);
       }
     } else if (extension === '.xlsx') {
