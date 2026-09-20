@@ -138,6 +138,7 @@ async function runVerification() {
     emailValid: true,
     isDuplicate: false,
     status: 'queued',
+    generationStatus: 'GENERATED',
     emailSubject: 'Excited about engineering opportunities at Stripe',
     emailBody: 'Dear Carol, I admire your engineering culture...',
     createdAt: new Date().toISOString(),

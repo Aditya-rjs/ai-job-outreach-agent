@@ -198,8 +198,8 @@ async function runTests() {
   const invalidBatchResult = await processBatchFile(invalidBuffer, 'invalid_emails.xlsx');
   assert(invalidBatchResult.batchId, 'Batch with invalid emails should process successfully');
   assert.strictEqual(invalidBatchResult.totalRecords, 3);
-  assert.strictEqual(invalidBatchResult.validRecords, 1);
-  assert.strictEqual(invalidBatchResult.invalidEmails, 2);
+  assert.strictEqual(invalidBatchResult.validRecords, 2);
+  assert.strictEqual(invalidBatchResult.invalidEmails, 1);
 
   const invalidDbContacts = db
     .select()
@@ -207,13 +207,13 @@ async function runTests() {
     .where(eq(contacts.batchId, invalidBatchResult.batchId))
     .all();
 
-  const validRecord = invalidDbContacts.find((c) => c.contactName === 'Mark Zuckerberg');
-  assert(validRecord && validRecord.emailValid === true, 'Mark Zuckerberg has valid email');
+  const validRecords = invalidDbContacts.filter((c) => c.contactName === 'Mark Zuckerberg' || c.contactName === 'Invalid Guy');
+  assert.strictEqual(validRecords.length, 2, '2 records with non-empty emails accepted');
+  assert(validRecords.every((c) => c.emailValid === true), 'Non-empty emails treated as valid');
 
-  const invalidRecords = invalidDbContacts.filter((c) => c.contactName !== 'Mark Zuckerberg');
-  assert.strictEqual(invalidRecords.length, 2, '2 invalid records saved');
-  assert(invalidRecords.every((c) => c.emailValid === false && c.status === 'skipped'), 'Invalid records flagged and skipped');
-  console.log('  -> PASSED: Invalid emails correctly identified and skipped.\n');
+  const emptyEmailRecord = invalidDbContacts.find((c) => c.contactName === 'Empty Email');
+  assert(emptyEmailRecord && emptyEmailRecord.emailValid === false && emptyEmailRecord.status === 'skipped', 'Empty email flagged and skipped');
+  console.log('  -> PASSED: Non-empty emails accepted and missing email skipped.\n');
 
   // ──────────────────────────────────────────────────────────────────────────
   // TEST F: PDF Upload Rejection

@@ -31,15 +31,15 @@ export async function GET(
     const conditions = [eq(contacts.batchId, id)];
 
     if (filter === 'relevant') {
-      conditions.push(sql`${contacts.isRelevant} = 1 AND ${contacts.isDuplicate} = 0 AND ${contacts.emailValid} = 1`);
+      conditions.push(sql`${contacts.isRelevant} = 1 AND ${contacts.isDuplicate} = 0 AND (${contacts.email} IS NOT NULL AND TRIM(${contacts.email}) != '')`);
     } else if (filter === 'irrelevant') {
       conditions.push(sql`${contacts.isRelevant} = 0`);
     } else if (filter === 'unverified') {
-      conditions.push(sql`${contacts.isRelevant} IS NULL AND ${contacts.isDuplicate} = 0 AND ${contacts.emailValid} = 1`);
+      conditions.push(sql`${contacts.isRelevant} IS NULL AND ${contacts.isDuplicate} = 0 AND (${contacts.email} IS NOT NULL AND TRIM(${contacts.email}) != '')`);
     } else if (filter === 'duplicate') {
       conditions.push(sql`${contacts.isDuplicate} = 1`);
     } else if (filter === 'invalid') {
-      conditions.push(sql`${contacts.emailValid} = 0`);
+      conditions.push(sql`(${contacts.email} IS NULL OR TRIM(${contacts.email}) = '')`);
     } else if (filter === 'queued') {
       conditions.push(eq(contacts.status, 'queued'));
     } else if (filter === 'simulated') {

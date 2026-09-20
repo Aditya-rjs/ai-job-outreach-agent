@@ -84,16 +84,17 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
     };
   }
 
-  // 2. Validate email format
-  const normalizedTo = normalizeEmail(contact.email);
-  if (!isValidEmail(normalizedTo)) {
+  // 2. Validate recipient email presence
+  const recipientEmail = (contact.email || '').trim();
+  if (!recipientEmail) {
     db.update(contacts)
-      .set({ status: 'failed', emailValid: false, errorMessage: `Invalid recipient email address: ${contact.email}`, updatedAt: new Date().toISOString() })
+      .set({ status: 'failed', errorMessage: 'Missing recipient email address.', updatedAt: new Date().toISOString() })
       .where(eq(contacts.id, contact.id))
       .run();
     db.delete(outreachQueue).where(eq(outreachQueue.contactId, contact.id)).run();
-    return { success: false, error: `Invalid recipient email address: ${contact.email}`, errorCategory: 'validation' };
+    return { success: false, error: 'Missing recipient email address.', errorCategory: 'validation' };
   }
+  const normalizedTo = recipientEmail.toLowerCase();
 
   // 3. Relevance check
   if (contact.isRelevant === false) {
@@ -435,9 +436,9 @@ export async function sendOutreachEmail(contactId: string): Promise<SendResult> 
  * Does NOT touch outreach_queue, does NOT consume daily outreach quota, does NOT affect contacts history.
  */
 export async function sendTestEmail(recipient: string): Promise<SendResult> {
-  const normalized = normalizeEmail(recipient);
-  if (!isValidEmail(normalized)) {
-    return { success: false, error: `Invalid test email address: ${recipient}`, errorCategory: 'validation' };
+  const normalized = (recipient || '').trim();
+  if (!normalized) {
+    return { success: false, error: 'Missing test email address.', errorCategory: 'validation' };
   }
 
   let gmailClient;

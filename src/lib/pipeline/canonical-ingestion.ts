@@ -109,8 +109,9 @@ export function reconstructCanonicalContacts(
       }
     }
 
-    const normalizedEmailStr = normalizeEmail(rawEmail);
-    const emailValid = Boolean(rawEmail && isValidEmail(normalizedEmailStr));
+    const rawEmailTrimmed = (rawEmail || '').trim();
+    const hasEmail = rawEmailTrimmed.length > 0;
+    const emailValid = hasEmail;
 
     canonicalContacts.push({
       sourceRow,
@@ -121,7 +122,7 @@ export function reconstructCanonicalContacts(
       normalizedCompany: normalizeCompanyName(finalCompany),
       contactName: rawContactName,
       rawEmail,
-      email: normalizedEmailStr,
+      email: rawEmailTrimmed,
       emailValid,
       designation: rawDesignation || undefined,
       companyWebsite: rawWebsite || undefined,

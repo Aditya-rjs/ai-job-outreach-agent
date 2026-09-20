@@ -59,7 +59,7 @@ export async function POST(
       );
     }
 
-    if (contact.status === 'skipped' || contact.isDuplicate || contact.isRelevant === false || !contact.emailValid) {
+    if (contact.status === 'skipped' || contact.isDuplicate || contact.isRelevant === false || !contact.email || !contact.email.trim()) {
       return NextResponse.json(
         { success: false, error: 'Cannot generate email for an ineligible or skipped contact.' },
         { status: 400 }

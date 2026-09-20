@@ -222,7 +222,7 @@ export function getLatestActiveBatch(db: ReturnType<typeof getDb> = getDb()): {
   const row = db.get<{ id: string; filename: string }>(sql`
     SELECT id, filename
     FROM batches
-    WHERE status NOT IN ('deleted', 'cancelled')
+    WHERE status NOT IN ('completed', 'deleted', 'cancelled')
     ORDER BY created_at DESC
     LIMIT 1
   `);
@@ -237,12 +237,52 @@ export function getProcessingPipelineStats(batchId?: string): ProcessingPipeline
   const db = getDb();
   const nowIso = new Date().toISOString();
 
+  // Metric 13. Ready to Send: Contacts with generated email content staged in outreach queue.
+  // Metric 13 is GLOBAL across all batches (batches.status NOT IN ('deleted', 'cancelled')) unless batchId is explicitly specified.
+  const batchClause = batchId ? sql`AND c.batch_id = ${batchId}` : sql``;
+  const cooldownCutoffIso = getCooldownCutoffIso();
+  const readyToSendRow = db.get<{ count: number }>(sql`
+    SELECT COUNT(DISTINCT c.id) as count
+    FROM contacts c
+    INNER JOIN batches b ON c.batch_id = b.id
+    INNER JOIN outreach_queue oq ON oq.contact_id = c.id
+    WHERE b.status NOT IN ('deleted', 'cancelled')
+      AND (
+        oq.status = 'pending'
+        OR (
+          oq.status = 'failed'
+          AND oq.attempts < 3
+          AND oq.next_retry_at IS NOT NULL
+          AND oq.next_retry_at <= ${nowIso}
+        )
+      )
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
+      AND c.is_duplicate = 0
+      AND c.is_relevant = 1
+      AND c.sent_at IS NULL
+      AND c.email_subject IS NOT NULL
+      AND c.email_body IS NOT NULL
+      AND TRIM(c.email_subject) != ''
+      AND TRIM(c.email_body) != ''
+      AND (c.generation_status = 'GENERATED' OR c.status = 'generated')
+      AND NOT EXISTS (
+        SELECT 1 FROM global_email_history geh
+        WHERE geh.email = LOWER(TRIM(c.email))
+          AND geh.status = 'sent'
+          AND geh.sent_at IS NOT NULL
+          AND geh.sent_at > ${cooldownCutoffIso}
+      )
+      ${batchClause}
+  `);
+  const readyToSend = readyToSendRow?.count ?? 0;
+
   // Resolve current / latest batch
   const activeBatch = batchId
     ? db.get<{ id: string; filename: string }>(sql`SELECT id, filename FROM batches WHERE id = ${batchId} AND status NOT IN ('deleted', 'cancelled')`)
     : getLatestActiveBatch(db);
 
-  // Zero State: If no active uploaded file/batch exists, return strictly 0 for all metrics
+  // Zero State: If no active uploaded file/batch exists, return strictly 0 for batch metrics 1-12, but retain global readyToSend!
   if (!activeBatch) {
     return {
       companiesFound: 0,
@@ -257,13 +297,13 @@ export function getProcessingPipelineStats(batchId?: string): ProcessingPipeline
       emailsGenerating: 0,
       generationRetry: 0,
       generationFailed: 0,
-      readyToSend: 0,
+      readyToSend,
       classificationPendingCount: 0,
       classificationRetryWaitingCount: 0,
       emailGenerationPendingCount: 0,
       generationRetryCount: 0,
       generationFailedCount: 0,
-      readyToSendCount: 0,
+      readyToSendCount: readyToSend,
       lastUpdated: nowIso,
       currentBatchId: null,
       currentBatchFilename: null,
@@ -319,6 +359,10 @@ export function getProcessingPipelineStats(batchId?: string): ProcessingPipeline
     WHERE c.batch_id = ${currentBatchId}
       AND c.company_name IS NOT NULL
       AND TRIM(c.company_name) != ''
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
+      AND c.is_duplicate = 0
+      AND c.status != 'skipped'
       AND (
         cc.classification_result = 'PENDING'
         OR (cc.classification_result IS NULL AND c.is_relevant IS NULL)
@@ -338,6 +382,10 @@ export function getProcessingPipelineStats(batchId?: string): ProcessingPipeline
     WHERE c.batch_id = ${currentBatchId}
       AND c.company_name IS NOT NULL
       AND TRIM(c.company_name) != ''
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
+      AND c.is_duplicate = 0
+      AND c.status != 'skipped'
       AND cc.classification_result = 'RETRY_WAITING'
   `);
   const aiSearchRetry = classRetryWaitingRow?.count ?? 0;
@@ -423,7 +471,8 @@ export function getProcessingPipelineStats(batchId?: string): ProcessingPipeline
     FROM contacts c
     WHERE c.batch_id = ${currentBatchId}
       AND c.is_relevant = 1
-      AND c.email_valid = 1
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
       AND c.is_duplicate = 0
       AND c.sent_at IS NULL
       AND (
@@ -444,7 +493,8 @@ export function getProcessingPipelineStats(batchId?: string): ProcessingPipeline
     FROM contacts c
     WHERE c.batch_id = ${currentBatchId}
       AND c.is_relevant = 1
-      AND c.email_valid = 1
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
       AND c.is_duplicate = 0
       AND c.sent_at IS NULL
       AND c.generation_status = 'RETRY_PENDING'
@@ -461,37 +511,7 @@ export function getProcessingPipelineStats(batchId?: string): ProcessingPipeline
   const generationFailed = genFailedRow?.count ?? 0;
 
   // 13. Ready to Send: Contacts with generated email content staged in outreach queue
-  const cooldownCutoffIso = getCooldownCutoffIso();
-  const readyToSendRow = db.get<{ count: number }>(sql`
-    SELECT COUNT(DISTINCT c.id) as count
-    FROM contacts c
-    INNER JOIN outreach_queue oq ON oq.contact_id = c.id
-    WHERE c.batch_id = ${currentBatchId}
-      AND (
-        oq.status = 'pending'
-        OR (
-          oq.status = 'failed'
-          AND oq.attempts < 3
-          AND oq.next_retry_at IS NOT NULL
-          AND oq.next_retry_at <= ${nowIso}
-        )
-      )
-      AND c.email_valid = 1
-      AND c.is_duplicate = 0
-      AND c.is_relevant = 1
-      AND c.sent_at IS NULL
-      AND c.email_subject IS NOT NULL
-      AND c.email_body IS NOT NULL
-      AND TRIM(c.email_subject) != ''
-      AND TRIM(c.email_body) != ''
-      AND NOT EXISTS (
-        SELECT 1 FROM global_email_history geh
-        WHERE LOWER(TRIM(geh.email)) = LOWER(TRIM(c.email))
-          AND geh.sent_at IS NOT NULL
-          AND geh.sent_at > ${cooldownCutoffIso}
-      )
-  `);
-  const readyToSend = readyToSendRow?.count ?? 0;
+  // (Computed globally across all non-deleted batches at the start of getProcessingPipelineStats)
 
   return {
     companiesFound,
@@ -549,6 +569,10 @@ export function getClassificationPendingList(opts: ProcessingPaginationOptions =
     WHERE b.status NOT IN ('deleted', 'cancelled')
       AND c.company_name IS NOT NULL
       AND TRIM(c.company_name) != ''
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
+      AND c.is_duplicate = 0
+      AND c.status != 'skipped'
       AND (cc.classification_result = 'PENDING' OR (cc.classification_result IS NULL AND c.is_relevant IS NULL))
       ${batchClause}
       ${searchClause}
@@ -592,6 +616,10 @@ export function getClassificationPendingList(opts: ProcessingPaginationOptions =
     WHERE b.status NOT IN ('deleted', 'cancelled')
       AND c.company_name IS NOT NULL
       AND TRIM(c.company_name) != ''
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
+      AND c.is_duplicate = 0
+      AND c.status != 'skipped'
       AND (cc.classification_result = 'PENDING' OR (cc.classification_result IS NULL AND c.is_relevant IS NULL))
       ${batchClause}
       ${searchClause}
@@ -653,6 +681,10 @@ export function getClassificationRetryWaitingList(opts: ProcessingPaginationOpti
     WHERE b.status NOT IN ('deleted', 'cancelled')
       AND c.company_name IS NOT NULL
       AND TRIM(c.company_name) != ''
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
+      AND c.is_duplicate = 0
+      AND c.status != 'skipped'
       AND cc.classification_result = 'RETRY_WAITING'
       ${batchClause}
       ${searchClause}
@@ -696,6 +728,10 @@ export function getClassificationRetryWaitingList(opts: ProcessingPaginationOpti
     WHERE b.status NOT IN ('deleted', 'cancelled')
       AND c.company_name IS NOT NULL
       AND TRIM(c.company_name) != ''
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
+      AND c.is_duplicate = 0
+      AND c.status != 'skipped'
       AND cc.classification_result = 'RETRY_WAITING'
       ${batchClause}
       ${searchClause}
@@ -787,6 +823,10 @@ export function getEmailGenerationPendingList(opts: ProcessingPaginationOptions 
       WHERE c.batch_id = ${opts.batchId}
         AND c.company_name IS NOT NULL
         AND TRIM(c.company_name) != ''
+        AND c.email IS NOT NULL
+        AND TRIM(c.email) != ''
+        AND c.is_duplicate = 0
+        AND c.status != 'skipped'
         AND (
           cc.classification_result IN ('PENDING', 'RETRY_WAITING')
           OR (cc.classification_result IS NULL AND c.is_relevant IS NULL)
@@ -813,7 +853,8 @@ export function getEmailGenerationPendingList(opts: ProcessingPaginationOptions 
     INNER JOIN batches b ON c.batch_id = b.id
     WHERE b.status NOT IN ('deleted', 'cancelled')
       AND c.is_relevant = 1
-      AND c.email_valid = 1
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
       AND c.is_duplicate = 0
       AND c.sent_at IS NULL
       AND (
@@ -854,7 +895,8 @@ export function getEmailGenerationPendingList(opts: ProcessingPaginationOptions 
     INNER JOIN batches b ON c.batch_id = b.id
     WHERE b.status NOT IN ('deleted', 'cancelled')
       AND c.is_relevant = 1
-      AND c.email_valid = 1
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
       AND c.is_duplicate = 0
       AND c.sent_at IS NULL
       AND (
@@ -911,7 +953,8 @@ export function getGenerationRetryList(opts: ProcessingPaginationOptions = {}): 
     INNER JOIN batches b ON c.batch_id = b.id
     WHERE b.status NOT IN ('deleted', 'cancelled')
       AND c.is_relevant = 1
-      AND c.email_valid = 1
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
       AND c.is_duplicate = 0
       AND c.sent_at IS NULL
       AND c.generation_status = 'RETRY_PENDING'
@@ -947,7 +990,8 @@ export function getGenerationRetryList(opts: ProcessingPaginationOptions = {}): 
     INNER JOIN batches b ON c.batch_id = b.id
     WHERE b.status NOT IN ('deleted', 'cancelled')
       AND c.is_relevant = 1
-      AND c.email_valid = 1
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
       AND c.is_duplicate = 0
       AND c.sent_at IS NULL
       AND c.generation_status = 'RETRY_PENDING'
@@ -1123,7 +1167,8 @@ export function getReadyToSendList(opts: ProcessingPaginationOptions = {}): {
         )
       )
       AND c.is_relevant = 1
-      AND c.email_valid = 1
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
       AND c.is_duplicate = 0
       AND c.sent_at IS NULL
       AND c.email_subject IS NOT NULL
@@ -1184,7 +1229,8 @@ export function getReadyToSendList(opts: ProcessingPaginationOptions = {}): {
         )
       )
       AND c.is_relevant = 1
-      AND c.email_valid = 1
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
       AND c.is_duplicate = 0
       AND c.sent_at IS NULL
       AND c.email_subject IS NOT NULL

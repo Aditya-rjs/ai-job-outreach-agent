@@ -62,7 +62,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
           { status: 400 }
         );
       }
-      if (c.status === 'skipped' || c.isDuplicate || c.isRelevant !== true || !c.emailValid) {
+      if (c.status === 'skipped' || c.isDuplicate || c.isRelevant !== true || !c.email || !c.email.trim()) {
         return NextResponse.json(
           { success: false, error: 'Cannot generate email for an ineligible, skipped, or unclassified contact.' },
           { status: 400 }
@@ -87,7 +87,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
           and(
             eq(contacts.batchId, batchId),
             inArray(contacts.status, allowedStatuses as Contact['status'][]),
-            eq(contacts.emailValid, true),
+            sql`(${contacts.email} IS NOT NULL AND TRIM(${contacts.email}) != '')`,
             eq(contacts.isDuplicate, false),
             eq(contacts.isRelevant, true),
             forceRegenerate ? sql`1=1` : sql`(${contacts.generationStatus} != 'GENERATED' OR ${contacts.generationStatus} IS NULL OR ${contacts.emailSubject} IS NULL)`
@@ -102,7 +102,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         .where(
           and(
             inArray(contacts.status, allowedStatuses as Contact['status'][]),
-            eq(contacts.emailValid, true),
+            sql`(${contacts.email} IS NOT NULL AND TRIM(${contacts.email}) != '')`,
             eq(contacts.isDuplicate, false),
             eq(contacts.isRelevant, true),
             forceRegenerate ? sql`1=1` : sql`(${contacts.generationStatus} != 'GENERATED' OR ${contacts.generationStatus} IS NULL OR ${contacts.emailSubject} IS NULL)`

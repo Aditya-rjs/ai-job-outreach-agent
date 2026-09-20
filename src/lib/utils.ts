@@ -10,8 +10,7 @@ export function normalizeEmail(email: string): string {
 }
 
 export function isValidEmail(email: string): boolean {
-  const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-  return emailRegex.test(normalizeEmail(email));
+  return Boolean(email && email.trim().length > 0);
 }
 
 export function formatDate(isoString: string): string {

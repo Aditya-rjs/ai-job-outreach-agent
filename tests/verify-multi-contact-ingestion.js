@@ -227,11 +227,11 @@ const transitionContacts = db.prepare('SELECT * FROM contacts WHERE batch_id = ?
 assert(transitionContacts.slice(0, 3).every(c => c.company_name === 'Infosys'), 'First 3 contacts belong to Infosys');
 assert(transitionContacts.slice(3, 6).every(c => c.company_name === 'Tata Consultancy Services'), 'Next 3 contacts belong to Tata Consultancy Services');
 
-// ── TEST 8: BLANK COMPANY ROW WITH INVALID EMAIL ────────────────────────
-console.log('\n--- Test 8: Blank Company Row With Invalid Email ---');
+// ── TEST 8: BLANK COMPANY ROW WITH MISSING EMAIL ────────────────────────
+console.log('\n--- Test 8: Blank Company Row With Missing Email ---');
 const invalidEmailCsv = `Company,HR Name,Email
 Infosys,Good Recruiter 1,good1_${Date.now()}@infosys.com
-,Bad Recruiter,invalid-email-address
+,Bad Recruiter,
 ,Good Recruiter 2,good2_${Date.now()}@infosys.com
 `;
 const invalidEmailResult = runBatchProcessor(invalidEmailCsv, 'invalid_email_test.csv');

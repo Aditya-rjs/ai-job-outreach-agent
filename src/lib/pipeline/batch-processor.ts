@@ -108,8 +108,10 @@ export async function processBatchFile(
 
     for (const c of canonicalContacts) {
       const candidateId = `cont_${ulid()}`;
+      const emailVal = (c.email || c.rawEmail || '').trim();
+      const hasEmail = emailVal.length > 0;
 
-      if (!c.emailValid) {
+      if (!hasEmail) {
         invalidEmailsCount++;
         candidates.push({
           id: candidateId,
@@ -117,7 +119,7 @@ export async function processBatchFile(
           normalizedCompany: c.normalizedCompany,
           contactName: c.contactName,
           rawEmail: c.rawEmail,
-          email: c.email || 'invalid-email',
+          email: '',
           emailValid: false,
           designation: c.designation,
           companyWebsite: c.companyWebsite,
@@ -125,7 +127,7 @@ export async function processBatchFile(
           isDuplicate: false,
           isRelevant: null,
           relevanceConfidence: null,
-          relevanceReason: 'Invalid email address syntax.',
+          relevanceReason: 'Skipped — Missing recipient email address.',
           companyDiagnostic: c.companyDiagnostic,
           status: 'skipped',
         });
@@ -134,11 +136,12 @@ export async function processBatchFile(
 
       // Check duplicate within the same uploaded file
       let isDupInFile = false;
-      if (seenEmailsInFile.has(c.email)) {
+      const emailLower = emailVal.toLowerCase();
+      if (seenEmailsInFile.has(emailLower)) {
         isDupInFile = true;
       } else {
-        seenEmailsInFile.add(c.email);
-        validEmailsList.push(c.email);
+        seenEmailsInFile.add(emailLower);
+        validEmailsList.push(emailLower);
       }
 
       candidates.push({
@@ -147,7 +150,7 @@ export async function processBatchFile(
         normalizedCompany: c.normalizedCompany,
         contactName: c.contactName,
         rawEmail: c.rawEmail,
-        email: c.email,
+        email: emailVal,
         emailValid: true,
         designation: c.designation,
         companyWebsite: c.companyWebsite,
@@ -171,12 +174,13 @@ export async function processBatchFile(
         const chunk = validEmailsList.slice(i, i + CHUNK_SIZE);
 
         // A. Confirmed Real Sends within 144-Hour Cooldown:
+        // Use LOWER(TRIM(email)) in chunk comparison to be case- and space-insensitive
         const sentRecords = db
           .select({ email: globalEmailHistory.email })
           .from(globalEmailHistory)
           .where(
             and(
-              inArray(globalEmailHistory.email, chunk),
+              sql`LOWER(TRIM(${globalEmailHistory.email})) IN (${sql.join(chunk.map((e) => sql`${e}`), sql`, `)})`,
               eq(globalEmailHistory.status, 'sent'),
               sql`sent_at IS NOT NULL AND sent_at > ${cooldownCutoffIso}`
             )
@@ -194,7 +198,7 @@ export async function processBatchFile(
           .innerJoin(batches, eq(contacts.batchId, batches.id))
           .where(
             and(
-              inArray(contacts.email, chunk),
+              sql`LOWER(TRIM(${contacts.email})) IN (${sql.join(chunk.map((e) => sql`${e}`), sql`, `)})`,
               sql`batches.status NOT IN ('deleted', 'cancelled')`,
               sql`contacts.status IN ('queued', 'generating', 'generated', 'processing', 'sending')`
             )
@@ -209,12 +213,13 @@ export async function processBatchFile(
 
     let duplicateContactsCount = 0;
     for (const c of candidates) {
-      if (!c.emailValid) continue;
+      if (!c.email || !c.email.trim()) continue;
       if (c.isDuplicate) {
         duplicateContactsCount++;
         continue;
       }
-      if (existingGlobalHistory.has(c.email)) {
+      const normEmail = c.email.trim().toLowerCase();
+      if (existingGlobalHistory.has(normEmail)) {
         c.isDuplicate = true;
         c.status = 'skipped';
         c.relevanceReason = 'Duplicate: email in active 6-day cooldown or currently queued.';
@@ -232,7 +237,7 @@ export async function processBatchFile(
     }>();
 
     for (const c of candidates) {
-      if (c.emailValid && !c.isDuplicate && c.normalizedCompany) {
+      if (c.normalizedCompany && !c.isDuplicate && Boolean(c.email && c.email.trim() !== '')) {
         if (!uniqueCompanies.has(c.normalizedCompany)) {
           uniqueCompanies.set(c.normalizedCompany, {
             companyName: c.companyName,
@@ -308,7 +313,7 @@ export async function processBatchFile(
     const classifiedIrrelevantSet = new Set<string>();
 
     for (const c of candidates) {
-      if (!c.emailValid || c.isDuplicate) continue;
+      if (!c.email || !c.email.trim() || c.isDuplicate) continue;
 
       const classification = classificationMap.get(c.normalizedCompany);
       if (classification) {
@@ -339,7 +344,7 @@ export async function processBatchFile(
     irrelevantCompaniesCount = classifiedIrrelevantSet.size;
 
     const queuedContacts = candidates.filter((c) => c.status === 'queued');
-    const validRecords = candidates.filter((c) => c.emailValid).length;
+    const validRecords = candidates.filter((c) => Boolean(c.email && c.email.trim() !== '')).length;
     const emailsPending = queuedContacts.length;
 
     // 7. Atomic Database Insertion Transaction
@@ -372,7 +377,7 @@ export async function processBatchFile(
           .run();
 
         // B. Update global_email_history
-        if (c.emailValid) {
+        if (c.email && c.email.trim() !== '') {
           if (c.status === 'queued') {
             tx.insert(globalEmailHistory)
               .values({
@@ -421,7 +426,10 @@ export async function processBatchFile(
       }
 
       // D. Update final batch metrics (guarding against revival of deleted/cancelled batch)
-      const initialBatchStatus = companiesToClassify.length > 0 ? 'processing' : (emailsPending > 0 ? 'queued' : 'completed');
+      const allContactsTerminal = candidates.length === 0 || candidates.every(c => c.status === 'skipped');
+      const initialBatchStatus = companiesToClassify.length > 0
+        ? 'processing'
+        : (emailsPending > 0 ? 'queued' : (allContactsTerminal ? 'completed' : 'processing'));
 
       tx.update(batches)
         .set({
@@ -444,7 +452,10 @@ export async function processBatchFile(
         .run();
     });
 
-    const finalStatus = companiesToClassify.length > 0 ? 'processing' : (emailsPending > 0 ? 'queued' : 'completed');
+    const allContactsTerminal = candidates.length === 0 || candidates.every(c => c.status === 'skipped');
+    const finalStatus = companiesToClassify.length > 0
+      ? 'processing'
+      : (emailsPending > 0 ? 'queued' : (allContactsTerminal ? 'completed' : 'processing'));
 
     return {
       batchId,

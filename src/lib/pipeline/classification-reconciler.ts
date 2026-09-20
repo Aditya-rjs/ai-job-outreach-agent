@@ -72,6 +72,10 @@ export function isBatchClassificationComplete(
     WHERE c.batch_id = ${batchId}
       AND c.company_name IS NOT NULL
       AND TRIM(c.company_name) != ''
+      AND c.email IS NOT NULL
+      AND TRIM(c.email) != ''
+      AND c.is_duplicate = 0
+      AND c.status != 'skipped'
       AND (
         cc.classification_result IN ('PENDING', 'RETRY_WAITING')
         OR (cc.classification_result IS NULL AND c.is_relevant IS NULL)
@@ -236,6 +240,9 @@ export function discoverAndSeedOrphanedCompanies(
   const whereConditions = [
     sql`contacts.company_name IS NOT NULL AND TRIM(contacts.company_name) != ''`,
     sql`contacts.is_relevant IS NULL`,
+    sql`contacts.email IS NOT NULL AND TRIM(contacts.email) != ''`,
+    sql`contacts.is_duplicate = 0`,
+    sql`contacts.status != 'skipped'`,
     sql`batches.status NOT IN ('completed', 'deleted', 'cancelled')`,
   ];
   if (batchId) {
@@ -1337,6 +1344,7 @@ export function cascadeClassificationToContacts(
       id: contacts.id,
       batchId: contacts.batchId,
       companyName: contacts.companyName,
+      email: contacts.email,
       emailValid: contacts.emailValid,
       isDuplicate: contacts.isDuplicate,
       status: contacts.status,
@@ -1360,7 +1368,8 @@ export function cascadeClassificationToContacts(
 
   for (const c of matchingContacts) {
     if (result.status === 'RELEVANT') {
-      const isEligible = c.emailValid && !c.isDuplicate;
+      const hasEmail = Boolean(c.email && c.email.trim().length > 0);
+      const isEligible = hasEmail && !c.isDuplicate && c.status !== 'skipped';
 
       if (isEligible) {
         const targetStatus =

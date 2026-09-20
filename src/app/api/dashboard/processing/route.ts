@@ -58,7 +58,12 @@ export async function GET(request: NextRequest) {
     let records: unknown[] = [];
     let total = 0;
 
-    if (currentBatchId) {
+    if (category === 'ready-to-send') {
+      const options = { batchId: batchIdParam, search, page, limit };
+      const res = getReadyToSendList(options);
+      records = res.records;
+      total = res.total;
+    } else if (currentBatchId) {
       const options = { batchId: currentBatchId, search, page, limit };
       switch (category) {
         case 'companies-found': {
@@ -129,12 +134,6 @@ export async function GET(request: NextRequest) {
         }
         case 'generation-failed': {
           const res = getGenerationFailedList(options);
-          records = res.records;
-          total = res.total;
-          break;
-        }
-        case 'ready-to-send': {
-          const res = getReadyToSendList(options);
           records = res.records;
           total = res.total;
           break;
