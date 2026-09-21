@@ -469,7 +469,7 @@ async function runStateMachineVerification() {
     // REQUIREMENT 15: Existing sending policies strictly preserved
     // -------------------------------------------------------------------------
     totalTests++;
-    console.log(`\n--- Requirement ${totalTests}: Sending Window, 3-Min Spacing & No Cap Preserved ---`);
+    console.log(`\n--- Requirement ${totalTests}: Sending Window, 1-Min Spacing & No Cap Preserved ---`);
 
     const schedRow = db.select().from(schedulerState).where(eq(schedulerState.id, 'singleton')).get();
     assert.strictEqual(schedRow?.startHour, 10);
@@ -477,13 +477,13 @@ async function runStateMachineVerification() {
     assert.strictEqual(schedRow?.endHour, 16);
     assert.strictEqual(schedRow?.endMinute, 0);
     assert.strictEqual(schedRow?.timezone, 'Asia/Kolkata');
-    assert.strictEqual(schedRow?.intervalMinutes, 3);
+    assert.strictEqual(schedRow?.intervalMinutes, 1);
     assert.strictEqual(schedRow?.isPaused, false);
 
     const midWindowNow = new Date('2026-09-07T08:00:00.000Z');
     const nextSend = computeNextEligibleSendTime({
       lastSendAttemptAt: '2026-09-07T08:00:00.000Z',
-      intervalMinutes: 3,
+      intervalMinutes: 1,
       timezone: 'Asia/Kolkata',
       startHour: 10,
       startMinute: 0,
@@ -491,8 +491,8 @@ async function runStateMachineVerification() {
       endMinute: 0,
       now: midWindowNow,
     });
-    assert.strictEqual(nextSend, '2026-09-07T08:03:00.000Z');
-    recordPass('10:00 AM–4:00 PM IST window, 3-minute spacing, and no-hard-cap policies preserved');
+    assert.strictEqual(nextSend, '2026-09-07T08:01:00.000Z');
+    recordPass('10:00 AM–4:00 PM IST window, 1-minute spacing, and no-hard-cap policies preserved');
 
     // -------------------------------------------------------------------------
     // REQUIREMENT 16: Existing 144-hour recipient cooldown policy preserved

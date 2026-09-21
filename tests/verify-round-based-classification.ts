@@ -697,10 +697,10 @@ async function runTests() {
 
   const sched = db.select().from(schedulerState).where(eq(schedulerState.id, 'singleton')).get();
   assert.strictEqual(sched?.timezone, 'Asia/Kolkata', 'Timezone must be Asia/Kolkata');
-  assert.strictEqual(sched?.intervalMinutes, 3, 'Interval must be 3 minutes');
+  assert.strictEqual(sched?.intervalMinutes, 1, 'Interval must be 1 minute');
   assert.strictEqual(sched?.startHour, 10, 'Start hour must be 10 AM');
   assert.strictEqual(sched?.endHour, 16, 'End hour must be 4 PM');
-  console.log('✓ [PASS] Sending policy preserved: 10:00 AM–4:00 PM Asia/Kolkata window, 3-minute interval, no hard ceiling.');
+  console.log('✓ [PASS] Sending policy preserved: 10:00 AM–4:00 PM Asia/Kolkata window, 1-minute interval, no hard ceiling.');
 
   // =========================================================================
   // SCENARIO W: Multi-Batch Simultaneous Concurrency & Isolation

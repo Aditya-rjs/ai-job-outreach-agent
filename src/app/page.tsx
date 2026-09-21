@@ -381,7 +381,7 @@ export default function DashboardPage() {
               <span className="font-semibold text-amber-950">No real Gmail emails are being dispatched.</span>
             </div>
             <p className="text-amber-850 mt-1 font-medium">
-              Simulation environment active. The persistent scheduler processes jobs, simulates 3-minute intervals, and tracks progress without dispatching real Gmail emails to recruiters.
+              Simulation environment active. The persistent scheduler processes jobs, simulates 1-minute intervals, and tracks progress without dispatching real Gmail emails to recruiters.
             </p>
           </div>
         </div>
@@ -396,7 +396,7 @@ export default function DashboardPage() {
               <span className="font-semibold text-emerald-950">Authorized Account: {stats.gmailEmail}</span>
             </div>
             <p className="text-emerald-800 mt-1">
-              When the background worker (<code className="font-mono text-xs">npm run worker</code>) is active, eligible emails will be dispatched to recruiters via your connected Gmail account during the sending window: 10:00 AM–4:00 PM IST ({scheduler?.intervalMinutes || 3}-minute minimum gap).
+              When the background worker (<code className="font-mono text-xs">npm run worker</code>) is active, eligible emails will be dispatched to recruiters via your connected Gmail account during the sending window: 10:00 AM–4:00 PM IST ({scheduler?.intervalMinutes || 1}-minute minimum gap).
             </p>
           </div>
         </div>
@@ -467,7 +467,7 @@ export default function DashboardPage() {
                 )}
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Sending window: 10:00 AM–4:00 PM IST • 6-day cooldown per contact • {scheduler?.intervalMinutes || 3}-min gap • Timezone: {scheduler?.timezone || 'Asia/Kolkata'}
+                Sending window: 10:00 AM–4:00 PM IST • 6-day cooldown per contact • {scheduler?.intervalMinutes || 1}-min gap • Timezone: {scheduler?.timezone || 'Asia/Kolkata'}
               </p>
             </div>
 

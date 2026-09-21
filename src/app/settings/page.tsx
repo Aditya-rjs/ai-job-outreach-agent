@@ -1826,7 +1826,7 @@ export default function SettingsPage() {
             </div>
             <div className="rounded-lg border border-border bg-background p-3">
               <span className="text-xs text-muted-foreground">Send Interval</span>
-              <p className="font-semibold text-foreground">{scheduler?.intervalMinutes || 3} Minutes</p>
+              <p className="font-semibold text-foreground">{scheduler?.intervalMinutes || 1} {(scheduler?.intervalMinutes || 1) === 1 ? 'Minute' : 'Minutes'}</p>
             </div>
           </div>
 

@@ -182,7 +182,7 @@ async function runVerification() {
   // Test 11: computeNextEligibleSendTime does not push to tomorrow when todaySentCount >= 30
   const nextTime = computeNextEligibleSendTime({
     lastSendAttemptAt: null,
-    intervalMinutes: 3,
+    intervalMinutes: 1,
     timezone: 'Asia/Kolkata',
     startHour: 10,
     startMinute: 0,

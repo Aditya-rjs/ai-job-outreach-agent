@@ -3,7 +3,7 @@
  *
  * Validates:
  * 1. Generation continues while the Gmail sending window is closed.
- * 2. Generation is not blocked by the 3-minute Gmail send interval.
+ * 2. Generation is not blocked by the 1-minute Gmail send interval.
  * 3. Multiple generation batches can run back-to-back without outer worker sleep.
  * 4. Gmail sending behavior remains strictly unchanged.
  * 5. Classification barrier remains intact (pending/retry blocks generation).
@@ -145,17 +145,17 @@ async function runTests() {
   pass('Email generation executes and queues Ready-to-Send emails while sending window is closed');
 
   // -------------------------------------------------------------------------
-  // TEST 2: Generation is NOT blocked by the 3-minute Gmail send interval
+  // TEST 2: Generation is NOT blocked by the 1-minute Gmail send interval
   // -------------------------------------------------------------------------
-  console.log('\n--- TEST 2: Generation is not blocked by 3-minute Gmail send interval ---');
+  console.log('\n--- TEST 2: Generation is not blocked by 1-minute Gmail send interval ---');
   const recentSendAttempt = new Date(Date.now() - 10000).toISOString();
   db.update(schedulerState)
     .set({ lastSendAttemptAt: recentSendAttempt })
     .where(eq(schedulerState.id, 'singleton'))
     .run();
 
-  const intervalElapsed = hasIntervalElapsed(recentSendAttempt, 3);
-  assert.strictEqual(intervalElapsed, false, '3-minute sending interval must not have elapsed');
+  const intervalElapsed = hasIntervalElapsed(recentSendAttempt, 1);
+  assert.strictEqual(intervalElapsed, false, '1-minute sending interval must not have elapsed');
 
   const b2Id = `${testPrefix}_b2_interval_test`;
   const comp2 = `${testPrefix} Rapid Gen Inc`;
@@ -199,8 +199,8 @@ async function runTests() {
     aiCallerOverride: async () => 'Subject: Opportunities\n\nRapid Gen outreach body.',
   });
 
-  assert.strictEqual(res2.succeeded, 4, '4 emails must generate immediately during 3-min send interval wait');
-  pass('Email generation executes without waiting for 3-minute Gmail send interval');
+  assert.strictEqual(res2.succeeded, 4, '4 emails must generate immediately during 1-min send interval wait');
+  pass('Email generation executes without waiting for 1-minute Gmail send interval');
 
   // -------------------------------------------------------------------------
   // TEST 3: Multiple generation batches run back-to-back without 30s outer sleep

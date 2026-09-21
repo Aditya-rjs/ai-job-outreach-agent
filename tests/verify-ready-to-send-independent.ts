@@ -89,7 +89,7 @@ async function runRegressionSuite() {
       todayDate: new Date().toISOString().split('T')[0],
       timezone: 'Asia/Kolkata',
       dailyLimit: 100,
-      intervalMinutes: 3,
+      intervalMinutes: 1,
       startHour: 0,
       startMinute: 0,
       endHour: 23,

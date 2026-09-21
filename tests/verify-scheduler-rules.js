@@ -45,7 +45,7 @@ db.pragma('foreign_keys = ON');
 db.prepare(`
   UPDATE scheduler_state
   SET is_paused = 0, is_stopped = 0, today_sent_count = 0, today_simulated_count = 0,
-      today_date = '2026-09-04', daily_limit = 30, interval_minutes = 3, start_hour = 10, start_minute = 0
+      today_date = '2026-09-04', daily_limit = 30, interval_minutes = 1, start_hour = 10, start_minute = 0
   WHERE id = 'singleton'
 `).run();
 
@@ -152,7 +152,7 @@ pass('30 sent -> tracks sent count; sending governed by 10 AM - 4 PM window with
 
 // Verify that queue leasing is governed by the 10:00 AM - 4:00 PM window without artificial 30-limit block
 process.env.OUTREACH_DRY_RUN = 'false';
-pass('Worker operates governed by daily sending window and 3-min intervals');
+pass('Worker operates governed by daily sending window and 1-min intervals');
 process.env.OUTREACH_DRY_RUN = 'true';
 
 // ----------------------------------------------------------------------------
@@ -197,27 +197,27 @@ pass('Remaining queued contact resumes automatically on the next day');
 process.env.OUTREACH_DRY_RUN = 'true';
 
 // ----------------------------------------------------------------------------
-// RULE 4: 3-Minute Gap
+// RULE 4: 1-Minute Gap
 // ----------------------------------------------------------------------------
-console.log('\n--- Rule 4: 3-Minute Interval Gap Enforced Globally ---');
+console.log('\n--- Rule 4: 1-Minute Interval Gap Enforced Globally ---');
 
 const t0 = new Date('2026-09-04T10:00:00.000Z').toISOString();
-assert.strictEqual(hasIntervalElapsed(t0, 3), true); // Current time is long after 10:00 UTC
+assert.strictEqual(hasIntervalElapsed(t0, 1), true); // Current time is long after 10:00 UTC
 
-// Simulate an attempt 1 minute ago
-const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
-assert.strictEqual(hasIntervalElapsed(oneMinuteAgo, 3), false, '1 minute elapsed must reject send');
-pass('1 minute elapsed < 3 minute required -> rejected');
+// Simulate an attempt 30 seconds ago
+const thirtySecAgo = new Date(Date.now() - 30 * 1000).toISOString();
+assert.strictEqual(hasIntervalElapsed(thirtySecAgo, 1), false, '30 seconds elapsed must reject send');
+pass('30s elapsed < 60s required -> rejected');
 
-// Simulate an attempt 2 minutes 59 seconds ago
-const justUnder3MinAgo = new Date(Date.now() - 179 * 1000).toISOString();
-assert.strictEqual(hasIntervalElapsed(justUnder3MinAgo, 3), false, '179s elapsed must reject send');
-pass('179s elapsed < 180s required -> rejected');
+// Simulate an attempt 59 seconds ago
+const justUnder1MinAgo = new Date(Date.now() - 59 * 1000).toISOString();
+assert.strictEqual(hasIntervalElapsed(justUnder1MinAgo, 1), false, '59s elapsed must reject send');
+pass('59s elapsed < 60s required -> rejected');
 
-// Simulate an attempt 3 minutes ago
-const exactly3MinAgo = new Date(Date.now() - 180 * 1000).toISOString();
-assert.strictEqual(hasIntervalElapsed(exactly3MinAgo, 3), true, '180s elapsed must allow send');
-pass('180s elapsed >= 180s required -> allowed');
+// Simulate an attempt 1 minute (60 seconds) ago
+const exactly1MinAgo = new Date(Date.now() - 60 * 1000).toISOString();
+assert.strictEqual(hasIntervalElapsed(exactly1MinAgo, 1), true, '60s elapsed must allow send');
+pass('60s elapsed >= 60s required -> allowed');
 
 // ----------------------------------------------------------------------------
 // RULE 5 & 6: What Counts Toward 30 & Dry-Run Isolation

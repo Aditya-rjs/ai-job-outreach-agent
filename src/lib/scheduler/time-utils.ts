@@ -173,14 +173,17 @@ export function getCooldownCutoffIso(now: number = Date.now()): string {
 }
 
 /**
- * Checks whether the required interval (e.g. 3 minutes) has elapsed since the last send attempt.
+ * Checks whether the required interval (e.g. 1 minute) has elapsed since the last send attempt.
  */
-export function hasIntervalElapsed(lastSendIso: string | null, intervalMinutes: number = 3): boolean {
+export function hasIntervalElapsed(
+  lastSendIso: string | null,
+  intervalMinutes: number = 1,
+  now: number = Date.now()
+): boolean {
   if (!lastSendIso) return true;
   const lastTime = new Date(lastSendIso).getTime();
   if (isNaN(lastTime)) return true;
 
-  const now = Date.now();
   const requiredMs = intervalMinutes * 60 * 1000;
   return now - lastTime >= requiredMs;
 }

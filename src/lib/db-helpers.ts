@@ -187,7 +187,7 @@ export function getSchedulerConfig(): SchedulerConfig {
     nextSendAt: state?.nextSendAt ?? null,
     timezone: tz,
     dailyLimit: quota.dailyLimit,
-    intervalMinutes: state?.intervalMinutes ?? 3,
+    intervalMinutes: state?.intervalMinutes ?? 1,
     startHour,
     startMinute,
     endHour,

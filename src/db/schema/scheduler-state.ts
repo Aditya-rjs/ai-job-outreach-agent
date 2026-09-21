@@ -12,7 +12,7 @@ export const schedulerState = sqliteTable('scheduler_state', {
   nextSendAt: text('next_send_at'),
   timezone: text('timezone').default('Asia/Kolkata').notNull(),
   dailyLimit: integer('daily_limit').default(30).notNull(),
-  intervalMinutes: integer('interval_minutes').default(3).notNull(),
+  intervalMinutes: integer('interval_minutes').default(1).notNull(),
   startHour: integer('start_hour').default(10).notNull(),
   startMinute: integer('start_minute').default(0).notNull(),
   endHour: integer('end_hour').default(16).notNull(),

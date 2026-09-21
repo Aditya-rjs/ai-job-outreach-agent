@@ -182,7 +182,7 @@ export async function runSendingLoop() {
       const startMinute = state.startMinute ?? 0;
       const endHour = state.endHour ?? 16;
       const endMinute = state.endMinute ?? 0;
-      const intervalMinutes = state.intervalMinutes ?? 3;
+      const intervalMinutes = state.intervalMinutes ?? 1;
 
       // 6. Check 10:00 AM - 4:00 PM Daily Sending Window (IST)
       const now = new Date();
@@ -200,7 +200,7 @@ export async function runSendingLoop() {
         continue;
       }
 
-      // 7. Check 3-Minute Interval Spacing
+      // 7. Check 1-Minute Interval Spacing
       const lastAttempt = state.lastSendAttemptAt;
       if (!hasIntervalElapsed(lastAttempt, intervalMinutes)) {
         const nextEligibleIso = computeNextEligibleSendTime({
@@ -219,7 +219,7 @@ export async function runSendingLoop() {
           .where(eq(schedulerState.id, 'singleton'))
           .run();
 
-        const waitMs = Math.max(5000, new Date(nextEligibleIso).getTime() - now.getTime());
+        const waitMs = Math.max(1000, new Date(nextEligibleIso).getTime() - now.getTime());
         console.log(`[Outreach Worker] Enforcing ${intervalMinutes}-min interval spacing. Waiting ${Math.ceil(waitMs / 1000)}s...`);
         await sleep(Math.min(waitMs, 30000));
         continue;
@@ -292,8 +292,8 @@ export async function runSendingLoop() {
         // Check if this send completed a batch
         checkBatchCompletions();
 
-        // Enforce the 3-minute gap
-        console.log(`[Outreach Worker] Send complete. Sleeping for ${intervalMinutes} minutes before next eligible send attempt...`);
+        // Enforce the 1-minute gap
+        console.log(`[Outreach Worker] Send complete. Sleeping for ${intervalMinutes} minute(s) before next eligible send attempt...`);
         await sleep(intervalMinutes * 60 * 1000);
       } else {
         console.warn(`[Outreach Worker] Send failed for ${contact.email}: ${sendResult.error} (${sendResult.errorCategory})`);
@@ -301,13 +301,13 @@ export async function runSendingLoop() {
 
         if (sendResult.errorCategory === 'validation' || sendResult.errorCategory === 'duplicate') {
           // Validation/duplicate checks failed prior to Gmail dispatch.
-          // No send was attempted. Do NOT advance 3-minute send pacing; proceed immediately to next eligible send.
-          console.log(`[Outreach Worker] Non-dispatch validation/duplicate resolution. Proceeding to next job without 3-minute wait.`);
+          // No send was attempted. Do NOT advance 1-minute send pacing; proceed immediately to next eligible send.
+          console.log(`[Outreach Worker] Non-dispatch validation/duplicate resolution. Proceeding to next job without interval wait.`);
           await sleep(1000);
         } else if (sendResult.errorCategory === 'uncertain') {
           // Uncertain outcome: Gmail API call was made but connection dropped.
           // Anti-duplicate protection: Preserved as uncertain; never retried.
-          // Enforce 3-minute pacing to protect network.
+          // Enforce 1-minute pacing to protect network.
           db.update(schedulerState)
             .set({
               lastSendAttemptAt: attemptTimestamp,
@@ -320,7 +320,7 @@ export async function runSendingLoop() {
           await sleep(intervalMinutes * 60 * 1000);
         } else {
           // Dispatch attempt failed (auth, network, etc.).
-          // Enforce 3-minute pacing.
+          // Enforce 1-minute pacing.
           db.update(schedulerState)
             .set({
               lastSendAttemptAt: attemptTimestamp,
@@ -329,7 +329,7 @@ export async function runSendingLoop() {
             .where(eq(schedulerState.id, 'singleton'))
             .run();
 
-          console.log(`[Outreach Worker] Send error encountered. Sleeping for ${intervalMinutes} minutes before next attempt...`);
+          console.log(`[Outreach Worker] Send error encountered. Sleeping for ${intervalMinutes} minute(s) before next attempt...`);
           await sleep(intervalMinutes * 60 * 1000);
         }
       }

@@ -348,11 +348,11 @@ async function runTests() {
   pass('Test 12: Existing 144-hour cooldown policy remains unchanged');
 
   // ---------------------------------------------------------------------------
-  // Test 13: Existing 3-minute spacing remains unchanged
+  // Test 13: 1-minute send spacing policy
   // ---------------------------------------------------------------------------
   const schedulerRow = db.prepare(`SELECT interval_minutes FROM scheduler_state WHERE id = 'singleton'`).get() as any;
-  assert.strictEqual(schedulerRow?.interval_minutes ?? 3, 3, 'Send spacing must remain 3 minutes');
-  pass('Test 13: Existing 3-minute send spacing policy remains unchanged');
+  assert.strictEqual(schedulerRow?.interval_minutes ?? 1, 1, 'Send spacing must be 1 minute');
+  pass('Test 13: 1-minute send spacing policy verified');
 
   // ---------------------------------------------------------------------------
   // Test 14: Existing 10:00 AM–4:00 PM IST window remains unchanged

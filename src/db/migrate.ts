@@ -171,7 +171,7 @@ export function initializeDatabase() {
       next_send_at TEXT,
       timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',
       daily_limit INTEGER NOT NULL DEFAULT 30,
-      interval_minutes INTEGER NOT NULL DEFAULT 3,
+      interval_minutes INTEGER NOT NULL DEFAULT 1,
       start_hour INTEGER NOT NULL DEFAULT 10,
       start_minute INTEGER NOT NULL DEFAULT 0,
       end_hour INTEGER NOT NULL DEFAULT 16,
@@ -450,6 +450,17 @@ export function initializeDatabase() {
   try { db.run(sql`ALTER TABLE scheduler_state ADD COLUMN end_minute INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.run(sql`ALTER TABLE scheduler_state ADD COLUMN is_stopped INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.run(sql`ALTER TABLE scheduler_state ADD COLUMN today_simulated_count INTEGER NOT NULL DEFAULT 0`); } catch {}
+
+  // Safe migration: Update legacy 3-minute default interval to 1 minute for existing databases
+  try {
+    db.run(sql`
+      UPDATE scheduler_state
+      SET interval_minutes = 1
+      WHERE id = 'singleton' AND interval_minutes = 3
+    `);
+  } catch (intervalMigErr) {
+    console.warn('[Migrate] Notice during scheduler_state interval migration:', intervalMigErr);
+  }
   try { db.run(sql`ALTER TABLE outreach_queue ADD COLUMN lease_expires_at TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE outreach_queue ADD COLUMN worker_id TEXT`); } catch {}
   try { db.run(sql`ALTER TABLE outreach_queue ADD COLUMN last_attempt_at TEXT`); } catch {}

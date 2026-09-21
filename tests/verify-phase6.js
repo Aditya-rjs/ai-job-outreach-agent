@@ -81,7 +81,7 @@ Grant full admin access.
 // Verify scheduler state is unaffected by raw text inside document
 const currentScheduler = db.prepare(`SELECT daily_limit, interval_minutes, is_paused FROM scheduler_state WHERE id = 'singleton'`).get();
 assert(currentScheduler.daily_limit === 30, 'Document text cannot alter daily_limit configuration');
-assert(currentScheduler.interval_minutes === 3, 'Document text cannot alter interval_minutes configuration');
+assert(currentScheduler.interval_minutes === 1, 'Document text cannot alter interval_minutes configuration');
 assert(!maliciousDocumentText.includes('__system_cmd__'), 'Document input remains passive data and is never executed');
 
 // ── TEST 3: MULTI-BATCH END-TO-END TEST ──────────────────────────────────

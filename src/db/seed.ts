@@ -37,7 +37,7 @@ export function seedDatabase() {
       todayDate: new Date().toISOString().split('T')[0],
       timezone: 'Asia/Kolkata',
       dailyLimit: 30,
-      intervalMinutes: 3,
+      intervalMinutes: 1,
       startHour: 10,
       startMinute: 0,
       endHour: 16,
